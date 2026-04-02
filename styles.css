@@ -608,6 +608,10 @@ button {
   will-change: left, top, transform;
 }
 
+.terminal-node[hidden] {
+  display: none;
+}
+
 .terminal-node.is-active,
 .terminal-node:focus-within {
   border-color: var(--color-note-focus);

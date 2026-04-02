@@ -801,19 +801,15 @@ function setNodeCanvasVisibility(nodeRecord, shouldShow) {
 function syncMountedCanvasNodes(activeCanvas) {
   let didChange = false;
 
-  if (renderedCanvasId !== activeCanvas?.id) {
-    const previousCanvas = renderedCanvasId === null ? null : getCanvasById(renderedCanvasId);
+  canvases.forEach((canvasRecord) => {
+    const shouldShowCanvas = canvasRecord.id === activeCanvas?.id;
 
-    previousCanvas?.nodes.forEach((nodeRecord) => {
-      didChange = setNodeCanvasVisibility(nodeRecord, false) || didChange;
+    canvasRecord.nodes.forEach((nodeRecord) => {
+      didChange = setNodeCanvasVisibility(nodeRecord, shouldShowCanvas) || didChange;
     });
-
-    renderedCanvasId = activeCanvas?.id ?? null;
-  }
-
-  activeCanvas?.nodes.forEach((nodeRecord) => {
-    didChange = setNodeCanvasVisibility(nodeRecord, true) || didChange;
   });
+
+  renderedCanvasId = activeCanvas?.id ?? null;
 
   return didChange;
 }
@@ -1874,6 +1870,14 @@ if (window.noteCanvas.isSmokeTest) {
       nodeScreenPositions,
       maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
       firstTerminalText: activeNodes[0]?.element?.textContent || "",
+      visibleNodeCount: [...nodesLayer.querySelectorAll(".terminal-node")].filter((nodeElement) => {
+        if (!(nodeElement instanceof HTMLElement)) {
+          return false;
+        }
+
+        const nodeStyles = getComputedStyle(nodeElement);
+        return nodeStyles.display !== "none" && nodeStyles.visibility !== "hidden" && Number.parseFloat(nodeStyles.opacity || "1") > 0;
+      }).length,
       sidebarCollapsed: isSidebarCollapsed,
       fullscreenExitVisible: boardFullscreenExitButton instanceof HTMLElement
         && getComputedStyle(boardFullscreenExitButton).pointerEvents !== "none"
@@ -1948,6 +1952,7 @@ if (window.noteCanvas.isSmokeTest) {
         firstNodeScreenPosition: snapshot.nodeScreenPositions[0] ?? null,
         maximizedNodeTitle: snapshot.maximizedNodeTitle,
         firstTerminalText: snapshot.firstTerminalText,
+        visibleNodeCount: snapshot.visibleNodeCount,
         sidebarCollapsed: snapshot.sidebarCollapsed,
         fullscreenExitVisible: snapshot.fullscreenExitVisible
       };
