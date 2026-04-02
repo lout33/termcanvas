@@ -34,6 +34,13 @@
   --color-close-button-bg: rgba(255, 255, 255, 0.04);
   --color-close-button-hover: rgba(190, 24, 93, 0.26);
   --color-close-button-hover-border: rgba(244, 114, 182, 0.34);
+  --color-maximize-button: rgba(191, 219, 254, 0.88);
+  --color-maximize-button-hover: rgba(59, 130, 246, 0.2);
+  --color-maximize-button-hover-border: rgba(125, 168, 255, 0.34);
+  --color-terminal-exited: rgba(248, 113, 113, 0.92);
+  --color-terminal-exited-bg: rgba(127, 29, 29, 0.18);
+  --color-terminal-overlay: rgba(6, 8, 12, 0.72);
+  --color-terminal-overlay-card: rgba(17, 23, 33, 0.94);
   --color-empty-state: rgba(15, 19, 28, 0.88);
   --color-placeholder: #6f7d94;
 
@@ -153,6 +160,12 @@ button {
   transform: translateX(-1rem);
   pointer-events: none;
   border-right-color: transparent;
+}
+
+.app-shell.has-maximized-node .canvas-sidebar {
+  opacity: 0.16;
+  transform: translateX(-0.75rem);
+  pointer-events: none;
 }
 
 .canvas-sidebar-header {
@@ -382,10 +395,17 @@ button {
   opacity: 0.84;
 }
 
+.app-shell.has-maximized-node .sidebar-toggle-button {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.5rem);
+}
+
 .board {
   position: relative;
   min-height: 100vh;
   overflow: hidden;
+  overscroll-behavior: none;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -420,6 +440,21 @@ button {
     calc(var(--grid-size) * 4) calc(var(--grid-size) * 4);
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.86), rgba(0, 0, 0, 0.65));
   pointer-events: none;
+}
+
+.board-grid,
+.board-intro,
+.empty-state {
+  transition:
+    opacity var(--transition-base),
+    transform var(--transition-base);
+}
+
+.board.has-maximized-node .board-grid,
+.board.has-maximized-node .board-intro,
+.board.has-maximized-node .empty-state {
+  opacity: 0;
+  transform: scale(0.985);
 }
 
 .board-intro {
@@ -476,18 +511,22 @@ button {
 .terminal-node {
   position: absolute;
   z-index: 2;
-   width: 34rem;
-   height: 22rem;
-   border: 1px solid var(--color-note-edge);
-   border-radius: var(--radius-lg);
-   overflow: hidden;
-   background: var(--color-terminal-shell);
-   box-shadow: var(--shadow-note);
-   transform: translate(-50%, -50%);
-   transition:
-     box-shadow var(--transition-base),
-     transform var(--transition-base),
-     border-color var(--transition-base);
+  display: flex;
+  flex-direction: column;
+  width: 34rem;
+  height: 22rem;
+  border: 1px solid var(--color-note-edge);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-terminal-shell);
+  box-shadow: var(--shadow-note);
+  transform: translate(-50%, -50%);
+  transition:
+    box-shadow var(--transition-base),
+    transform var(--transition-base),
+    border-color var(--transition-base),
+    opacity var(--transition-base),
+    filter var(--transition-base);
 }
 
 .terminal-node.is-active,
@@ -502,6 +541,33 @@ button {
 .terminal-node.is-dragging {
   box-shadow: var(--shadow-note-lifted);
   transform: translate(-50%, -50%) translateY(-0.175rem);
+}
+
+.terminal-node.is-muted-by-maximized-node {
+  opacity: 0.08;
+  pointer-events: none;
+  filter: blur(0.125rem);
+  transform: translate(-50%, -50%) scale(0.98);
+}
+
+.terminal-node.is-maximized {
+  top: var(--space-6);
+  left: var(--space-6);
+  right: var(--space-6);
+  bottom: var(--space-6);
+  width: auto;
+  height: auto;
+  border-color: rgba(125, 168, 255, 0.5);
+  box-shadow:
+    0 0 0 var(--measure-focus-ring) rgba(125, 168, 255, 0.48),
+    0 2.25rem 5rem rgba(2, 6, 23, 0.74);
+  transform: none;
+}
+
+.terminal-node.is-maximized.is-active,
+.terminal-node.is-maximized:focus-within,
+.terminal-node.is-maximized.is-dragging {
+  transform: none;
 }
 
 .terminal-node-header {
@@ -554,10 +620,37 @@ button {
   gap: var(--space-1);
 }
 
-.terminal-node-title {
+.terminal-node-title-input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-sm) - 0.25rem);
+  background: transparent;
+  color: var(--color-terminal-ink);
   font-size: var(--text-label);
   font-weight: 600;
   letter-spacing: 0.03em;
+  user-select: text;
+  transition:
+    background var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base);
+}
+
+.terminal-node-title-input:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.terminal-node-title-input:focus {
+  outline: none;
+  border-color: rgba(125, 168, 255, 0.34);
+  background: rgba(8, 12, 20, 0.78);
+}
+
+.terminal-node-title-input::selection {
+  background: rgba(125, 168, 255, 0.34);
 }
 
 .terminal-node-meta {
@@ -581,7 +674,13 @@ button {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.terminal-node-close {
+.terminal-node.is-exited .terminal-node-status {
+  border-color: rgba(248, 113, 113, 0.2);
+  background: var(--color-terminal-exited-bg);
+  color: var(--color-terminal-exited);
+}
+
+.terminal-node-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -599,6 +698,18 @@ button {
     transform var(--transition-base);
 }
 
+.terminal-node-maximize {
+  color: var(--color-maximize-button);
+}
+
+.terminal-node-maximize:hover,
+.terminal-node-maximize[aria-pressed="true"] {
+  background: var(--color-maximize-button-hover);
+  border-color: var(--color-maximize-button-hover-border);
+  color: var(--color-terminal-ink);
+  transform: translateY(-0.0625rem);
+}
+
 .terminal-node-close:hover {
   background: var(--color-close-button-hover);
   border-color: var(--color-close-button-hover-border);
@@ -606,28 +717,101 @@ button {
   transform: translateY(-0.0625rem);
 }
 
-.terminal-node-close:focus-visible {
+.terminal-node-control:focus-visible,
+.terminal-node-reopen:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
 }
 
 .terminal-node-surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
-  height: calc(100% - 3.75rem);
   padding: var(--space-3);
   background:
     radial-gradient(circle at top, rgba(255, 255, 255, 0.03), transparent 40%),
     linear-gradient(180deg, var(--color-terminal-surface-top), var(--color-terminal-surface-bottom));
 }
 
-.terminal-node-surface .xterm {
+.terminal-node-terminal {
   height: 100%;
 }
 
-.terminal-node-surface .xterm-viewport,
-.terminal-node-surface .xterm-screen,
-.terminal-node-surface .xterm-helper-textarea {
+.terminal-node-terminal .xterm {
+  height: 100%;
+}
+
+.terminal-node-terminal .xterm-viewport,
+.terminal-node-terminal .xterm-screen,
+.terminal-node-terminal .xterm-helper-textarea {
   outline: none;
+}
+
+.terminal-node.is-exited .terminal-node-terminal {
+  filter: saturate(0.65) brightness(0.72);
+}
+
+.terminal-node-overlay {
+  position: absolute;
+  inset: var(--space-3);
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--color-terminal-overlay);
+  backdrop-filter: blur(0.5rem);
+}
+
+.terminal-node-overlay[hidden] {
+  display: none;
+}
+
+.terminal-node-overlay-card {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 20rem;
+  padding: var(--space-5);
+  border: 1px solid rgba(248, 113, 113, 0.18);
+  border-radius: var(--radius-md);
+  background: var(--color-terminal-overlay-card);
+  box-shadow: 0 1.25rem 2.5rem rgba(2, 6, 23, 0.44);
+  text-align: center;
+}
+
+.terminal-node-overlay-title {
+  color: var(--color-terminal-ink);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.terminal-node-overlay-meta {
+  color: var(--color-terminal-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.terminal-node-reopen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  padding: 0 var(--space-4);
+  border: 1px solid rgba(125, 168, 255, 0.3);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-terminal-ink);
+  cursor: pointer;
+  transition:
+    background var(--transition-base),
+    border-color var(--transition-base),
+    transform var(--transition-base);
+}
+
+.terminal-node-reopen:hover {
+  background: rgba(125, 168, 255, 0.18);
+  border-color: rgba(125, 168, 255, 0.44);
+  transform: translateY(-0.0625rem);
 }
 
 @media (max-width: 720px) {

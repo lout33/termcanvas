@@ -11,6 +11,8 @@ const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
 const DRAG_THRESHOLD = 3;
 const CANVAS_EXPORT_VERSION = 1;
+const MAX_TERMINAL_TITLE_LENGTH = 80;
+const WHEEL_LINE_DELTA_PX = 16;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -19,6 +21,7 @@ const canvasMap = new Map();
 const terminalNodeMap = new Map();
 let activeCanvasId = null;
 let activeNodeRecord = null;
+let activeTitleEditorRecord = null;
 let isSidebarCollapsed = false;
 let isWindowUnloading = false;
 
@@ -57,10 +60,7 @@ const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalI
     return;
   }
 
-  nodeRecord.status.textContent = "Exited";
-  nodeRecord.meta.textContent = exitCode === 0 ? "Shell finished" : `Exit ${exitCode}${signal ? ` · ${signal}` : ""}`;
-  nodeRecord.disposeInput();
-  nodeRecord.terminal?.write(`\r\n[process exited${typeof exitCode === "number" ? ` with code ${exitCode}` : ""}]\r\n`);
+  setNodeExitedState(nodeRecord, exitCode, signal);
   renderCanvasList();
 });
 
@@ -70,6 +70,311 @@ function isElement(value) {
 
 function getCanvasById(canvasId) {
   return canvasMap.get(canvasId) ?? null;
+}
+
+function getDefaultTerminalTitle(nodeRecord) {
+  return `Terminal ${nodeRecord.id}`;
+}
+
+function normalizeTerminalTitle(value, fallbackTitle) {
+  if (typeof value !== "string") {
+    return fallbackTitle;
+  }
+
+  const trimmedValue = value.trim().slice(0, MAX_TERMINAL_TITLE_LENGTH);
+  return trimmedValue.length > 0 ? trimmedValue : fallbackTitle;
+}
+
+function getVisibleMaximizedNode() {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return null;
+  }
+
+  return activeCanvas.nodes.find((nodeRecord) => nodeRecord.isMaximized) ?? null;
+}
+
+function applyCanvasFocusMode() {
+  const visibleMaximizedNode = getVisibleMaximizedNode();
+
+  appShell?.classList.toggle("has-maximized-node", visibleMaximizedNode !== null);
+  board.classList.toggle("has-maximized-node", visibleMaximizedNode !== null);
+
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return;
+  }
+
+  activeCanvas.nodes.forEach((nodeRecord) => {
+    nodeRecord.element?.classList.toggle(
+      "is-muted-by-maximized-node",
+      visibleMaximizedNode !== null && nodeRecord !== visibleMaximizedNode
+    );
+  });
+}
+
+function updateNodeTitleInput(nodeRecord) {
+  if (!(nodeRecord.titleInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  nodeRecord.titleInput.value = nodeRecord.titleText;
+  nodeRecord.titleInput.title = nodeRecord.titleText;
+}
+
+function commitNodeTitle(nodeRecord, rawTitle) {
+  const nextTitle = normalizeTerminalTitle(rawTitle, getDefaultTerminalTitle(nodeRecord));
+  nodeRecord.titleText = nextTitle;
+  updateNodeTitleInput(nodeRecord);
+  syncMaximizeButton(nodeRecord);
+}
+
+function cancelNodeTitleEditing(nodeRecord) {
+  if (activeTitleEditorRecord === nodeRecord) {
+    activeTitleEditorRecord = null;
+  }
+
+  updateNodeTitleInput(nodeRecord);
+}
+
+function syncMaximizeButton(nodeRecord) {
+  if (!(nodeRecord.maximizeButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const isMaximized = nodeRecord.isMaximized;
+  nodeRecord.maximizeButton.textContent = isMaximized ? "❐" : "□";
+  nodeRecord.maximizeButton.setAttribute(
+    "aria-label",
+    isMaximized ? `Restore ${nodeRecord.titleText}` : `Maximize ${nodeRecord.titleText}`
+  );
+  nodeRecord.maximizeButton.setAttribute("aria-pressed", String(isMaximized));
+}
+
+function setNodeMaximized(nodeRecord, shouldMaximize) {
+  resetPointerInteractions();
+
+  if (shouldMaximize) {
+    nodeRecord.canvas.nodes.forEach((candidateRecord) => {
+      if (candidateRecord !== nodeRecord && candidateRecord.isMaximized) {
+        candidateRecord.isMaximized = false;
+        candidateRecord.element?.classList.remove("is-maximized");
+        syncMaximizeButton(candidateRecord);
+      }
+    });
+
+    setActiveNode(nodeRecord);
+    nodeRecord.isMaximized = true;
+    nodeRecord.element?.classList.add("is-maximized");
+  } else {
+    nodeRecord.isMaximized = false;
+    nodeRecord.element?.classList.remove("is-maximized");
+  }
+
+  positionNode(nodeRecord);
+  syncMaximizeButton(nodeRecord);
+  applyCanvasFocusMode();
+  requestAnimationFrame(() => {
+    nodeRecord.syncSize();
+
+    if (!nodeRecord.isExited && nodeRecord.canvas.id === activeCanvasId) {
+      nodeRecord.terminal?.focus();
+    }
+  });
+}
+
+function updateExitedOverlay(nodeRecord) {
+  if (!(nodeRecord.overlayTitle instanceof HTMLElement) || !(nodeRecord.overlayMeta instanceof HTMLElement)) {
+    return;
+  }
+
+  if (nodeRecord.isExited) {
+    const { exitCode, exitSignal } = nodeRecord;
+    const exitLabel = typeof exitCode === "number"
+      ? `Exit ${exitCode}${exitSignal ? ` · ${exitSignal}` : ""}`
+      : exitSignal
+        ? `Signal ${exitSignal}`
+        : "Shell ended";
+
+    nodeRecord.overlayTitle.textContent = "Shell exited";
+    nodeRecord.overlayMeta.textContent = `${exitLabel} · Reopen to start a fresh shell here.`;
+    nodeRecord.overlay.hidden = false;
+  } else {
+    nodeRecord.overlay.hidden = true;
+  }
+}
+
+function setNodeExitedState(nodeRecord, exitCode, signal) {
+  nodeRecord.isExited = true;
+  nodeRecord.exitCode = typeof exitCode === "number" ? exitCode : null;
+  nodeRecord.exitSignal = typeof signal === "string" ? signal : null;
+  nodeRecord.resizeObserver?.disconnect();
+  nodeRecord.resizeObserver = null;
+  nodeRecord.syncSize = () => {};
+  nodeRecord.status.textContent = "Exited";
+  nodeRecord.meta.textContent = nodeRecord.exitCode === 0
+    ? "Shell finished"
+    : nodeRecord.exitCode !== null
+      ? `Exit ${nodeRecord.exitCode}${nodeRecord.exitSignal ? ` · ${nodeRecord.exitSignal}` : ""}`
+      : nodeRecord.exitSignal !== null
+        ? `Signal ${nodeRecord.exitSignal}`
+        : "Shell ended";
+  nodeRecord.element.classList.add("is-exited");
+  nodeRecord.disposeInput();
+  nodeRecord.terminal?.blur?.();
+  nodeRecord.terminal?.write(`\r\n[process exited${typeof exitCode === "number" ? ` with code ${exitCode}` : ""}]\r\n`);
+  updateExitedOverlay(nodeRecord);
+}
+
+function setNodeLiveState(nodeRecord, shellName) {
+  nodeRecord.isExited = false;
+  nodeRecord.exitCode = null;
+  nodeRecord.exitSignal = null;
+  nodeRecord.shellName = shellName;
+  nodeRecord.status.textContent = "Live";
+  nodeRecord.meta.textContent = shellName;
+  nodeRecord.element.classList.remove("is-exited");
+  updateExitedOverlay(nodeRecord);
+}
+
+async function releaseTerminalSession(nodeRecord, options = {}) {
+  const shouldDestroySession = options.shouldDestroySession !== false;
+  const terminalId = nodeRecord.terminalId;
+
+  nodeRecord.disposeInput();
+  nodeRecord.disposeInput = () => {};
+  nodeRecord.resizeObserver?.disconnect();
+  nodeRecord.resizeObserver = null;
+  nodeRecord.syncSize = () => {};
+
+  if (shouldDestroySession && typeof terminalId === "string") {
+    await window.noteCanvas.destroyTerminal(terminalId);
+  }
+
+  if (typeof terminalId === "string") {
+    terminalNodeMap.delete(terminalId);
+  }
+
+  nodeRecord.terminalId = null;
+  nodeRecord.terminal?.dispose();
+  nodeRecord.terminal = null;
+  nodeRecord.fitAddon = null;
+  nodeRecord.terminalMount?.replaceChildren();
+}
+
+async function bindTerminalSession(nodeRecord, options = {}) {
+  const shouldFocus = options.shouldFocus !== false;
+
+  if (typeof TerminalConstructor !== "function" || typeof FitAddonConstructor !== "function") {
+    throw new Error("Terminal renderer assets failed to load.");
+  }
+
+  const terminalId = crypto.randomUUID();
+  const terminalTheme = getTerminalTheme();
+  const terminal = new TerminalConstructor({
+    cursorBlink: true,
+    convertEol: true,
+    fontFamily: terminalTheme.fontFamily,
+    fontSize: terminalTheme.fontSize,
+    scrollback: 1200,
+    theme: terminalTheme.theme
+  });
+  const fitAddon = new FitAddonConstructor();
+
+  terminal.loadAddon(fitAddon);
+  terminal.open(nodeRecord.terminalMount);
+  fitAddon.fit();
+
+  nodeRecord.terminalId = terminalId;
+  nodeRecord.terminal = terminal;
+  nodeRecord.fitAddon = fitAddon;
+  terminalNodeMap.set(terminalId, nodeRecord);
+
+  const initialCols = Math.max(terminal.cols, 20);
+  const initialRows = Math.max(terminal.rows, 8);
+  let resizeFrame = 0;
+
+  try {
+    const created = await window.noteCanvas.createTerminal({
+      terminalId,
+      cols: initialCols,
+      rows: initialRows
+    });
+
+    if (nodeRecord.isRemoved) {
+      await releaseTerminalSession(nodeRecord);
+      return;
+    }
+
+    setNodeLiveState(nodeRecord, created.shellName);
+
+    const dataDisposable = terminal.onData((data) => {
+      void window.noteCanvas.writeTerminal(terminalId, data);
+    });
+
+    nodeRecord.disposeInput = () => {
+      dataDisposable.dispose();
+    };
+
+    const syncSize = () => {
+      if (isWindowUnloading || nodeRecord.isRemoved || nodeRecord.canvas.id !== activeCanvasId) {
+        return;
+      }
+
+      if (resizeFrame !== 0) {
+        cancelAnimationFrame(resizeFrame);
+      }
+
+      resizeFrame = requestAnimationFrame(() => {
+        if (isWindowUnloading || nodeRecord.isRemoved || nodeRecord.terminal === null) {
+          return;
+        }
+
+        fitAddon.fit();
+        void window.noteCanvas.resizeTerminal(terminalId, Math.max(terminal.cols, 20), Math.max(terminal.rows, 8));
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      syncSize();
+    });
+
+    resizeObserver.observe(nodeRecord.surface);
+
+    nodeRecord.resizeObserver = resizeObserver;
+    nodeRecord.syncSize = syncSize;
+
+    syncSize();
+
+    if (shouldFocus && nodeRecord.canvas.id === activeCanvasId && !nodeRecord.isExited) {
+      terminal.focus();
+    }
+  } catch (error) {
+    await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    throw error;
+  }
+}
+
+async function reopenTerminalNode(nodeRecord) {
+  if (nodeRecord.isRemoved) {
+    return;
+  }
+
+  nodeRecord.status.textContent = "Reopening";
+  nodeRecord.meta.textContent = "Starting fresh shell";
+  nodeRecord.overlay.hidden = true;
+
+  try {
+    await releaseTerminalSession(nodeRecord);
+    await bindTerminalSession(nodeRecord);
+  } catch (error) {
+    setNodeExitedState(nodeRecord, null, null);
+    nodeRecord.status.textContent = "Restart failed";
+    nodeRecord.meta.textContent = "Could not reopen shell";
+    console.error(error);
+  }
 }
 
 function getUniqueCanvasName(baseName) {
@@ -98,6 +403,58 @@ function getBoardPoint(event) {
     x: event.clientX - boardRect.left,
     y: event.clientY - boardRect.top
   };
+}
+
+function isBoardBackgroundTarget(target) {
+  return isElement(target) && (target === board || target === nodesLayer);
+}
+
+function normalizeWheelDelta(event) {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return {
+      x: event.deltaX * WHEEL_LINE_DELTA_PX,
+      y: event.deltaY * WHEEL_LINE_DELTA_PX
+    };
+  }
+
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return {
+      x: event.deltaX * board.clientWidth,
+      y: event.deltaY * board.clientHeight
+    };
+  }
+
+  return {
+    x: event.deltaX,
+    y: event.deltaY
+  };
+}
+
+function setActiveCanvasViewportOffset(nextX, nextY) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return false;
+  }
+
+  if (activeCanvas.viewportOffset.x === nextX && activeCanvas.viewportOffset.y === nextY) {
+    return false;
+  }
+
+  activeCanvas.viewportOffset.x = nextX;
+  activeCanvas.viewportOffset.y = nextY;
+  renderCanvas();
+  return true;
+}
+
+function panActiveCanvasBy(deltaX, deltaY) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null || (deltaX === 0 && deltaY === 0)) {
+    return false;
+  }
+
+  return setActiveCanvasViewportOffset(activeCanvas.viewportOffset.x + deltaX, activeCanvas.viewportOffset.y + deltaY);
 }
 
 function updateSidebarToggleButton() {
@@ -200,6 +557,12 @@ function toWorldPoint(position) {
 }
 
 function positionNode(nodeRecord) {
+  if (nodeRecord.isMaximized) {
+    nodeRecord.element.style.left = "";
+    nodeRecord.element.style.top = "";
+    return;
+  }
+
   nodeRecord.element.style.left = `${nodeRecord.x + nodeRecord.canvas.viewportOffset.x}px`;
   nodeRecord.element.style.top = `${nodeRecord.y + nodeRecord.canvas.viewportOffset.y}px`;
 }
@@ -257,6 +620,8 @@ function renderCanvas() {
     board.style.setProperty("--grid-offset-x", "0px");
     board.style.setProperty("--grid-offset-y", "0px");
     nodesLayer.replaceChildren();
+    appShell?.classList.remove("has-maximized-node");
+    board.classList.remove("has-maximized-node");
     emptyState.hidden = false;
     return;
   }
@@ -266,6 +631,7 @@ function renderCanvas() {
 
   activeCanvas.nodes.forEach(positionNode);
   nodesLayer.replaceChildren(...activeCanvas.nodes.map((nodeRecord) => nodeRecord.element));
+  applyCanvasFocusMode();
   updateEmptyState();
   syncVisibleTerminalSizes();
 }
@@ -351,7 +717,9 @@ function serializeCanvasRecord(canvasRecord) {
       terminalNodes: canvasRecord.nodes.map((nodeRecord) => ({
         x: nodeRecord.x,
         y: nodeRecord.y,
-        shellName: nodeRecord.shellName
+        shellName: nodeRecord.shellName,
+        title: nodeRecord.titleText,
+        isMaximized: nodeRecord.isMaximized
       }))
     }
   };
@@ -375,7 +743,9 @@ function parseImportedCanvas(rawContents) {
     },
     terminalNodes: terminalNodes.map((nodeRecord) => ({
       x: Number.isFinite(nodeRecord?.x) ? nodeRecord.x : 0,
-      y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0
+      y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0,
+      title: typeof nodeRecord?.title === "string" ? nodeRecord.title : "",
+      isMaximized: nodeRecord?.isMaximized === true
     }))
   };
 }
@@ -403,7 +773,12 @@ async function importCanvasFromData(importedCanvas) {
   setActiveCanvas(importedCanvasRecord.id);
 
   for (const nodeRecord of importedCanvas.terminalNodes) {
-    await createTerminalNode({ x: nodeRecord.x, y: nodeRecord.y });
+    await createTerminalNode({
+      x: nodeRecord.x,
+      y: nodeRecord.y,
+      title: nodeRecord.title,
+      isMaximized: nodeRecord.isMaximized
+    });
   }
 
   return importedCanvasRecord;
@@ -440,7 +815,7 @@ function stopNodeDrag(event) {
   if (nodeRecord !== null) {
     nodeRecord.element.classList.remove("is-dragging");
 
-    if (event !== undefined && !hasMoved && nodeRecord.canvas.id === activeCanvasId) {
+    if (event !== undefined && !hasMoved && nodeRecord.canvas.id === activeCanvasId && !nodeRecord.isExited) {
       nodeRecord.terminal?.focus();
     }
   }
@@ -470,6 +845,12 @@ function setActiveCanvas(canvasId) {
 
   if (activeCanvasId !== canvasId) {
     resetPointerInteractions();
+
+    if (activeTitleEditorRecord !== null) {
+      activeTitleEditorRecord.titleInput?.blur();
+      activeTitleEditorRecord = null;
+    }
+
     setActiveNode(null);
     activeCanvasId = canvasId;
   }
@@ -522,7 +903,7 @@ async function deleteCanvas(canvasId) {
 }
 
 function startNodeDrag(event, nodeRecord, handleElement) {
-  if (event.button !== 0 || panState.pointerId !== null) {
+  if (event.button !== 0 || panState.pointerId !== null || nodeRecord.isMaximized || getVisibleMaximizedNode() !== null) {
     return;
   }
 
@@ -579,15 +960,18 @@ function createTerminalElement(nodeRecord) {
   const titleGroup = document.createElement("div");
   titleGroup.className = "terminal-node-title-group";
 
-  const title = document.createElement("div");
-  title.className = "terminal-node-title";
-  title.textContent = `Terminal ${nodeRecord.id}`;
+  const titleInput = document.createElement("input");
+  titleInput.className = "terminal-node-title-input";
+  titleInput.type = "text";
+  titleInput.maxLength = MAX_TERMINAL_TITLE_LENGTH;
+  titleInput.spellcheck = false;
+  titleInput.setAttribute("aria-label", `Rename terminal ${nodeRecord.id}`);
 
   const meta = document.createElement("div");
   meta.className = "terminal-node-meta";
   meta.textContent = "Starting shell";
 
-  titleGroup.append(title, meta);
+  titleGroup.append(titleInput, meta);
   dragArea.append(grabHandle, titleGroup);
 
   const status = document.createElement("span");
@@ -597,52 +981,92 @@ function createTerminalElement(nodeRecord) {
   const actions = document.createElement("div");
   actions.className = "terminal-node-actions";
 
+  const maximizeButton = document.createElement("button");
+  maximizeButton.className = "terminal-node-control terminal-node-maximize";
+  maximizeButton.type = "button";
+
   const closeButton = document.createElement("button");
-  closeButton.className = "terminal-node-close";
+  closeButton.className = "terminal-node-control terminal-node-close";
   closeButton.type = "button";
   closeButton.setAttribute("aria-label", `Close terminal ${nodeRecord.id}`);
   closeButton.textContent = "×";
 
-  actions.append(status, closeButton);
+  actions.append(status, maximizeButton, closeButton);
   header.append(dragArea, actions);
 
   const surface = document.createElement("div");
   surface.className = "terminal-node-surface";
+
+  const terminalMount = document.createElement("div");
+  terminalMount.className = "terminal-node-terminal";
+
+  const overlay = document.createElement("div");
+  overlay.className = "terminal-node-overlay";
+  overlay.hidden = true;
+
+  const overlayCard = document.createElement("div");
+  overlayCard.className = "terminal-node-overlay-card";
+
+  const overlayTitle = document.createElement("div");
+  overlayTitle.className = "terminal-node-overlay-title";
+
+  const overlayMeta = document.createElement("div");
+  overlayMeta.className = "terminal-node-overlay-meta";
+
+  const reopenButton = document.createElement("button");
+  reopenButton.className = "terminal-node-reopen";
+  reopenButton.type = "button";
+  reopenButton.textContent = "Reopen shell";
+
+  overlayCard.append(overlayTitle, overlayMeta, reopenButton);
+  overlay.append(overlayCard);
+  surface.append(terminalMount, overlay);
 
   node.append(header, surface);
 
   return {
     node,
     surface,
+    terminalMount,
     meta,
     status,
+    titleInput,
+    maximizeButton,
     closeButton,
-    dragArea
+    dragArea,
+    overlay,
+    overlayTitle,
+    overlayMeta,
+    reopenButton
   };
 }
 
-async function createTerminalNode(position) {
+async function createTerminalNode(options) {
   const activeCanvas = getActiveCanvas();
 
   if (activeCanvas === null) {
     return;
   }
 
-  if (typeof TerminalConstructor !== "function" || typeof FitAddonConstructor !== "function") {
-    throw new Error("Terminal renderer assets failed to load.");
-  }
-
   terminalCount += 1;
 
-  const terminalId = crypto.randomUUID();
   const nodeRecord = {
     id: terminalCount,
-    terminalId,
+    terminalId: null,
     canvas: activeCanvas,
-    x: position.x,
-    y: position.y,
+    x: options.x,
+    y: options.y,
     isRemoved: false,
+    isExited: false,
+    isMaximized: options.isMaximized === true,
+    exitCode: null,
+    exitSignal: null,
     element: null,
+    surface: null,
+    terminalMount: null,
+    overlay: null,
+    overlayTitle: null,
+    overlayMeta: null,
     terminal: null,
     fitAddon: null,
     resizeObserver: null,
@@ -650,17 +1074,84 @@ async function createTerminalNode(position) {
     disposeInput: () => {},
     meta: null,
     status: null,
-    shellName: "Shell"
+    titleInput: null,
+    maximizeButton: null,
+    reopenButton: null,
+    shellName: "Shell",
+    titleText: normalizeTerminalTitle(options.title, `Terminal ${terminalCount}`)
   };
   const elements = createTerminalElement(nodeRecord);
   nodeRecord.element = elements.node;
+  nodeRecord.surface = elements.surface;
+  nodeRecord.terminalMount = elements.terminalMount;
+  nodeRecord.overlay = elements.overlay;
+  nodeRecord.overlayTitle = elements.overlayTitle;
+  nodeRecord.overlayMeta = elements.overlayMeta;
   nodeRecord.meta = elements.meta;
   nodeRecord.status = elements.status;
+  nodeRecord.titleInput = elements.titleInput;
+  nodeRecord.maximizeButton = elements.maximizeButton;
+  nodeRecord.reopenButton = elements.reopenButton;
+
+  updateNodeTitleInput(nodeRecord);
+  syncMaximizeButton(nodeRecord);
 
   elements.closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     void destroyTerminalNode(nodeRecord);
+  });
+
+  elements.maximizeButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setNodeMaximized(nodeRecord, !nodeRecord.isMaximized);
+  });
+
+  elements.reopenButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void reopenTerminalNode(nodeRecord);
+  });
+
+  elements.titleInput.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.stopPropagation();
+    setActiveNode(nodeRecord);
+  });
+
+  elements.titleInput.addEventListener("focus", () => {
+    activeTitleEditorRecord = nodeRecord;
+    setActiveNode(nodeRecord);
+    elements.titleInput.select();
+  });
+
+  elements.titleInput.addEventListener("blur", () => {
+    if (activeTitleEditorRecord === nodeRecord) {
+      activeTitleEditorRecord = null;
+    }
+
+    commitNodeTitle(nodeRecord, elements.titleInput.value);
+  });
+
+  elements.titleInput.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitNodeTitle(nodeRecord, elements.titleInput.value);
+      elements.titleInput.blur();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelNodeTitleEditing(nodeRecord);
+      elements.titleInput.blur();
+    }
   });
 
   elements.node.addEventListener("pointerdown", (event) => {
@@ -674,7 +1165,6 @@ async function createTerminalNode(position) {
   });
 
   activeCanvas.nodes.push(nodeRecord);
-  terminalNodeMap.set(terminalId, nodeRecord);
   renderCanvasList();
 
   if (activeCanvas.id === activeCanvasId) {
@@ -685,90 +1175,18 @@ async function createTerminalNode(position) {
   positionNode(nodeRecord);
   updateEmptyState();
 
-  const terminalTheme = getTerminalTheme();
-  const terminal = new TerminalConstructor({
-    cursorBlink: true,
-    convertEol: true,
-    fontFamily: terminalTheme.fontFamily,
-    fontSize: terminalTheme.fontSize,
-    scrollback: 1200,
-    theme: terminalTheme.theme
-  });
-  const fitAddon = new FitAddonConstructor();
-
-  terminal.loadAddon(fitAddon);
-  terminal.open(elements.surface);
-  fitAddon.fit();
-  nodeRecord.terminal = terminal;
-  nodeRecord.fitAddon = fitAddon;
-
-  const initialCols = Math.max(terminal.cols, 20);
-  const initialRows = Math.max(terminal.rows, 8);
-
-  let resizeFrame = 0;
-
   try {
-    const created = await window.noteCanvas.createTerminal({
-      terminalId,
-      cols: initialCols,
-      rows: initialRows
-    });
+    await bindTerminalSession(nodeRecord);
 
-    if (nodeRecord.isRemoved) {
-      await window.noteCanvas.destroyTerminal(terminalId);
-      terminal.dispose();
-      return;
-    }
-
-    nodeRecord.shellName = created.shellName;
-    nodeRecord.meta.textContent = created.shellName;
-    nodeRecord.status.textContent = "Live";
-
-    const dataDisposable = terminal.onData((data) => {
-      void window.noteCanvas.writeTerminal(terminalId, data);
-    });
-
-    nodeRecord.disposeInput = () => {
-      dataDisposable.dispose();
-    };
-
-    const syncSize = () => {
-      if (isWindowUnloading || nodeRecord.isRemoved || nodeRecord.canvas.id !== activeCanvasId) {
-        return;
-      }
-
-      if (resizeFrame !== 0) {
-        cancelAnimationFrame(resizeFrame);
-      }
-
-      resizeFrame = requestAnimationFrame(() => {
-        if (isWindowUnloading || nodeRecord.isRemoved) {
-          return;
-        }
-
-        fitAddon.fit();
-        void window.noteCanvas.resizeTerminal(terminalId, Math.max(terminal.cols, 20), Math.max(terminal.rows, 8));
-      });
-    };
-
-    const resizeObserver = new ResizeObserver(() => {
-      syncSize();
-    });
-
-    resizeObserver.observe(elements.surface);
-
-    nodeRecord.resizeObserver = resizeObserver;
-    nodeRecord.syncSize = syncSize;
-
-    syncSize();
-
-    if (nodeRecord.canvas.id === activeCanvasId) {
-      terminal.focus();
+    if (nodeRecord.isMaximized) {
+      setNodeMaximized(nodeRecord, true);
     }
   } catch (error) {
     await destroyTerminalNode(nodeRecord, { shouldDestroySession: false });
     throw error;
   }
+
+  return nodeRecord;
 }
 
 async function destroyTerminalNode(nodeRecord, options = {}) {
@@ -788,13 +1206,15 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     setActiveNode(null);
   }
 
-  if (shouldDestroySession) {
-    await window.noteCanvas.destroyTerminal(nodeRecord.terminalId);
+  if (activeTitleEditorRecord === nodeRecord) {
+    activeTitleEditorRecord = null;
   }
 
-  nodeRecord.disposeInput();
-  nodeRecord.resizeObserver?.disconnect();
-  nodeRecord.terminal?.dispose();
+  if (nodeRecord.isMaximized) {
+    setNodeMaximized(nodeRecord, false);
+  }
+
+  await releaseTerminalSession(nodeRecord, { shouldDestroySession });
   nodeRecord.element?.remove();
 
   const nodeIndex = nodeRecord.canvas.nodes.indexOf(nodeRecord);
@@ -803,10 +1223,9 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     nodeRecord.canvas.nodes.splice(nodeIndex, 1);
   }
 
-  terminalNodeMap.delete(nodeRecord.terminalId);
-
   if (nodeRecord.canvas.id === activeCanvasId) {
     updateEmptyState();
+    applyCanvasFocusMode();
     renderCanvasList();
   }
 }
@@ -820,6 +1239,10 @@ async function handleBoardDoubleClick(event) {
     return;
   }
 
+  if (getVisibleMaximizedNode() !== null) {
+    return;
+  }
+
   try {
     await createTerminalNode(toWorldPoint(getBoardPoint(event)));
   } catch (error) {
@@ -830,7 +1253,7 @@ async function handleBoardDoubleClick(event) {
 function startPan(event) {
   const activeCanvas = getActiveCanvas();
 
-  if (activeCanvas === null) {
+  if (activeCanvas === null || getVisibleMaximizedNode() !== null) {
     return;
   }
 
@@ -850,7 +1273,7 @@ function handleBoardPointerDown(event) {
     return;
   }
 
-  if (!isElement(event.target) || event.target.closest(".terminal-node") !== null) {
+  if (!isBoardBackgroundTarget(event.target)) {
     return;
   }
 
@@ -867,12 +1290,6 @@ function handleBoardPointerMove(event) {
     return;
   }
 
-  const activeCanvas = getActiveCanvas();
-
-  if (activeCanvas === null) {
-    return;
-  }
-
   const deltaX = event.clientX - panState.startClientX;
   const deltaY = event.clientY - panState.startClientY;
 
@@ -881,9 +1298,7 @@ function handleBoardPointerMove(event) {
     board.classList.add("is-panning");
   }
 
-  activeCanvas.viewportOffset.x = panState.originX + deltaX;
-  activeCanvas.viewportOffset.y = panState.originY + deltaY;
-  renderCanvas();
+  setActiveCanvasViewportOffset(panState.originX + deltaX, panState.originY + deltaY);
 }
 
 function handleBoardPointerUp(event) {
@@ -916,9 +1331,39 @@ function handleBoardPointerCancel(event) {
   stopPan();
 }
 
+function handleBoardWheel(event) {
+  if (event.ctrlKey || getVisibleMaximizedNode() !== null || !isBoardBackgroundTarget(event.target)) {
+    return;
+  }
+
+  const { x, y } = normalizeWheelDelta(event);
+  const didPan = panActiveCanvasBy(-x, -y);
+
+  if (didPan && event.cancelable) {
+    event.preventDefault();
+  }
+}
+
 function handleWindowKeyDown(event) {
   if (event.defaultPrevented || event.repeat) {
     return;
+  }
+
+  if (event.key === "Escape" && activeTitleEditorRecord !== null) {
+    event.preventDefault();
+    cancelNodeTitleEditing(activeTitleEditorRecord);
+    activeTitleEditorRecord.titleInput?.blur();
+    return;
+  }
+
+  if (event.key === "Escape") {
+    const visibleMaximizedNode = getVisibleMaximizedNode();
+
+    if (visibleMaximizedNode !== null) {
+      event.preventDefault();
+      setNodeMaximized(visibleMaximizedNode, false);
+      return;
+    }
   }
 
   if (event.metaKey && !event.ctrlKey && !event.altKey && String(event.key).toLowerCase() === "b") {
@@ -952,7 +1397,16 @@ if (window.noteCanvas.isSmokeTest) {
       canvasNodeCounts: canvases.map((canvasRecord) => canvasRecord.nodes.length),
       activeCanvasName: activeCanvas?.name ?? null,
       activeNodeCount: activeNodes.length,
+      viewportOffset: activeCanvas === null
+        ? null
+        : {
+          x: activeCanvas.viewportOffset.x,
+          y: activeCanvas.viewportOffset.y
+        },
       terminalIds: activeNodes.map((nodeRecord) => nodeRecord.terminalId),
+      nodeTitles: activeNodes.map((nodeRecord) => nodeRecord.titleText),
+      exitedNodeTitles: activeNodes.filter((nodeRecord) => nodeRecord.isExited).map((nodeRecord) => nodeRecord.titleText),
+      maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
       firstTerminalText: activeNodes[0]?.element?.textContent || "",
       sidebarCollapsed: isSidebarCollapsed
     };
@@ -989,12 +1443,58 @@ if (window.noteCanvas.isSmokeTest) {
 
       return {
         hasNodes: snapshot.activeNodeCount > 0,
+        viewportOffset: snapshot.viewportOffset,
         terminalIds: snapshot.terminalIds,
+        nodeTitles: snapshot.nodeTitles,
+        exitedNodeTitles: snapshot.exitedNodeTitles,
+        maximizedNodeTitle: snapshot.maximizedNodeTitle,
         firstTerminalText: snapshot.firstTerminalText,
         sidebarCollapsed: snapshot.sidebarCollapsed
       };
     },
     getCanvasSnapshot,
+    renameFirstTerminal: async (title) => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+
+      if (firstNode === undefined) {
+        return getCanvasSnapshot();
+      }
+
+      firstNode.titleInput?.focus();
+
+      if (firstNode.titleInput instanceof HTMLInputElement) {
+        firstNode.titleInput.value = title;
+        firstNode.titleInput.blur();
+      }
+
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+
+      return getCanvasSnapshot();
+    },
+    toggleMaximizeFirstTerminal: () => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+
+      if (firstNode === undefined) {
+        return getCanvasSnapshot();
+      }
+
+      firstNode.maximizeButton?.click();
+      return getCanvasSnapshot();
+    },
+    reopenFirstTerminal: async () => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+
+      if (firstNode === undefined) {
+        return getCanvasSnapshot();
+      }
+
+      firstNode.reopenButton?.click();
+      return getCanvasSnapshot();
+    },
     exportActiveCanvasData: () => serializeCanvasRecord(getActiveCanvas()),
     importCanvasData: async (rawContents) => {
       const importedCanvas = typeof rawContents === "string" ? parseImportedCanvas(rawContents) : rawContents;
@@ -1006,6 +1506,22 @@ if (window.noteCanvas.isSmokeTest) {
     },
     toggleSidebar: () => {
       toggleSidebar();
+      return getCanvasSnapshot();
+    },
+    panBoardByWheel: (deltaX = 0, deltaY = 0, target = "board") => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+      const eventTarget = target === "nodes-layer"
+        ? nodesLayer
+        : target === "terminal" && firstNode?.terminalMount instanceof HTMLElement
+          ? firstNode.terminalMount
+          : board;
+      const wheelEvent = new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaX,
+        deltaY
+      });
+      eventTarget.dispatchEvent(wheelEvent);
       return getCanvasSnapshot();
     },
     sendToFirstTerminal: async (data) => {
@@ -1042,5 +1558,6 @@ board.addEventListener("pointerdown", handleBoardPointerDown);
 board.addEventListener("pointermove", handleBoardPointerMove);
 board.addEventListener("pointerup", handleBoardPointerUp);
 board.addEventListener("pointercancel", handleBoardPointerCancel);
+board.addEventListener("wheel", handleBoardWheel, { passive: false });
 board.addEventListener("dblclick", handleBoardDoubleClick);
 window.addEventListener("keydown", handleWindowKeyDown);
