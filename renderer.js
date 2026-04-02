@@ -13,6 +13,10 @@ const DRAG_THRESHOLD = 3;
 const CANVAS_EXPORT_VERSION = 1;
 const MAX_TERMINAL_TITLE_LENGTH = 80;
 const WHEEL_LINE_DELTA_PX = 16;
+const CANVAS_SCALE_MIN = 0.55;
+const CANVAS_SCALE_MAX = 1.8;
+const CANVAS_SCALE_STEP = 0.0015;
+const CANVAS_SCALE_PRECISION = 1000;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -430,21 +434,48 @@ function normalizeWheelDelta(event) {
   };
 }
 
-function setActiveCanvasViewportOffset(nextX, nextY) {
+function clampCanvasScale(value) {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.min(CANVAS_SCALE_MAX, Math.max(CANVAS_SCALE_MIN, value));
+}
+
+function roundCanvasScale(value) {
+  return Math.round(clampCanvasScale(value) * CANVAS_SCALE_PRECISION) / CANVAS_SCALE_PRECISION;
+}
+
+function setActiveCanvasViewport(nextX, nextY, nextScale) {
   const activeCanvas = getActiveCanvas();
 
   if (activeCanvas === null) {
     return false;
   }
 
-  if (activeCanvas.viewportOffset.x === nextX && activeCanvas.viewportOffset.y === nextY) {
+  const resolvedScale = roundCanvasScale(
+    Number.isFinite(nextScale)
+      ? nextScale
+      : activeCanvas.viewportScale
+  );
+
+  if (
+    activeCanvas.viewportOffset.x === nextX
+    && activeCanvas.viewportOffset.y === nextY
+    && activeCanvas.viewportScale === resolvedScale
+  ) {
     return false;
   }
 
   activeCanvas.viewportOffset.x = nextX;
   activeCanvas.viewportOffset.y = nextY;
+  activeCanvas.viewportScale = resolvedScale;
   renderCanvas();
   return true;
+}
+
+function setActiveCanvasViewportOffset(nextX, nextY) {
+  return setActiveCanvasViewport(nextX, nextY);
 }
 
 function panActiveCanvasBy(deltaX, deltaY) {
@@ -455,6 +486,32 @@ function panActiveCanvasBy(deltaX, deltaY) {
   }
 
   return setActiveCanvasViewportOffset(activeCanvas.viewportOffset.x + deltaX, activeCanvas.viewportOffset.y + deltaY);
+}
+
+function zoomActiveCanvasAtPoint(point, wheelDelta) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null || !Number.isFinite(point?.x) || !Number.isFinite(point?.y) || !Number.isFinite(wheelDelta)) {
+    return false;
+  }
+
+  const currentScale = activeCanvas.viewportScale;
+  const nextScale = roundCanvasScale(currentScale * Math.exp(-wheelDelta * CANVAS_SCALE_STEP));
+
+  if (nextScale === currentScale) {
+    return false;
+  }
+
+  const worldX = (point.x - activeCanvas.viewportOffset.x) / currentScale;
+  const worldY = (point.y - activeCanvas.viewportOffset.y) / currentScale;
+  const nextOffsetX = point.x - worldX * nextScale;
+  const nextOffsetY = point.y - worldY * nextScale;
+
+  return setActiveCanvasViewport(nextOffsetX, nextOffsetY, nextScale);
+}
+
+function isViewportZoomModifierPressed(event) {
+  return event.metaKey || event.ctrlKey;
 }
 
 function updateSidebarToggleButton() {
@@ -524,6 +581,7 @@ function createCanvasRecord(options = {}) {
 
   const requestedName = typeof options.name === "string" ? options.name : `Canvas ${canvasCount}`;
   const viewportOffset = options.viewportOffset ?? { x: 0, y: 0 };
+  const viewportScale = roundCanvasScale(options.viewportScale ?? 1);
   const safeViewportX = Number.isFinite(viewportOffset.x) ? viewportOffset.x : 0;
   const safeViewportY = Number.isFinite(viewportOffset.y) ? viewportOffset.y : 0;
 
@@ -534,6 +592,7 @@ function createCanvasRecord(options = {}) {
       x: safeViewportX,
       y: safeViewportY
     },
+    viewportScale,
     highestNodeLayer: 2,
     nodes: []
   };
@@ -551,8 +610,8 @@ function toWorldPoint(position) {
   }
 
   return {
-    x: position.x - activeCanvas.viewportOffset.x,
-    y: position.y - activeCanvas.viewportOffset.y
+    x: (position.x - activeCanvas.viewportOffset.x) / activeCanvas.viewportScale,
+    y: (position.y - activeCanvas.viewportOffset.y) / activeCanvas.viewportScale
   };
 }
 
@@ -563,8 +622,9 @@ function positionNode(nodeRecord) {
     return;
   }
 
-  nodeRecord.element.style.left = `${nodeRecord.x + nodeRecord.canvas.viewportOffset.x}px`;
-  nodeRecord.element.style.top = `${nodeRecord.y + nodeRecord.canvas.viewportOffset.y}px`;
+  const { viewportOffset, viewportScale } = nodeRecord.canvas;
+  nodeRecord.element.style.left = `${viewportOffset.x + (nodeRecord.x * viewportScale)}px`;
+  nodeRecord.element.style.top = `${viewportOffset.y + (nodeRecord.y * viewportScale)}px`;
 }
 
 function bringNodeToFront(nodeRecord) {
@@ -619,6 +679,7 @@ function renderCanvas() {
   if (activeCanvas === null) {
     board.style.setProperty("--grid-offset-x", "0px");
     board.style.setProperty("--grid-offset-y", "0px");
+    board.style.setProperty("--viewport-scale", "1");
     nodesLayer.replaceChildren();
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
@@ -628,6 +689,7 @@ function renderCanvas() {
 
   board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
   board.style.setProperty("--grid-offset-y", `${activeCanvas.viewportOffset.y}px`);
+  board.style.setProperty("--viewport-scale", String(activeCanvas.viewportScale));
 
   activeCanvas.nodes.forEach(positionNode);
   nodesLayer.replaceChildren(...activeCanvas.nodes.map((nodeRecord) => nodeRecord.element));
@@ -710,13 +772,14 @@ function serializeCanvasRecord(canvasRecord) {
     exportedAt: new Date().toISOString(),
     canvas: {
       name: canvasRecord.name,
-      viewportOffset: {
-        x: canvasRecord.viewportOffset.x,
-        y: canvasRecord.viewportOffset.y
-      },
-      terminalNodes: canvasRecord.nodes.map((nodeRecord) => ({
-        x: nodeRecord.x,
-        y: nodeRecord.y,
+    viewportOffset: {
+      x: canvasRecord.viewportOffset.x,
+      y: canvasRecord.viewportOffset.y
+    },
+    viewportScale: canvasRecord.viewportScale,
+    terminalNodes: canvasRecord.nodes.map((nodeRecord) => ({
+      x: nodeRecord.x,
+      y: nodeRecord.y,
         shellName: nodeRecord.shellName,
         title: nodeRecord.titleText,
         isMaximized: nodeRecord.isMaximized
@@ -729,6 +792,7 @@ function parseImportedCanvas(rawContents) {
   const parsed = JSON.parse(rawContents);
   const canvas = parsed?.canvas;
   const viewportOffset = canvas?.viewportOffset;
+  const viewportScale = canvas?.viewportScale;
   const terminalNodes = Array.isArray(canvas?.terminalNodes) ? canvas.terminalNodes : null;
 
   if (parsed?.version !== CANVAS_EXPORT_VERSION || typeof canvas?.name !== "string" || terminalNodes === null) {
@@ -741,6 +805,7 @@ function parseImportedCanvas(rawContents) {
       x: Number.isFinite(viewportOffset?.x) ? viewportOffset.x : 0,
       y: Number.isFinite(viewportOffset?.y) ? viewportOffset.y : 0
     },
+    viewportScale: roundCanvasScale(Number.isFinite(viewportScale) ? viewportScale : 1),
     terminalNodes: terminalNodes.map((nodeRecord) => ({
       x: Number.isFinite(nodeRecord?.x) ? nodeRecord.x : 0,
       y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0,
@@ -767,7 +832,8 @@ async function exportActiveCanvas() {
 async function importCanvasFromData(importedCanvas) {
   const importedCanvasRecord = createCanvasRecord({
     name: importedCanvas.name,
-    viewportOffset: importedCanvas.viewportOffset
+    viewportOffset: importedCanvas.viewportOffset,
+    viewportScale: importedCanvas.viewportScale
   });
 
   setActiveCanvas(importedCanvasRecord.id);
@@ -924,6 +990,7 @@ function startNodeDrag(event, nodeRecord, handleElement) {
 
 function moveDraggedNode(event) {
   const nodeRecord = dragState.nodeRecord;
+  const viewportScale = nodeRecord?.canvas.viewportScale ?? 1;
 
   if (nodeRecord === null) {
     return;
@@ -937,8 +1004,8 @@ function moveDraggedNode(event) {
     nodeRecord.element.classList.add("is-dragging");
   }
 
-  nodeRecord.x = dragState.originX + deltaX;
-  nodeRecord.y = dragState.originY + deltaY;
+  nodeRecord.x = dragState.originX + (deltaX / viewportScale);
+  nodeRecord.y = dragState.originY + (deltaY / viewportScale);
   positionNode(nodeRecord);
 }
 
@@ -1332,14 +1399,16 @@ function handleBoardPointerCancel(event) {
 }
 
 function handleBoardWheel(event) {
-  if (event.ctrlKey || getVisibleMaximizedNode() !== null || !isBoardBackgroundTarget(event.target)) {
+  if (getVisibleMaximizedNode() !== null || !isBoardBackgroundTarget(event.target)) {
     return;
   }
 
   const { x, y } = normalizeWheelDelta(event);
-  const didPan = panActiveCanvasBy(-x, -y);
+  const didMove = isViewportZoomModifierPressed(event)
+    ? zoomActiveCanvasAtPoint(getBoardPoint(event), y !== 0 ? y : x)
+    : panActiveCanvasBy(-x, -y);
 
-  if (didPan && event.cancelable) {
+  if (didMove && event.cancelable) {
     event.preventDefault();
   }
 }
@@ -1390,6 +1459,21 @@ if (window.noteCanvas.isSmokeTest) {
   const getCanvasSnapshot = () => {
     const activeCanvas = getActiveCanvas();
     const activeNodes = activeCanvas?.nodes ?? [];
+    const boardRect = board.getBoundingClientRect();
+    const nodeScreenPositions = activeCanvas === null
+      ? []
+      : activeNodes.map((nodeRecord) => {
+        if (!(nodeRecord.element instanceof HTMLElement)) {
+          return null;
+        }
+
+        const nodeRect = nodeRecord.element.getBoundingClientRect();
+
+        return {
+          x: (nodeRect.left - boardRect.left) + (nodeRect.width / 2),
+          y: (nodeRect.top - boardRect.top) + (nodeRect.height / 2)
+        };
+      });
 
     return {
       canvasCount: canvases.length,
@@ -1403,9 +1487,11 @@ if (window.noteCanvas.isSmokeTest) {
           x: activeCanvas.viewportOffset.x,
           y: activeCanvas.viewportOffset.y
         },
+      viewportScale: activeCanvas?.viewportScale ?? null,
       terminalIds: activeNodes.map((nodeRecord) => nodeRecord.terminalId),
       nodeTitles: activeNodes.map((nodeRecord) => nodeRecord.titleText),
       exitedNodeTitles: activeNodes.filter((nodeRecord) => nodeRecord.isExited).map((nodeRecord) => nodeRecord.titleText),
+      nodeScreenPositions,
       maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
       firstTerminalText: activeNodes[0]?.element?.textContent || "",
       sidebarCollapsed: isSidebarCollapsed
@@ -1444,9 +1530,11 @@ if (window.noteCanvas.isSmokeTest) {
       return {
         hasNodes: snapshot.activeNodeCount > 0,
         viewportOffset: snapshot.viewportOffset,
+        viewportScale: snapshot.viewportScale,
         terminalIds: snapshot.terminalIds,
         nodeTitles: snapshot.nodeTitles,
         exitedNodeTitles: snapshot.exitedNodeTitles,
+        firstNodeScreenPosition: snapshot.nodeScreenPositions[0] ?? null,
         maximizedNodeTitle: snapshot.maximizedNodeTitle,
         firstTerminalText: snapshot.firstTerminalText,
         sidebarCollapsed: snapshot.sidebarCollapsed
@@ -1464,7 +1552,11 @@ if (window.noteCanvas.isSmokeTest) {
 
       if (firstNode.titleInput instanceof HTMLInputElement) {
         firstNode.titleInput.value = title;
-        firstNode.titleInput.blur();
+        firstNode.titleInput.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true
+        }));
       }
 
       await new Promise((resolve) => {
@@ -1515,14 +1607,37 @@ if (window.noteCanvas.isSmokeTest) {
         : target === "terminal" && firstNode?.terminalMount instanceof HTMLElement
           ? firstNode.terminalMount
           : board;
+      const boardRect = board.getBoundingClientRect();
       const wheelEvent = new WheelEvent("wheel", {
         bubbles: true,
         cancelable: true,
         deltaX,
-        deltaY
+        deltaY,
+        clientX: boardRect.left + (boardRect.width / 2),
+        clientY: boardRect.top + (boardRect.height / 2)
       });
       eventTarget.dispatchEvent(wheelEvent);
-      return getCanvasSnapshot();
+      return window.__canvasLearningDebug.getSnapshot();
+    },
+    zoomBoardByWheel: (deltaY = 0, boardX = board.clientWidth / 2, boardY = board.clientHeight / 2, target = "board", modifier = "meta") => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+      const eventTarget = target === "nodes-layer"
+        ? nodesLayer
+        : target === "terminal" && firstNode?.terminalMount instanceof HTMLElement
+          ? firstNode.terminalMount
+            : board;
+      const boardRect = board.getBoundingClientRect();
+      const wheelEvent = new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY,
+        clientX: boardRect.left + boardX,
+        clientY: boardRect.top + boardY,
+        metaKey: modifier === "meta",
+        ctrlKey: modifier === "ctrl"
+      });
+      eventTarget.dispatchEvent(wheelEvent);
+      return window.__canvasLearningDebug.getSnapshot();
     },
     sendToFirstTerminal: async (data) => {
       const firstNode = getActiveCanvas()?.nodes[0];

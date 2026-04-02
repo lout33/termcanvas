@@ -82,6 +82,7 @@
   --shadow-note-lifted: 0 2rem 4rem rgba(2, 6, 23, 0.62);
   --grid-offset-x: 0px;
   --grid-offset-y: 0px;
+  --viewport-scale: 1;
 
   --transition-base: 180ms ease;
 }
@@ -434,10 +435,10 @@ button {
     var(--grid-offset-x) var(--grid-offset-y),
     var(--grid-offset-x) var(--grid-offset-y);
   background-size:
-    var(--grid-size) var(--grid-size),
-    var(--grid-size) var(--grid-size),
-    calc(var(--grid-size) * 4) calc(var(--grid-size) * 4),
-    calc(var(--grid-size) * 4) calc(var(--grid-size) * 4);
+    calc(var(--grid-size) * var(--viewport-scale)) calc(var(--grid-size) * var(--viewport-scale)),
+    calc(var(--grid-size) * var(--viewport-scale)) calc(var(--grid-size) * var(--viewport-scale)),
+    calc(var(--grid-size) * 4 * var(--viewport-scale)) calc(var(--grid-size) * 4 * var(--viewport-scale)),
+    calc(var(--grid-size) * 4 * var(--viewport-scale)) calc(var(--grid-size) * 4 * var(--viewport-scale));
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.86), rgba(0, 0, 0, 0.65));
   pointer-events: none;
 }
@@ -520,7 +521,7 @@ button {
   overflow: hidden;
   background: var(--color-terminal-shell);
   box-shadow: var(--shadow-note);
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--viewport-scale));
   transition:
     box-shadow var(--transition-base),
     transform var(--transition-base),
@@ -535,19 +536,19 @@ button {
   box-shadow:
     0 0 0 var(--measure-focus-ring) var(--color-note-focus),
     var(--shadow-note);
-  transform: translate(-50%, -50%) translateY(-0.125rem);
+  transform: translate(-50%, calc(-50% - 0.125rem)) scale(var(--viewport-scale));
 }
 
 .terminal-node.is-dragging {
   box-shadow: var(--shadow-note-lifted);
-  transform: translate(-50%, -50%) translateY(-0.175rem);
+  transform: translate(-50%, calc(-50% - 0.175rem)) scale(var(--viewport-scale));
 }
 
 .terminal-node.is-muted-by-maximized-node {
   opacity: 0.08;
   pointer-events: none;
   filter: blur(0.125rem);
-  transform: translate(-50%, -50%) scale(0.98);
+  transform: translate(-50%, -50%) scale(calc(var(--viewport-scale) * 0.98));
 }
 
 .terminal-node.is-maximized {

@@ -179,6 +179,42 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: wheel navigation did not move the canvas viewport.");
     }
 
+    logStep("modifier zoom background");
+    const beforeZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
+    const zoomAnchor = beforeZoom.firstNodeScreenPosition;
+    const afterZoom = await window.webContents.executeJavaScript(`window.__canvasLearningDebug.zoomBoardByWheel(-120, ${JSON.stringify(zoomAnchor?.x ?? 840)}, ${JSON.stringify(zoomAnchor?.y ?? 360)})`);
+
+    if (
+      beforeZoom.viewportScale === null
+      || afterZoom.viewportScale === null
+      || zoomAnchor == null
+      || afterZoom.viewportScale <= beforeZoom.viewportScale
+      || afterZoom.firstNodeScreenPosition == null
+      || Math.abs((afterZoom.firstNodeScreenPosition?.x ?? Number.NaN) - zoomAnchor.x) > 1
+      || Math.abs((afterZoom.firstNodeScreenPosition?.y ?? Number.NaN) - zoomAnchor.y) > 1
+    ) {
+      throw new Error("Smoke test failed: modifier-wheel zoom did not change scale while keeping the pointer anchor stable.");
+    }
+
+    logStep("clamp zoom bounds");
+    let zoomClampSnapshot = afterZoom;
+
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      zoomClampSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(-240)");
+    }
+
+    if (zoomClampSnapshot.viewportScale !== 1.8) {
+      throw new Error("Smoke test failed: zoom-in scale did not clamp at the expected maximum.");
+    }
+
+    for (let iteration = 0; iteration < 30; iteration += 1) {
+      zoomClampSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(240)");
+    }
+
+    if (zoomClampSnapshot.viewportScale !== 0.55) {
+      throw new Error("Smoke test failed: zoom-out scale did not clamp at the expected minimum.");
+    }
+
     logStep("block terminal wheel pan");
     const beforeTerminalWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
     const afterTerminalWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.panBoardByWheel(90, 45, 'terminal')");
@@ -190,6 +226,18 @@ async function runSmokeTest(window) {
       || afterTerminalWheelPan.viewportOffset.y !== beforeTerminalWheelPan.viewportOffset.y
     ) {
       throw new Error("Smoke test failed: terminal-surface wheel gestures incorrectly panned the canvas.");
+    }
+
+    logStep("block terminal modifier zoom");
+    const beforeTerminalZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
+    const afterTerminalZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(-120, 840, 360, 'terminal')");
+
+    if (
+      beforeTerminalZoom.viewportScale === null
+      || afterTerminalZoom.viewportScale === null
+      || afterTerminalZoom.viewportScale !== beforeTerminalZoom.viewportScale
+    ) {
+      throw new Error("Smoke test failed: terminal-surface modifier-wheel gestures incorrectly zoomed the canvas.");
     }
 
     logStep("rename terminal");
@@ -204,6 +252,18 @@ async function runSmokeTest(window) {
 
     if (maximizedSnapshot.maximizedNodeTitle !== "Main shell") {
       throw new Error("Smoke test failed: terminal maximize did not activate for the renamed node.");
+    }
+
+    logStep("block zoom while maximized");
+    const beforeMaximizedZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
+    const afterMaximizedZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(-120, 840, 360)");
+
+    if (
+      beforeMaximizedZoom.viewportScale === null
+      || afterMaximizedZoom.viewportScale === null
+      || afterMaximizedZoom.viewportScale !== beforeMaximizedZoom.viewportScale
+    ) {
+      throw new Error("Smoke test failed: maximized-node mode did not block modifier-wheel zoom.");
     }
 
     logStep("block wheel while maximized");
@@ -311,8 +371,12 @@ async function runSmokeTest(window) {
       || importedCanvasResult.snapshot.activeNodeCount !== 1
       || importedCanvasResult.snapshot.nodeTitles[0] !== "Main shell"
       || importedCanvasResult.snapshot.maximizedNodeTitle !== "Main shell"
+      || importedCanvasResult.snapshot.viewportScale !== 0.55
+      || importedCanvasResult.snapshot.viewportOffset === null
+      || Math.abs(importedCanvasResult.snapshot.viewportOffset.x - zoomClampSnapshot.viewportOffset.x) > 0.001
+      || Math.abs(importedCanvasResult.snapshot.viewportOffset.y - zoomClampSnapshot.viewportOffset.y) > 0.001
     ) {
-      throw new Error("Smoke test failed: importing canvas JSON did not restore terminal node metadata and maximized state.");
+      throw new Error("Smoke test failed: importing canvas JSON did not restore terminal node metadata and viewport zoom state.");
     }
 
     logStep("delete canvases");
