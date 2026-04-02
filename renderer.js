@@ -28,6 +28,10 @@ let activeNodeRecord = null;
 let activeTitleEditorRecord = null;
 let isSidebarCollapsed = false;
 let isWindowUnloading = false;
+let renderedCanvasId = null;
+let viewportRenderFrame = 0;
+let terminalSizeSyncFrame = 0;
+const pendingTerminalSizeNodes = new Set();
 
 const panState = {
   pointerId: null,
@@ -470,7 +474,7 @@ function setActiveCanvasViewport(nextX, nextY, nextScale) {
   activeCanvas.viewportOffset.x = nextX;
   activeCanvas.viewportOffset.y = nextY;
   activeCanvas.viewportScale = resolvedScale;
-  renderCanvas();
+  requestViewportRender();
   return true;
 }
 
@@ -655,32 +659,106 @@ function updateEmptyState() {
   emptyState.hidden = activeCanvas !== null && activeCanvas.nodes.length > 0;
 }
 
-function syncVisibleTerminalSizes() {
-  const activeCanvas = getActiveCanvas();
+function scheduleTerminalSizeSync(nodeRecords) {
+  nodeRecords.forEach((nodeRecord) => {
+    pendingTerminalSizeNodes.add(nodeRecord);
+  });
 
-  if (activeCanvas === null) {
+  if (terminalSizeSyncFrame !== 0) {
     return;
   }
 
-  requestAnimationFrame(() => {
-    if (getActiveCanvas()?.id !== activeCanvas.id) {
-      return;
-    }
+  terminalSizeSyncFrame = requestAnimationFrame(() => {
+    terminalSizeSyncFrame = 0;
+    const activeCanvas = getActiveCanvas();
+    const nodesToSync = [...pendingTerminalSizeNodes];
 
-    activeCanvas.nodes.forEach((nodeRecord) => {
-      nodeRecord.syncSize();
+    pendingTerminalSizeNodes.clear();
+
+    nodesToSync.forEach((nodeRecord) => {
+      if (activeCanvas !== null && nodeRecord.canvas.id === activeCanvas.id && !nodeRecord.element.hidden) {
+        nodeRecord.syncSize();
+      }
     });
   });
 }
 
-function renderCanvas() {
+function setNodeCanvasVisibility(nodeRecord, shouldShow) {
+  if (!(nodeRecord.element instanceof HTMLElement)) {
+    return false;
+  }
+
+  let didChange = false;
+
+  if (shouldShow && nodeRecord.element.parentNode !== nodesLayer) {
+    nodesLayer.append(nodeRecord.element);
+    didChange = true;
+  }
+
+  if (nodeRecord.element.hidden === !shouldShow) {
+    return didChange;
+  }
+
+  nodeRecord.element.hidden = !shouldShow;
+  return true;
+}
+
+function syncMountedCanvasNodes(activeCanvas) {
+  let didChange = false;
+
+  if (renderedCanvasId !== activeCanvas?.id) {
+    const previousCanvas = renderedCanvasId === null ? null : getCanvasById(renderedCanvasId);
+
+    previousCanvas?.nodes.forEach((nodeRecord) => {
+      didChange = setNodeCanvasVisibility(nodeRecord, false) || didChange;
+    });
+
+    renderedCanvasId = activeCanvas?.id ?? null;
+  }
+
+  activeCanvas?.nodes.forEach((nodeRecord) => {
+    didChange = setNodeCanvasVisibility(nodeRecord, true) || didChange;
+  });
+
+  return didChange;
+}
+
+function flushViewportRender() {
+  if (viewportRenderFrame === 0) {
+    return;
+  }
+
+  cancelAnimationFrame(viewportRenderFrame);
+  viewportRenderFrame = 0;
+  renderCanvas();
+}
+
+function requestViewportRender() {
+  if (viewportRenderFrame !== 0) {
+    return;
+  }
+
+  viewportRenderFrame = requestAnimationFrame(() => {
+    viewportRenderFrame = 0;
+    renderCanvas();
+  });
+}
+
+function renderCanvas(options = {}) {
+  const { syncTerminalSizes = false } = options;
+
+  if (viewportRenderFrame !== 0) {
+    cancelAnimationFrame(viewportRenderFrame);
+    viewportRenderFrame = 0;
+  }
+
   const activeCanvas = getActiveCanvas();
 
   if (activeCanvas === null) {
     board.style.setProperty("--grid-offset-x", "0px");
     board.style.setProperty("--grid-offset-y", "0px");
     board.style.setProperty("--viewport-scale", "1");
-    nodesLayer.replaceChildren();
+    syncMountedCanvasNodes(null);
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
     emptyState.hidden = false;
@@ -691,11 +769,14 @@ function renderCanvas() {
   board.style.setProperty("--grid-offset-y", `${activeCanvas.viewportOffset.y}px`);
   board.style.setProperty("--viewport-scale", String(activeCanvas.viewportScale));
 
+  const didChangeMountedNodes = syncMountedCanvasNodes(activeCanvas);
   activeCanvas.nodes.forEach(positionNode);
-  nodesLayer.replaceChildren(...activeCanvas.nodes.map((nodeRecord) => nodeRecord.element));
   applyCanvasFocusMode();
   updateEmptyState();
-  syncVisibleTerminalSizes();
+
+  if (syncTerminalSizes || didChangeMountedNodes) {
+    scheduleTerminalSizeSync(activeCanvas.nodes);
+  }
 }
 
 function createCanvasListItem(canvasRecord) {
@@ -922,7 +1003,7 @@ function setActiveCanvas(canvasId) {
   }
 
   renderCanvasList();
-  renderCanvas();
+  renderCanvas({ syncTerminalSizes: true });
 }
 
 function createCanvas() {
@@ -954,6 +1035,13 @@ async function deleteCanvas(canvasId) {
     return;
   }
 
+  if (renderedCanvasId === canvasId) {
+    canvasRecord.nodes.forEach((nodeRecord) => {
+      setNodeCanvasVisibility(nodeRecord, false);
+    });
+    renderedCanvasId = null;
+  }
+
   canvases.splice(canvasIndex, 1);
   canvasMap.delete(canvasId);
 
@@ -963,7 +1051,7 @@ async function deleteCanvas(canvasId) {
   }
 
   renderCanvasList();
-  renderCanvas();
+  renderCanvas({ syncTerminalSizes: true });
 
   await Promise.all(nodesToRemove.map((nodeRecord) => destroyTerminalNode(nodeRecord)));
 }
@@ -1446,6 +1534,18 @@ setSidebarCollapsed(false);
 
 window.addEventListener("beforeunload", () => {
   isWindowUnloading = true;
+
+  if (viewportRenderFrame !== 0) {
+    cancelAnimationFrame(viewportRenderFrame);
+    viewportRenderFrame = 0;
+  }
+
+  if (terminalSizeSyncFrame !== 0) {
+    cancelAnimationFrame(terminalSizeSyncFrame);
+    terminalSizeSyncFrame = 0;
+    pendingTerminalSizeNodes.clear();
+  }
+
   window.removeEventListener("keydown", handleWindowKeyDown);
   removeTerminalDataListener();
   removeTerminalExitListener();
@@ -1457,6 +1557,8 @@ window.addEventListener("beforeunload", () => {
 
 if (window.noteCanvas.isSmokeTest) {
   const getCanvasSnapshot = () => {
+    flushViewportRender();
+
     const activeCanvas = getActiveCanvas();
     const activeNodes = activeCanvas?.nodes ?? [];
     const boardRect = board.getBoundingClientRect();

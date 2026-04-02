@@ -528,6 +528,7 @@ button {
     border-color var(--transition-base),
     opacity var(--transition-base),
     filter var(--transition-base);
+  will-change: left, top, transform;
 }
 
 .terminal-node.is-active,
