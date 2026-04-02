@@ -247,10 +247,20 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: terminal rename did not persist in renderer state.");
     }
 
+    logStep("resize terminal");
+    const resizedSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.resizeFirstTerminalTo(660, 420)");
+
+    if (
+      resizedSnapshot.nodeSizes[0]?.width !== 660
+      || resizedSnapshot.nodeSizes[0]?.height !== 420
+    ) {
+      throw new Error("Smoke test failed: terminal resize did not persist the new frame size.");
+    }
+
     logStep("maximize terminal");
     const maximizedSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
 
-    if (maximizedSnapshot.maximizedNodeTitle !== "Main shell") {
+    if (maximizedSnapshot.maximizedNodeTitle !== "Main shell" || maximizedSnapshot.fullscreenExitVisible !== true) {
       throw new Error("Smoke test failed: terminal maximize did not activate for the renamed node.");
     }
 
@@ -280,9 +290,9 @@ async function runSmokeTest(window) {
     }
 
     logStep("restore terminal");
-    const restoredSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
+    const restoredSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.exitFullscreen()");
 
-    if (restoredSnapshot.maximizedNodeTitle !== null) {
+    if (restoredSnapshot.maximizedNodeTitle !== null || restoredSnapshot.fullscreenExitVisible !== false) {
       throw new Error("Smoke test failed: terminal maximize restore did not clear focused mode.");
     }
 
@@ -370,6 +380,8 @@ async function runSmokeTest(window) {
       importedCanvasResult.snapshot.canvasCount !== 3
       || importedCanvasResult.snapshot.activeNodeCount !== 1
       || importedCanvasResult.snapshot.nodeTitles[0] !== "Main shell"
+      || importedCanvasResult.snapshot.nodeSizes[0]?.width !== 660
+      || importedCanvasResult.snapshot.nodeSizes[0]?.height !== 420
       || importedCanvasResult.snapshot.maximizedNodeTitle !== "Main shell"
       || importedCanvasResult.snapshot.viewportScale !== 0.55
       || importedCanvasResult.snapshot.viewportOffset === null
