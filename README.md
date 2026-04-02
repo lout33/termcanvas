@@ -10,6 +10,8 @@ Instead of text notes, the canvas opens real shell terminals as world-space node
 - Double-click empty space to create a terminal node
 - Real interactive shell sessions backed by the local machine
 - One shell session per node
+- Inline terminal node renaming and canvas-level maximize/restore
+- Clear exited-state recovery with reopen-in-place for a fresh shell
 - Export the active canvas to a JSON file
 - Import a canvas JSON file as a new canvas
 - Clean Electron security boundary: Node stays out of the renderer
@@ -21,7 +23,7 @@ Instead of text notes, the canvas opens real shell terminals as world-space node
 - Node connections, zoom, minimap, or collaboration
 - Multi-window shared terminal sessions
 
-Imported canvas files restore terminal layout, not live PTY process history. Each imported terminal node starts a fresh shell.
+Imported canvas files restore terminal layout and node UI metadata such as custom titles and maximized state, not live PTY process history. Each imported terminal node starts a fresh shell.
 
 ## Run it
 
