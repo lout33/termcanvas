@@ -6,7 +6,7 @@ Instead of text notes, the canvas opens real shell terminals as world-space node
 
 ## What it does
 
-- Infinite-style canvas with drag-to-pan navigation
+- Infinite-style canvas with drag-to-pan navigation and modifier-wheel zoom on the background
 - Double-click empty space to create a terminal node
 - Real interactive shell sessions backed by the local machine
 - One shell session per node
@@ -20,7 +20,7 @@ Instead of text notes, the canvas opens real shell terminals as world-space node
 
 - Full app persistence or automatic session restore across launches
 - Resizing nodes
-- Node connections, zoom, minimap, or collaboration
+- Node connections, minimap, or collaboration
 - Multi-window shared terminal sessions
 
 Imported canvas files restore terminal layout and node UI metadata such as custom titles and maximized state, not live PTY process history. Each imported terminal node starts a fresh shell.
@@ -82,7 +82,7 @@ Files: `index.html`, `styles.css`, `renderer.js`
 - Serializes the active canvas to a versioned JSON shape
 - Restores imported canvas files as new canvases with fresh shell sessions
 - Renders one `xterm.js` instance per node
-- Converts viewport movement into screen-space positioning
+- Converts scale-aware viewport movement into screen-space positioning
 - Prevents canvas panning when the pointer is inside a terminal node
 
 ## Dependencies
