@@ -329,7 +329,12 @@ async function runSmokeTest(window) {
     logStep("create second canvas");
     const afterCanvasCreate = await window.webContents.executeJavaScript("window.__canvasLearningDebug.createCanvas()");
 
-    if (afterCanvasCreate.canvasCount !== 2 || afterCanvasCreate.activeCanvasName !== "Canvas 2" || afterCanvasCreate.activeNodeCount !== 0) {
+    if (
+      afterCanvasCreate.canvasCount !== 2
+      || afterCanvasCreate.activeCanvasName !== "Canvas 2"
+      || afterCanvasCreate.activeNodeCount !== 0
+      || afterCanvasCreate.visibleNodeCount !== 0
+    ) {
       throw new Error("Smoke test failed: creating a new canvas did not activate an empty second canvas.");
     }
 
@@ -351,6 +356,7 @@ async function runSmokeTest(window) {
     if (
       firstCanvasSnapshot.activeCanvasName !== "Canvas 1"
       || firstCanvasSnapshot.activeNodeCount !== 1
+      || firstCanvasSnapshot.visibleNodeCount !== 1
       || firstCanvasSnapshot.nodeTitles[0] !== "Main shell"
       || firstCanvasSnapshot.exitedNodeTitles.length !== 0
     ) {
