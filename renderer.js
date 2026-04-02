@@ -2,6 +2,8 @@ const appShell = document.querySelector(".app-shell");
 const board = document.getElementById("board");
 const nodesLayer = document.getElementById("nodes-layer");
 const emptyState = document.getElementById("empty-state");
+const boardZoomIndicator = document.getElementById("board-zoom-indicator");
+const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
 const canvasList = document.getElementById("canvas-list");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
@@ -10,13 +12,20 @@ const sidebarToggleButton = document.getElementById("sidebar-toggle-button");
 const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
 const DRAG_THRESHOLD = 3;
-const CANVAS_EXPORT_VERSION = 1;
+const CANVAS_EXPORT_VERSION = 2;
+const LEGACY_CANVAS_EXPORT_VERSION = 1;
 const MAX_TERMINAL_TITLE_LENGTH = 80;
 const WHEEL_LINE_DELTA_PX = 16;
 const CANVAS_SCALE_MIN = 0.55;
 const CANVAS_SCALE_MAX = 1.8;
 const CANVAS_SCALE_STEP = 0.0015;
 const CANVAS_SCALE_PRECISION = 1000;
+const DEFAULT_NODE_WIDTH = 544;
+const DEFAULT_NODE_HEIGHT = 352;
+const MIN_NODE_WIDTH = 320;
+const MIN_NODE_HEIGHT = 220;
+const ZOOM_INDICATOR_VISIBLE_MS = 1200;
+const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -31,6 +40,7 @@ let isWindowUnloading = false;
 let renderedCanvasId = null;
 let viewportRenderFrame = 0;
 let terminalSizeSyncFrame = 0;
+let zoomIndicatorTimeout = 0;
 const pendingTerminalSizeNodes = new Set();
 
 const panState = {
@@ -50,6 +60,20 @@ const dragState = {
   startClientY: 0,
   originX: 0,
   originY: 0,
+  hasMoved: false
+};
+
+const resizeState = {
+  pointerId: null,
+  nodeRecord: null,
+  handleElement: null,
+  direction: "",
+  startClientX: 0,
+  startClientY: 0,
+  originX: 0,
+  originY: 0,
+  originWidth: 0,
+  originHeight: 0,
   hasMoved: false
 };
 
@@ -93,6 +117,58 @@ function normalizeTerminalTitle(value, fallbackTitle) {
   return trimmedValue.length > 0 ? trimmedValue : fallbackTitle;
 }
 
+function clampNodeDimension(value, minimum, fallback) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(minimum, Math.round(value));
+}
+
+function getNormalizedNodeSize(width, height) {
+  return {
+    width: clampNodeDimension(width, MIN_NODE_WIDTH, DEFAULT_NODE_WIDTH),
+    height: clampNodeDimension(height, MIN_NODE_HEIGHT, DEFAULT_NODE_HEIGHT)
+  };
+}
+
+function setBoardZoomIndicatorText(scale) {
+  if (!(boardZoomIndicator instanceof HTMLElement)) {
+    return;
+  }
+
+  boardZoomIndicator.textContent = `${Math.round((Number.isFinite(scale) ? scale : 1) * 100)}%`;
+}
+
+function showBoardZoomIndicator(scale) {
+  if (!(boardZoomIndicator instanceof HTMLElement)) {
+    return;
+  }
+
+  setBoardZoomIndicatorText(scale);
+  boardZoomIndicator.classList.add("is-visible");
+
+  if (zoomIndicatorTimeout !== 0) {
+    window.clearTimeout(zoomIndicatorTimeout);
+  }
+
+  zoomIndicatorTimeout = window.setTimeout(() => {
+    zoomIndicatorTimeout = 0;
+    boardZoomIndicator.classList.remove("is-visible");
+  }, ZOOM_INDICATOR_VISIBLE_MS);
+}
+
+function applyNodeSize(nodeRecord, width, height) {
+  const nextSize = getNormalizedNodeSize(width, height);
+  nodeRecord.width = nextSize.width;
+  nodeRecord.height = nextSize.height;
+
+  if (!nodeRecord.isMaximized) {
+    nodeRecord.element.style.width = `${nodeRecord.width}px`;
+    nodeRecord.element.style.height = `${nodeRecord.height}px`;
+  }
+}
+
 function getVisibleMaximizedNode() {
   const activeCanvas = getActiveCanvas();
 
@@ -108,6 +184,14 @@ function applyCanvasFocusMode() {
 
   appShell?.classList.toggle("has-maximized-node", visibleMaximizedNode !== null);
   board.classList.toggle("has-maximized-node", visibleMaximizedNode !== null);
+
+  if (boardFullscreenExitButton instanceof HTMLButtonElement) {
+    const exitLabel = visibleMaximizedNode === null
+      ? "Exit terminal fullscreen"
+      : `Exit fullscreen for ${visibleMaximizedNode.titleText}`;
+    boardFullscreenExitButton.setAttribute("aria-label", exitLabel);
+    boardFullscreenExitButton.title = exitLabel;
+  }
 
   const activeCanvas = getActiveCanvas();
 
@@ -154,6 +238,7 @@ function syncMaximizeButton(nodeRecord) {
 
   const isMaximized = nodeRecord.isMaximized;
   nodeRecord.maximizeButton.textContent = isMaximized ? "❐" : "□";
+  nodeRecord.maximizeButton.title = isMaximized ? "Restore terminal" : "Maximize terminal";
   nodeRecord.maximizeButton.setAttribute(
     "aria-label",
     isMaximized ? `Restore ${nodeRecord.titleText}` : `Maximize ${nodeRecord.titleText}`
@@ -511,7 +596,13 @@ function zoomActiveCanvasAtPoint(point, wheelDelta) {
   const nextOffsetX = point.x - worldX * nextScale;
   const nextOffsetY = point.y - worldY * nextScale;
 
-  return setActiveCanvasViewport(nextOffsetX, nextOffsetY, nextScale);
+  const didZoom = setActiveCanvasViewport(nextOffsetX, nextOffsetY, nextScale);
+
+  if (didZoom) {
+    showBoardZoomIndicator(nextScale);
+  }
+
+  return didZoom;
 }
 
 function isViewportZoomModifierPressed(event) {
@@ -623,12 +714,16 @@ function positionNode(nodeRecord) {
   if (nodeRecord.isMaximized) {
     nodeRecord.element.style.left = "";
     nodeRecord.element.style.top = "";
+    nodeRecord.element.style.width = "";
+    nodeRecord.element.style.height = "";
     return;
   }
 
   const { viewportOffset, viewportScale } = nodeRecord.canvas;
   nodeRecord.element.style.left = `${viewportOffset.x + (nodeRecord.x * viewportScale)}px`;
   nodeRecord.element.style.top = `${viewportOffset.y + (nodeRecord.y * viewportScale)}px`;
+  nodeRecord.element.style.width = `${nodeRecord.width}px`;
+  nodeRecord.element.style.height = `${nodeRecord.height}px`;
 }
 
 function bringNodeToFront(nodeRecord) {
@@ -758,6 +853,7 @@ function renderCanvas(options = {}) {
     board.style.setProperty("--grid-offset-x", "0px");
     board.style.setProperty("--grid-offset-y", "0px");
     board.style.setProperty("--viewport-scale", "1");
+    setBoardZoomIndicatorText(1);
     syncMountedCanvasNodes(null);
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
@@ -768,6 +864,7 @@ function renderCanvas(options = {}) {
   board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
   board.style.setProperty("--grid-offset-y", `${activeCanvas.viewportOffset.y}px`);
   board.style.setProperty("--viewport-scale", String(activeCanvas.viewportScale));
+  setBoardZoomIndicatorText(activeCanvas.viewportScale);
 
   const didChangeMountedNodes = syncMountedCanvasNodes(activeCanvas);
   activeCanvas.nodes.forEach(positionNode);
@@ -853,14 +950,16 @@ function serializeCanvasRecord(canvasRecord) {
     exportedAt: new Date().toISOString(),
     canvas: {
       name: canvasRecord.name,
-    viewportOffset: {
-      x: canvasRecord.viewportOffset.x,
-      y: canvasRecord.viewportOffset.y
-    },
-    viewportScale: canvasRecord.viewportScale,
-    terminalNodes: canvasRecord.nodes.map((nodeRecord) => ({
-      x: nodeRecord.x,
-      y: nodeRecord.y,
+      viewportOffset: {
+        x: canvasRecord.viewportOffset.x,
+        y: canvasRecord.viewportOffset.y
+      },
+      viewportScale: canvasRecord.viewportScale,
+      terminalNodes: canvasRecord.nodes.map((nodeRecord) => ({
+        x: nodeRecord.x,
+        y: nodeRecord.y,
+        width: nodeRecord.width,
+        height: nodeRecord.height,
         shellName: nodeRecord.shellName,
         title: nodeRecord.titleText,
         isMaximized: nodeRecord.isMaximized
@@ -876,7 +975,7 @@ function parseImportedCanvas(rawContents) {
   const viewportScale = canvas?.viewportScale;
   const terminalNodes = Array.isArray(canvas?.terminalNodes) ? canvas.terminalNodes : null;
 
-  if (parsed?.version !== CANVAS_EXPORT_VERSION || typeof canvas?.name !== "string" || terminalNodes === null) {
+  if (![LEGACY_CANVAS_EXPORT_VERSION, CANVAS_EXPORT_VERSION].includes(parsed?.version) || typeof canvas?.name !== "string" || terminalNodes === null) {
     throw new Error("Invalid canvas file format.");
   }
 
@@ -890,6 +989,8 @@ function parseImportedCanvas(rawContents) {
     terminalNodes: terminalNodes.map((nodeRecord) => ({
       x: Number.isFinite(nodeRecord?.x) ? nodeRecord.x : 0,
       y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0,
+      width: clampNodeDimension(nodeRecord?.width, MIN_NODE_WIDTH, DEFAULT_NODE_WIDTH),
+      height: clampNodeDimension(nodeRecord?.height, MIN_NODE_HEIGHT, DEFAULT_NODE_HEIGHT),
       title: typeof nodeRecord?.title === "string" ? nodeRecord.title : "",
       isMaximized: nodeRecord?.isMaximized === true
     }))
@@ -911,24 +1012,57 @@ async function exportActiveCanvas() {
 }
 
 async function importCanvasFromData(importedCanvas) {
+  const previousActiveCanvasId = activeCanvasId;
   const importedCanvasRecord = createCanvasRecord({
     name: importedCanvas.name,
     viewportOffset: importedCanvas.viewportOffset,
     viewportScale: importedCanvas.viewportScale
   });
+  const createdNodes = [];
 
   setActiveCanvas(importedCanvasRecord.id);
 
-  for (const nodeRecord of importedCanvas.terminalNodes) {
-    await createTerminalNode({
-      x: nodeRecord.x,
-      y: nodeRecord.y,
-      title: nodeRecord.title,
-      isMaximized: nodeRecord.isMaximized
-    });
-  }
+  try {
+    for (const nodeRecord of importedCanvas.terminalNodes) {
+      const createdNode = await createTerminalNode({
+        x: nodeRecord.x,
+        y: nodeRecord.y,
+        width: nodeRecord.width,
+        height: nodeRecord.height,
+        title: nodeRecord.title,
+        isMaximized: nodeRecord.isMaximized
+      });
 
-  return importedCanvasRecord;
+      if (createdNode !== undefined) {
+        createdNodes.push(createdNode);
+      }
+    }
+
+    return importedCanvasRecord;
+  } catch (error) {
+    await Promise.all(createdNodes.map((nodeRecord) => destroyTerminalNode(nodeRecord)));
+
+    if (renderedCanvasId === importedCanvasRecord.id) {
+      importedCanvasRecord.nodes.forEach((nodeRecord) => {
+        setNodeCanvasVisibility(nodeRecord, false);
+      });
+      renderedCanvasId = null;
+    }
+
+    const canvasIndex = canvases.findIndex((canvasRecord) => canvasRecord.id === importedCanvasRecord.id);
+
+    if (canvasIndex >= 0) {
+      canvases.splice(canvasIndex, 1);
+    }
+
+    canvasMap.delete(importedCanvasRecord.id);
+
+    const fallbackCanvas = getCanvasById(previousActiveCanvasId) ?? canvases[0] ?? null;
+    activeCanvasId = fallbackCanvas?.id ?? null;
+    renderCanvasList();
+    renderCanvas({ syncTerminalSizes: true });
+    throw error;
+  }
 }
 
 async function importCanvas() {
@@ -973,7 +1107,30 @@ function stopNodeDrag(event) {
   dragState.hasMoved = false;
 }
 
+function stopNodeResize(event) {
+  const { handleElement, nodeRecord, pointerId } = resizeState;
+
+  if (handleElement !== null && pointerId !== null && handleElement.hasPointerCapture(pointerId)) {
+    handleElement.releasePointerCapture(pointerId);
+  }
+
+  if (nodeRecord !== null) {
+    nodeRecord.element.classList.remove("is-resizing");
+
+    if (event !== undefined && nodeRecord.canvas.id === activeCanvasId && !nodeRecord.isExited) {
+      nodeRecord.syncSize();
+    }
+  }
+
+  resizeState.pointerId = null;
+  resizeState.nodeRecord = null;
+  resizeState.handleElement = null;
+  resizeState.direction = "";
+  resizeState.hasMoved = false;
+}
+
 function resetPointerInteractions() {
+  stopNodeResize();
   stopNodeDrag();
 
   if (panState.pointerId !== null && board.hasPointerCapture(panState.pointerId)) {
@@ -1076,6 +1233,36 @@ function startNodeDrag(event, nodeRecord, handleElement) {
   event.stopPropagation();
 }
 
+function startNodeResize(event, nodeRecord, handleElement, direction) {
+  if (
+    event.button !== 0
+    || panState.pointerId !== null
+    || dragState.pointerId !== null
+    || nodeRecord.isMaximized
+    || getVisibleMaximizedNode() !== null
+  ) {
+    return;
+  }
+
+  setActiveNode(nodeRecord);
+  resizeState.pointerId = event.pointerId;
+  resizeState.nodeRecord = nodeRecord;
+  resizeState.handleElement = handleElement;
+  resizeState.direction = direction;
+  resizeState.startClientX = event.clientX;
+  resizeState.startClientY = event.clientY;
+  resizeState.originX = nodeRecord.x;
+  resizeState.originY = nodeRecord.y;
+  resizeState.originWidth = nodeRecord.width;
+  resizeState.originHeight = nodeRecord.height;
+  resizeState.hasMoved = false;
+
+  nodeRecord.element.classList.add("is-resizing");
+  handleElement.setPointerCapture(event.pointerId);
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 function moveDraggedNode(event) {
   const nodeRecord = dragState.nodeRecord;
   const viewportScale = nodeRecord?.canvas.viewportScale ?? 1;
@@ -1094,6 +1281,52 @@ function moveDraggedNode(event) {
 
   nodeRecord.x = dragState.originX + (deltaX / viewportScale);
   nodeRecord.y = dragState.originY + (deltaY / viewportScale);
+  positionNode(nodeRecord);
+}
+
+function moveResizedNode(event) {
+  const nodeRecord = resizeState.nodeRecord;
+  const viewportScale = nodeRecord?.canvas.viewportScale ?? 1;
+
+  if (nodeRecord === null) {
+    return;
+  }
+
+  const deltaX = (event.clientX - resizeState.startClientX) / viewportScale;
+  const deltaY = (event.clientY - resizeState.startClientY) / viewportScale;
+  const direction = resizeState.direction;
+  const originWest = resizeState.originX - (resizeState.originWidth / 2);
+  const originEast = resizeState.originX + (resizeState.originWidth / 2);
+  const originNorth = resizeState.originY - (resizeState.originHeight / 2);
+  const originSouth = resizeState.originY + (resizeState.originHeight / 2);
+  let nextWest = originWest;
+  let nextEast = originEast;
+  let nextNorth = originNorth;
+  let nextSouth = originSouth;
+
+  if (!resizeState.hasMoved && (Math.abs(deltaX) > DRAG_THRESHOLD || Math.abs(deltaY) > DRAG_THRESHOLD)) {
+    resizeState.hasMoved = true;
+  }
+
+  if (direction.includes("e")) {
+    nextEast = Math.max(originEast + deltaX, originWest + MIN_NODE_WIDTH);
+  }
+
+  if (direction.includes("w")) {
+    nextWest = Math.min(originWest + deltaX, originEast - MIN_NODE_WIDTH);
+  }
+
+  if (direction.includes("s")) {
+    nextSouth = Math.max(originSouth + deltaY, originNorth + MIN_NODE_HEIGHT);
+  }
+
+  if (direction.includes("n")) {
+    nextNorth = Math.min(originNorth + deltaY, originSouth - MIN_NODE_HEIGHT);
+  }
+
+  nodeRecord.x = (nextWest + nextEast) / 2;
+  nodeRecord.y = (nextNorth + nextSouth) / 2;
+  applyNodeSize(nodeRecord, nextEast - nextWest, nextSouth - nextNorth);
   positionNode(nodeRecord);
 }
 
@@ -1177,7 +1410,15 @@ function createTerminalElement(nodeRecord) {
   overlay.append(overlayCard);
   surface.append(terminalMount, overlay);
 
-  node.append(header, surface);
+  const resizeHandles = RESIZE_HANDLE_DIRECTIONS.map((direction) => {
+    const handle = document.createElement("div");
+    handle.className = `terminal-node-resize-handle ${direction.length === 1 ? `edge-${direction}` : `corner-${direction}`}`;
+    handle.dataset.direction = direction;
+    handle.setAttribute("aria-hidden", "true");
+    return handle;
+  });
+
+  node.append(header, surface, ...resizeHandles);
 
   return {
     node,
@@ -1192,7 +1433,8 @@ function createTerminalElement(nodeRecord) {
     overlay,
     overlayTitle,
     overlayMeta,
-    reopenButton
+    reopenButton,
+    resizeHandles
   };
 }
 
@@ -1211,6 +1453,8 @@ async function createTerminalNode(options) {
     canvas: activeCanvas,
     x: options.x,
     y: options.y,
+    width: DEFAULT_NODE_WIDTH,
+    height: DEFAULT_NODE_HEIGHT,
     isRemoved: false,
     isExited: false,
     isMaximized: options.isMaximized === true,
@@ -1232,6 +1476,7 @@ async function createTerminalNode(options) {
     titleInput: null,
     maximizeButton: null,
     reopenButton: null,
+    resizeHandles: [],
     shellName: "Shell",
     titleText: normalizeTerminalTitle(options.title, `Terminal ${terminalCount}`)
   };
@@ -1247,6 +1492,9 @@ async function createTerminalNode(options) {
   nodeRecord.titleInput = elements.titleInput;
   nodeRecord.maximizeButton = elements.maximizeButton;
   nodeRecord.reopenButton = elements.reopenButton;
+  nodeRecord.resizeHandles = elements.resizeHandles;
+
+  applyNodeSize(nodeRecord, options.width, options.height);
 
   updateNodeTitleInput(nodeRecord);
   syncMaximizeButton(nodeRecord);
@@ -1317,6 +1565,12 @@ async function createTerminalNode(options) {
 
   elements.dragArea.addEventListener("pointerdown", (event) => {
     startNodeDrag(event, nodeRecord, elements.dragArea);
+  });
+
+  elements.resizeHandles.forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
+      startNodeResize(event, nodeRecord, handle, handle.dataset.direction || "");
+    });
   });
 
   activeCanvas.nodes.push(nodeRecord);
@@ -1436,6 +1690,11 @@ function handleBoardPointerDown(event) {
 }
 
 function handleBoardPointerMove(event) {
+  if (resizeState.pointerId === event.pointerId) {
+    moveResizedNode(event);
+    return;
+  }
+
   if (dragState.pointerId === event.pointerId) {
     moveDraggedNode(event);
     return;
@@ -1457,6 +1716,11 @@ function handleBoardPointerMove(event) {
 }
 
 function handleBoardPointerUp(event) {
+  if (resizeState.pointerId === event.pointerId) {
+    stopNodeResize(event);
+    return;
+  }
+
   if (dragState.pointerId === event.pointerId) {
     stopNodeDrag(event);
     return;
@@ -1474,6 +1738,11 @@ function handleBoardPointerUp(event) {
 }
 
 function handleBoardPointerCancel(event) {
+  if (resizeState.pointerId === event.pointerId) {
+    stopNodeResize();
+    return;
+  }
+
   if (dragState.pointerId === event.pointerId) {
     stopNodeDrag();
     return;
@@ -1535,6 +1804,11 @@ setSidebarCollapsed(false);
 window.addEventListener("beforeunload", () => {
   isWindowUnloading = true;
 
+  if (zoomIndicatorTimeout !== 0) {
+    window.clearTimeout(zoomIndicatorTimeout);
+    zoomIndicatorTimeout = 0;
+  }
+
   if (viewportRenderFrame !== 0) {
     cancelAnimationFrame(viewportRenderFrame);
     viewportRenderFrame = 0;
@@ -1592,12 +1866,46 @@ if (window.noteCanvas.isSmokeTest) {
       viewportScale: activeCanvas?.viewportScale ?? null,
       terminalIds: activeNodes.map((nodeRecord) => nodeRecord.terminalId),
       nodeTitles: activeNodes.map((nodeRecord) => nodeRecord.titleText),
+      nodeSizes: activeNodes.map((nodeRecord) => ({
+        width: nodeRecord.width,
+        height: nodeRecord.height
+      })),
       exitedNodeTitles: activeNodes.filter((nodeRecord) => nodeRecord.isExited).map((nodeRecord) => nodeRecord.titleText),
       nodeScreenPositions,
       maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
       firstTerminalText: activeNodes[0]?.element?.textContent || "",
-      sidebarCollapsed: isSidebarCollapsed
+      sidebarCollapsed: isSidebarCollapsed,
+      fullscreenExitVisible: boardFullscreenExitButton instanceof HTMLElement
+        && getComputedStyle(boardFullscreenExitButton).pointerEvents !== "none"
+        && Number.parseFloat(getComputedStyle(boardFullscreenExitButton).opacity) > 0.01
     };
+  };
+
+  const waitForAnimationFrame = () => new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
+  });
+
+  const waitForUiTransition = async () => {
+    await waitForAnimationFrame();
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 220);
+    });
+  };
+
+  const dispatchPointer = (target, type, point, pointerId) => {
+    target.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+      pointerType: "mouse",
+      isPrimary: true,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      clientX: point.x,
+      clientY: point.y
+    }));
   };
 
   window.__canvasLearningDebug = {
@@ -1635,11 +1943,13 @@ if (window.noteCanvas.isSmokeTest) {
         viewportScale: snapshot.viewportScale,
         terminalIds: snapshot.terminalIds,
         nodeTitles: snapshot.nodeTitles,
+        nodeSizes: snapshot.nodeSizes,
         exitedNodeTitles: snapshot.exitedNodeTitles,
         firstNodeScreenPosition: snapshot.nodeScreenPositions[0] ?? null,
         maximizedNodeTitle: snapshot.maximizedNodeTitle,
         firstTerminalText: snapshot.firstTerminalText,
-        sidebarCollapsed: snapshot.sidebarCollapsed
+        sidebarCollapsed: snapshot.sidebarCollapsed,
+        fullscreenExitVisible: snapshot.fullscreenExitVisible
       };
     },
     getCanvasSnapshot,
@@ -1669,7 +1979,7 @@ if (window.noteCanvas.isSmokeTest) {
 
       return getCanvasSnapshot();
     },
-    toggleMaximizeFirstTerminal: () => {
+    toggleMaximizeFirstTerminal: async () => {
       const firstNode = getActiveCanvas()?.nodes[0];
 
       if (firstNode === undefined) {
@@ -1677,6 +1987,7 @@ if (window.noteCanvas.isSmokeTest) {
       }
 
       firstNode.maximizeButton?.click();
+      await waitForUiTransition();
       return getCanvasSnapshot();
     },
     reopenFirstTerminal: async () => {
@@ -1687,6 +1998,42 @@ if (window.noteCanvas.isSmokeTest) {
       }
 
       firstNode.reopenButton?.click();
+      return getCanvasSnapshot();
+    },
+    resizeFirstTerminalTo: async (width, height, direction = "se") => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+      const resizeHandle = firstNode?.resizeHandles?.find((handle) => handle.dataset.direction === direction);
+
+      if (firstNode === undefined || firstNode.isMaximized || !(resizeHandle instanceof HTMLElement)) {
+        return getCanvasSnapshot();
+      }
+
+      const viewportScale = firstNode.canvas.viewportScale;
+      const startRect = resizeHandle.getBoundingClientRect();
+      const startPoint = {
+        x: startRect.left + (startRect.width / 2),
+        y: startRect.top + (startRect.height / 2)
+      };
+      const widthDelta = width - firstNode.width;
+      const heightDelta = height - firstNode.height;
+      const movePoint = {
+        x: startPoint.x + ((direction.includes("e") ? widthDelta : direction.includes("w") ? -widthDelta : 0) * viewportScale),
+        y: startPoint.y + ((direction.includes("s") ? heightDelta : direction.includes("n") ? -heightDelta : 0) * viewportScale)
+      };
+      const pointerId = 41;
+
+      dispatchPointer(resizeHandle, "pointerdown", startPoint, pointerId);
+      dispatchPointer(board, "pointermove", movePoint, pointerId);
+      dispatchPointer(board, "pointerup", movePoint, pointerId);
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
+    },
+    exitFullscreen: async () => {
+      if (boardFullscreenExitButton instanceof HTMLButtonElement) {
+        boardFullscreenExitButton.click();
+        await waitForUiTransition();
+      }
+
       return getCanvasSnapshot();
     },
     exportActiveCanvasData: () => serializeCanvasRecord(getActiveCanvas()),
@@ -1769,6 +2116,15 @@ importCanvasButton?.addEventListener("click", () => {
 
 sidebarToggleButton?.addEventListener("click", () => {
   toggleSidebar();
+});
+
+boardFullscreenExitButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  const visibleMaximizedNode = getVisibleMaximizedNode();
+
+  if (visibleMaximizedNode !== null) {
+    setNodeMaximized(visibleMaximizedNode, false);
+  }
 });
 
 board.addEventListener("pointerdown", handleBoardPointerDown);
