@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'none';" />
+    <title>Canvas Learning</title>
+    <link rel="stylesheet" href="./node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="canvas-sidebar" aria-label="Canvas manager">
+        <div class="canvas-sidebar-header">
+          <p class="canvas-sidebar-eyebrow">Canvas Learning</p>
+          <h1 class="canvas-sidebar-title">Canvases</h1>
+          <p class="canvas-sidebar-copy">Create a canvas, switch focus, and keep each terminal workspace separate.</p>
+        </div>
+
+        <button class="canvas-create-button" id="create-canvas-button" type="button">New canvas</button>
+
+        <div class="canvas-file-actions" aria-label="Canvas file actions">
+          <button class="canvas-secondary-button" id="export-canvas-button" type="button">Export JSON</button>
+          <button class="canvas-secondary-button" id="import-canvas-button" type="button">Import JSON</button>
+        </div>
+
+        <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>
+      </aside>
+
+      <main class="workspace-shell">
+        <button class="sidebar-toggle-button" id="sidebar-toggle-button" type="button" aria-label="Hide canvas sidebar">
+          <span class="sidebar-toggle-label">Hide panel</span>
+          <span class="sidebar-toggle-shortcut">⌘B</span>
+        </button>
+
+        <section class="board" id="board">
+          <div class="board-grid" aria-hidden="true"></div>
+
+          <header class="board-intro">
+            <p class="board-eyebrow">Canvas Learning</p>
+            <p class="board-copy">Double-click empty space to open a terminal. Drag blank paper to pan, drag a node by its header to move it, or press ⌘B to hide the canvas list.</p>
+          </header>
+
+          <div class="empty-state" id="empty-state">Double-click to open a terminal node. Drag blank paper to pan, or use a node header to move it.</div>
+
+          <section class="nodes-layer" id="nodes-layer" aria-label="Infinite terminal canvas"></section>
+        </section>
+      </main>
+    </div>
+
+    <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="./node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
