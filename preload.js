@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld(
     appName: "Canvas Learning",
     isSmokeTest: process.env.CANVAS_SMOKE_TEST === "1",
     createTerminal: (payload) => ipcRenderer.invoke("terminal:create", payload),
+    resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),
     resizeTerminal: (terminalId, cols, rows) => ipcRenderer.invoke("terminal:resize", { terminalId, cols, rows }),
     destroyTerminal: (terminalId) => ipcRenderer.invoke("terminal:destroy", { terminalId }),

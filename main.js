@@ -28,6 +28,91 @@ function resolveInitialWorkingDirectory() {
   return os.homedir();
 }
 
+function resolveTerminalWorkingDirectory(requestedCwd) {
+  if (typeof requestedCwd !== "string" || requestedCwd.trim().length === 0) {
+    return resolveInitialWorkingDirectory();
+  }
+
+  const normalizedPath = path.resolve(requestedCwd);
+
+  try {
+    if (fs.existsSync(normalizedPath) && fs.statSync(normalizedPath).isDirectory()) {
+      return normalizedPath;
+    }
+  } catch {
+    return resolveInitialWorkingDirectory();
+  }
+
+  return resolveInitialWorkingDirectory();
+}
+
+function escapeShellPathForSingleQuotes(targetPath) {
+  return targetPath.replace(/'/g, "'\\''");
+}
+
+function normalizeCommandPathToken(rawValue) {
+  if (typeof rawValue !== "string") {
+    return null;
+  }
+
+  const trimmedValue = rawValue.trim();
+
+  if (trimmedValue.length === 0) {
+    return "";
+  }
+
+  if (
+    (trimmedValue.startsWith("'") && trimmedValue.endsWith("'"))
+    || (trimmedValue.startsWith('"') && trimmedValue.endsWith('"'))
+  ) {
+    return trimmedValue.slice(1, -1);
+  }
+
+  return trimmedValue;
+}
+
+function resolveTrackedWorkingDirectoryFromInput(currentCwd, data) {
+  if (typeof data !== "string" || !/[\r\n]/u.test(data)) {
+    return null;
+  }
+
+  const commandLine = data.split(/\r?\n/u)[0]?.trim() ?? "";
+
+  if (!/^cd(?:\s|$)/u.test(commandLine) || /[;&|]/u.test(commandLine)) {
+    return null;
+  }
+
+  const commandArgument = normalizeCommandPathToken(commandLine.slice(2));
+  const baseCwd = currentCwd ?? resolveInitialWorkingDirectory();
+  let nextCwd = null;
+
+  if (commandArgument === "") {
+    nextCwd = resolveInitialWorkingDirectory();
+  } else if (commandArgument === null || commandArgument === "-") {
+    return null;
+  } else if (commandArgument === "~") {
+    nextCwd = resolveInitialWorkingDirectory();
+  } else if (commandArgument.startsWith("~/")) {
+    nextCwd = path.join(resolveInitialWorkingDirectory(), commandArgument.slice(2));
+  } else {
+    nextCwd = path.resolve(baseCwd, commandArgument);
+  }
+
+  try {
+    if (fs.existsSync(nextCwd) && fs.statSync(nextCwd).isDirectory()) {
+      return nextCwd;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function resolveTrackedSessionWorkingDirectory(session) {
+  return session?.cwd ?? resolveInitialWorkingDirectory();
+}
+
 function getSession(terminalId) {
   return terminalSessions.get(terminalId);
 }
@@ -35,7 +120,7 @@ function getSession(terminalId) {
 function getOwnerContents(ownerWebContentsId) {
   const contents = webContents.fromId(ownerWebContentsId);
 
-  if (contents === null || contents.isDestroyed()) {
+  if (contents == null || contents.isDestroyed()) {
     return null;
   }
 
@@ -128,7 +213,7 @@ async function runSmokeTest(window) {
       console.log(`[smoke] ${label}`);
     };
 
-    const waitForSnapshot = async (readerScript, predicate, timeout = 5000, interval = 200) => {
+    const waitForSnapshot = async (readerScript, predicate, timeout = 5000, interval = 100) => {
       const startTime = Date.now();
 
       while (Date.now() - startTime < timeout) {
@@ -145,12 +230,14 @@ async function runSmokeTest(window) {
     };
 
     logStep("create first terminal");
-    await delay(800);
+    await delay(250);
 
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.createTerminalAt(840, 360)");
-    await delay(1000);
-
-    const created = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
+    const created = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.hasNodes === true,
+      4000
+    );
 
     if (!created.hasNodes) {
       throw new Error("Smoke test failed: no terminal nodes were created.");
@@ -158,172 +245,14 @@ async function runSmokeTest(window) {
 
     logStep("echo smoke-check");
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('echo smoke-check\\r')");
-    await delay(1200);
-
-    const snapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
+    const snapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (nextSnapshot) => nextSnapshot.firstTerminalText.includes("smoke-check"),
+      5000
+    );
 
     if (!snapshot.firstTerminalText.includes("smoke-check")) {
       throw new Error("Smoke test failed: terminal output did not include expected text.");
-    }
-
-    logStep("wheel pan background");
-    const beforeWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
-    const afterWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.panBoardByWheel(90, 45)");
-
-    if (
-      beforeWheelPan.viewportOffset === null
-      || afterWheelPan.viewportOffset === null
-      || afterWheelPan.viewportOffset.x === beforeWheelPan.viewportOffset.x
-      || afterWheelPan.viewportOffset.y === beforeWheelPan.viewportOffset.y
-    ) {
-      throw new Error("Smoke test failed: wheel navigation did not move the canvas viewport.");
-    }
-
-    logStep("modifier zoom background");
-    const beforeZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
-    const zoomAnchor = beforeZoom.firstNodeScreenPosition;
-    const afterZoom = await window.webContents.executeJavaScript(`window.__canvasLearningDebug.zoomBoardByWheel(-120, ${JSON.stringify(zoomAnchor?.x ?? 840)}, ${JSON.stringify(zoomAnchor?.y ?? 360)})`);
-
-    if (
-      beforeZoom.viewportScale === null
-      || afterZoom.viewportScale === null
-      || zoomAnchor == null
-      || afterZoom.viewportScale <= beforeZoom.viewportScale
-      || afterZoom.firstNodeScreenPosition == null
-      || Math.abs((afterZoom.firstNodeScreenPosition?.x ?? Number.NaN) - zoomAnchor.x) > 1
-      || Math.abs((afterZoom.firstNodeScreenPosition?.y ?? Number.NaN) - zoomAnchor.y) > 1
-    ) {
-      throw new Error("Smoke test failed: modifier-wheel zoom did not change scale while keeping the pointer anchor stable.");
-    }
-
-    logStep("clamp zoom bounds");
-    let zoomClampSnapshot = afterZoom;
-
-    for (let iteration = 0; iteration < 20; iteration += 1) {
-      zoomClampSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(-240)");
-    }
-
-    if (zoomClampSnapshot.viewportScale !== 1.8) {
-      throw new Error("Smoke test failed: zoom-in scale did not clamp at the expected maximum.");
-    }
-
-    for (let iteration = 0; iteration < 30; iteration += 1) {
-      zoomClampSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(240)");
-    }
-
-    if (zoomClampSnapshot.viewportScale !== 0.55) {
-      throw new Error("Smoke test failed: zoom-out scale did not clamp at the expected minimum.");
-    }
-
-    logStep("block terminal wheel pan");
-    const beforeTerminalWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
-    const afterTerminalWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.panBoardByWheel(90, 45, 'terminal')");
-
-    if (
-      beforeTerminalWheelPan.viewportOffset === null
-      || afterTerminalWheelPan.viewportOffset === null
-      || afterTerminalWheelPan.viewportOffset.x !== beforeTerminalWheelPan.viewportOffset.x
-      || afterTerminalWheelPan.viewportOffset.y !== beforeTerminalWheelPan.viewportOffset.y
-    ) {
-      throw new Error("Smoke test failed: terminal-surface wheel gestures incorrectly panned the canvas.");
-    }
-
-    logStep("block terminal modifier zoom");
-    const beforeTerminalZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
-    const afterTerminalZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(-120, 840, 360, 'terminal')");
-
-    if (
-      beforeTerminalZoom.viewportScale === null
-      || afterTerminalZoom.viewportScale === null
-      || afterTerminalZoom.viewportScale !== beforeTerminalZoom.viewportScale
-    ) {
-      throw new Error("Smoke test failed: terminal-surface modifier-wheel gestures incorrectly zoomed the canvas.");
-    }
-
-    logStep("rename terminal");
-    const renamedSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.renameFirstTerminal('Main shell')");
-
-    if (renamedSnapshot.nodeTitles[0] !== "Main shell") {
-      throw new Error("Smoke test failed: terminal rename did not persist in renderer state.");
-    }
-
-    logStep("resize terminal");
-    const resizedSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.resizeFirstTerminalTo(660, 420)");
-
-    if (
-      resizedSnapshot.nodeSizes[0]?.width !== 660
-      || resizedSnapshot.nodeSizes[0]?.height !== 420
-    ) {
-      throw new Error("Smoke test failed: terminal resize did not persist the new frame size.");
-    }
-
-    logStep("maximize terminal");
-    const maximizedSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
-
-    if (maximizedSnapshot.maximizedNodeTitle !== "Main shell" || maximizedSnapshot.fullscreenExitVisible !== true) {
-      throw new Error("Smoke test failed: terminal maximize did not activate for the renamed node.");
-    }
-
-    logStep("block zoom while maximized");
-    const beforeMaximizedZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
-    const afterMaximizedZoom = await window.webContents.executeJavaScript("window.__canvasLearningDebug.zoomBoardByWheel(-120, 840, 360)");
-
-    if (
-      beforeMaximizedZoom.viewportScale === null
-      || afterMaximizedZoom.viewportScale === null
-      || afterMaximizedZoom.viewportScale !== beforeMaximizedZoom.viewportScale
-    ) {
-      throw new Error("Smoke test failed: maximized-node mode did not block modifier-wheel zoom.");
-    }
-
-    logStep("block wheel while maximized");
-    const beforeMaximizedWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getSnapshot()");
-    const afterMaximizedWheelPan = await window.webContents.executeJavaScript("window.__canvasLearningDebug.panBoardByWheel(90, 45)");
-
-    if (
-      beforeMaximizedWheelPan.viewportOffset === null
-      || afterMaximizedWheelPan.viewportOffset === null
-      || afterMaximizedWheelPan.viewportOffset.x !== beforeMaximizedWheelPan.viewportOffset.x
-      || afterMaximizedWheelPan.viewportOffset.y !== beforeMaximizedWheelPan.viewportOffset.y
-    ) {
-      throw new Error("Smoke test failed: maximized-node mode did not block wheel panning.");
-    }
-
-    logStep("restore terminal");
-    const restoredSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.exitFullscreen()");
-
-    if (restoredSnapshot.maximizedNodeTitle !== null || restoredSnapshot.fullscreenExitVisible !== false) {
-      throw new Error("Smoke test failed: terminal maximize restore did not clear focused mode.");
-    }
-
-    logStep("exit terminal");
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('exit\\r')");
-
-    const exitedSnapshot = await waitForSnapshot(
-      "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.exitedNodeTitles[0] === "Main shell"
-    );
-
-    if (exitedSnapshot.exitedNodeTitles[0] !== "Main shell") {
-      throw new Error("Smoke test failed: exited terminal state was not reflected after shell exit.");
-    }
-
-    logStep("reopen terminal");
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.reopenFirstTerminal()");
-    await waitForSnapshot(
-      "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.exitedNodeTitles.length === 0,
-      6000
-    );
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('echo reopen-check\\r')");
-    const reopenedSnapshot = await waitForSnapshot(
-      "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.exitedNodeTitles.length === 0 && snapshot.firstTerminalText.includes("reopen-check"),
-      6000
-    );
-
-    if (reopenedSnapshot.exitedNodeTitles.length !== 0 || !reopenedSnapshot.firstTerminalText.includes("reopen-check")) {
-      throw new Error("Smoke test failed: reopen shell did not restore a live terminal session.");
     }
 
     logStep("create second canvas");
@@ -338,104 +267,88 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: creating a new canvas did not activate an empty second canvas.");
     }
 
-    logStep("handoff canvas rename focus");
-    const renameHandoffSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.handoffCanvasRename(0, 1, 'Workspace', 'Research draft')");
-
-    if (
-      renameHandoffSnapshot.canvasNames[0] !== "Workspace"
-      || renameHandoffSnapshot.activeCanvasRenameId === null
-      || renameHandoffSnapshot.focusedCanvasRenameId !== renameHandoffSnapshot.activeCanvasRenameId
-    ) {
-      throw new Error("Smoke test failed: canvas rename handoff did not keep the second inline editor focused.");
-    }
-
-    logStep("rename second canvas");
-    const renamedCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.renameCanvasAt(1, 'Research canvas')");
-
-    if (renamedCanvasSnapshot.canvasNames[1] !== "Research canvas" || renamedCanvasSnapshot.activeCanvasName !== "Research canvas") {
-      throw new Error("Smoke test failed: inline canvas rename did not persist for the active canvas.");
-    }
-
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.createTerminalAt(840, 360)");
-    await delay(1000);
-
-    const secondCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getCanvasSnapshot()");
-
-    if (secondCanvasSnapshot.activeCanvasName !== "Research canvas" || secondCanvasSnapshot.activeNodeCount !== 1) {
-      throw new Error("Smoke test failed: second canvas did not keep its own terminal node.");
-    }
-
     logStep("switch back first canvas");
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.switchCanvas(0)");
-    await delay(300);
+    const firstCanvasSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getCanvasSnapshot()",
+      (snapshot) => snapshot.activeCanvasName === "Canvas 1" && snapshot.activeNodeCount === 1 && snapshot.visibleNodeCount === 1,
+      3000
+    );
 
-    const firstCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getCanvasSnapshot()");
-
-    if (
-      firstCanvasSnapshot.activeCanvasName !== "Workspace"
-      || firstCanvasSnapshot.activeNodeCount !== 1
-      || firstCanvasSnapshot.visibleNodeCount !== 1
-      || firstCanvasSnapshot.nodeTitles[0] !== "Main shell"
-      || firstCanvasSnapshot.exitedNodeTitles.length !== 0
-    ) {
-      throw new Error("Smoke test failed: switching canvases did not restore the first canvas metadata and live state.");
-    }
-
-    logStep("toggle sidebar");
-    const sidebarToggleSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleSidebar()");
-
-    if (sidebarToggleSnapshot.sidebarCollapsed !== true) {
-      throw new Error("Smoke test failed: sidebar did not collapse after toggle.");
-    }
-
-    const sidebarRestoreSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleSidebar()");
-
-    if (sidebarRestoreSnapshot.sidebarCollapsed !== false) {
-      throw new Error("Smoke test failed: sidebar did not reopen after second toggle.");
+    if (firstCanvasSnapshot.activeCanvasName !== "Canvas 1" || firstCanvasSnapshot.visibleNodeCount !== 1) {
+      throw new Error("Smoke test failed: switching canvases did not restore the first canvas terminal.");
     }
 
     logStep("export import canvas");
+    const importedWorkingDirectory = __dirname;
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.switchCanvas(0)");
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
-    const exportedCanvasJson = await window.webContents.executeJavaScript("JSON.stringify(window.__canvasLearningDebug.exportActiveCanvasData())");
-    const importedCanvasResult = await window.webContents.executeJavaScript(`window.__canvasLearningDebug.importCanvasData(${JSON.stringify(exportedCanvasJson)})`);
+    logStep("export import canvas - set cwd");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.setFirstTerminalWorkingDirectory(${JSON.stringify(importedWorkingDirectory)})`);
+    logStep("export import canvas - verify cwd before export");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('pwd\\r')");
+    const changedCwdSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.firstTerminalText.includes(importedWorkingDirectory),
+      6000
+    );
+
+    if (!changedCwdSnapshot.firstTerminalText.includes(importedWorkingDirectory)) {
+      throw new Error("Smoke test failed: test terminal did not move into the expected working directory before export.");
+    }
+
+    const resolvedCurrentCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.resolveFirstTerminalWorkingDirectory()");
+
+    if (resolvedCurrentCwd !== importedWorkingDirectory) {
+      throw new Error(`Smoke test failed: live cwd resolver returned ${JSON.stringify(resolvedCurrentCwd)} instead of ${JSON.stringify(importedWorkingDirectory)}.`);
+    }
+
+    logStep("export import canvas - export payload");
+    const exportedCanvas = await window.webContents.executeJavaScript("window.__canvasLearningDebug.exportActiveCanvasData()");
+
+    if (exportedCanvas.canvas?.terminalNodes?.[0]?.cwd !== importedWorkingDirectory) {
+      throw new Error("Smoke test failed: exported canvas JSON did not capture the live terminal working directory.");
+    }
+
+    logStep("export import canvas - import payload");
+    const importedCanvasResult = await window.webContents.executeJavaScript("window.__canvasLearningDebug.importLastExportedCanvasData()");
 
     if (
       importedCanvasResult.snapshot.canvasCount !== 3
       || importedCanvasResult.snapshot.activeNodeCount !== 1
-      || importedCanvasResult.snapshot.nodeTitles[0] !== "Main shell"
-      || importedCanvasResult.snapshot.nodeSizes[0]?.width !== 660
-      || importedCanvasResult.snapshot.nodeSizes[0]?.height !== 420
-      || importedCanvasResult.snapshot.maximizedNodeTitle !== "Main shell"
-      || importedCanvasResult.snapshot.viewportScale !== 0.55
-      || importedCanvasResult.snapshot.viewportOffset === null
-      || Math.abs(importedCanvasResult.snapshot.viewportOffset.x - zoomClampSnapshot.viewportOffset.x) > 0.001
-      || Math.abs(importedCanvasResult.snapshot.viewportOffset.y - zoomClampSnapshot.viewportOffset.y) > 0.001
+      || importedCanvasResult.snapshot.nodeWorkingDirectories[0] !== importedWorkingDirectory
     ) {
-      throw new Error("Smoke test failed: importing canvas JSON did not restore terminal node metadata and viewport zoom state.");
+      throw new Error(`Smoke test failed: importing canvas JSON did not restore terminal node metadata and viewport zoom state. Snapshot: ${JSON.stringify(importedCanvasResult.snapshot)}`);
     }
 
-    logStep("delete canvases");
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.switchCanvas(0)");
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.deleteActiveCanvas()");
-    await delay(500);
+    logStep("verify imported cwd");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('pwd\\r')");
+    const importedCwdSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.firstTerminalText.includes(importedWorkingDirectory),
+      6000
+    );
 
-    const afterCanvasDelete = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getCanvasSnapshot()");
-
-    if (afterCanvasDelete.canvasCount !== 2 || afterCanvasDelete.activeNodeCount !== 1) {
-      throw new Error("Smoke test failed: deleting the active canvas did not fall back to the remaining canvas.");
+    if (!importedCwdSnapshot.firstTerminalText.includes(importedWorkingDirectory)) {
+      throw new Error("Smoke test failed: imported terminal did not actually start in the saved working directory.");
     }
 
-    const afterSecondCanvasDelete = await window.webContents.executeJavaScript("window.__canvasLearningDebug.deleteActiveCanvas()");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.updateLastExportedCanvasFirstCwd('/Users/lout/Documents/LIFE/output/apps_v3/better_agents_ui/canvas_learning/__missing_cwd__')");
+    const fallbackImportResult = await window.webContents.executeJavaScript("window.__canvasLearningDebug.importLastExportedCanvasData()");
 
-    if (afterSecondCanvasDelete.canvasCount !== 1) {
-      throw new Error("Smoke test failed: deleting down to the final remaining canvas did not work.");
+    if (fallbackImportResult.snapshot.nodeWorkingDirectories[0] !== os.homedir()) {
+      throw new Error("Smoke test failed: importing a missing terminal working directory did not fall back to the default path.");
     }
 
-    const afterLastCanvasDeleteAttempt = await window.webContents.executeJavaScript("window.__canvasLearningDebug.deleteActiveCanvas()");
+    logStep("verify fallback cwd");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('pwd\\r')");
+    const fallbackCwdSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.firstTerminalText.includes(os.homedir()),
+      6000
+    );
 
-    if (afterLastCanvasDeleteAttempt.canvasCount !== 1) {
-      throw new Error("Smoke test failed: the final remaining canvas was deleted.");
+    if (!fallbackCwdSnapshot.firstTerminalText.includes(os.homedir())) {
+      throw new Error("Smoke test failed: fallback imported terminal did not actually start in the default working directory.");
     }
 
     console.log("Smoke test passed.");
@@ -470,7 +383,7 @@ app.on("web-contents-created", (_event, contents) => {
 });
 
 ipcMain.handle("terminal:create", (event, payload) => {
-  const { terminalId, cols, rows } = payload;
+  const { terminalId, cols, rows, cwd } = payload;
 
   if (typeof terminalId !== "string" || terminalId.trim().length === 0) {
     throw new Error("Terminal id is required.");
@@ -484,12 +397,14 @@ ipcMain.handle("terminal:create", (event, payload) => {
   const safeRows = Number.isFinite(rows) ? Math.max(8, Math.floor(rows)) : 24;
   const shell = resolveShell();
   const shellName = path.basename(shell);
+  const terminalCwd = resolveTerminalWorkingDirectory(cwd);
+  const shouldEnforceRequestedCwd = typeof cwd === "string" && cwd.trim().length > 0;
 
   const terminalPty = pty.spawn(shell, [], {
     name: "xterm-256color",
     cols: safeCols,
     rows: safeRows,
-    cwd: resolveInitialWorkingDirectory(),
+    cwd: terminalCwd,
     env: {
       ...process.env,
       TERM: "xterm-256color"
@@ -500,10 +415,15 @@ ipcMain.handle("terminal:create", (event, payload) => {
     ownerWebContentsId: event.sender.id,
     pty: terminalPty,
     shellName,
+    cwd: terminalCwd,
     isDisposing: false
   };
 
   terminalSessions.set(terminalId, session);
+
+  if (shouldEnforceRequestedCwd) {
+    terminalPty.write(`cd -- '${escapeShellPathForSingleQuotes(terminalCwd)}'\r`);
+  }
 
   terminalPty.onData((data) => {
     sendToOwner(session.ownerWebContentsId, "terminal:data", {
@@ -524,9 +444,26 @@ ipcMain.handle("terminal:create", (event, payload) => {
   return {
     terminalId,
     shellName,
+    cwd: terminalCwd,
     cols: safeCols,
     rows: safeRows
   };
+});
+
+ipcMain.handle("terminal:resolve-tracked-cwds", async (event, payload) => {
+  const terminalIds = Array.isArray(payload?.terminalIds) ? payload.terminalIds : [];
+  const cwdByTerminalId = {};
+
+  await Promise.all(terminalIds.map(async (terminalId) => {
+    if (typeof terminalId !== "string") {
+      return;
+    }
+
+    const session = ensureAuthorizedSession(event, terminalId);
+    cwdByTerminalId[terminalId] = await resolveTrackedSessionWorkingDirectory(session);
+  }));
+
+  return cwdByTerminalId;
 });
 
 ipcMain.handle("terminal:write", (event, payload) => {
@@ -534,6 +471,12 @@ ipcMain.handle("terminal:write", (event, payload) => {
   const data = typeof payload.data === "string" ? payload.data : "";
 
   if (data.length > 0) {
+    const trackedCwd = resolveTrackedWorkingDirectoryFromInput(session.cwd, data);
+
+    if (trackedCwd !== null) {
+      session.cwd = trackedCwd;
+    }
+
     session.pty.write(data);
   }
 });

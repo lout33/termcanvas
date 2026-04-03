@@ -45,6 +45,7 @@ let terminalSizeSyncFrame = 0;
 let zoomIndicatorTimeout = 0;
 const pendingTerminalSizeNodes = new Set();
 let pendingCanvasListFocus = null;
+let lastExportedCanvasDebugPayload = null;
 
 const panState = {
   pointerId: null,
@@ -406,7 +407,8 @@ async function bindTerminalSession(nodeRecord, options = {}) {
     const created = await window.noteCanvas.createTerminal({
       terminalId,
       cols: initialCols,
-      rows: initialRows
+      rows: initialRows,
+      cwd: nodeRecord.cwd
     });
 
     if (nodeRecord.isRemoved) {
@@ -415,6 +417,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
     }
 
     setNodeLiveState(nodeRecord, created.shellName);
+    nodeRecord.cwd = typeof created.cwd === "string" && created.cwd.length > 0 ? created.cwd : nodeRecord.cwd;
 
     const dataDisposable = terminal.onData((data) => {
       void window.noteCanvas.writeTerminal(terminalId, data);
@@ -1148,6 +1151,7 @@ function serializeCanvasRecord(canvasRecord) {
         y: nodeRecord.y,
         width: nodeRecord.width,
         height: nodeRecord.height,
+        cwd: nodeRecord.cwd,
         shellName: nodeRecord.shellName,
         title: nodeRecord.titleText,
         isMaximized: nodeRecord.isMaximized
@@ -1179,10 +1183,39 @@ function parseImportedCanvas(rawContents) {
       y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0,
       width: clampNodeDimension(nodeRecord?.width, MIN_NODE_WIDTH, DEFAULT_NODE_WIDTH),
       height: clampNodeDimension(nodeRecord?.height, MIN_NODE_HEIGHT, DEFAULT_NODE_HEIGHT),
+      cwd: typeof nodeRecord?.cwd === "string" ? nodeRecord.cwd : null,
       title: typeof nodeRecord?.title === "string" ? nodeRecord.title : "",
       isMaximized: nodeRecord?.isMaximized === true
     }))
   };
+}
+
+async function refreshCanvasTerminalWorkingDirectories(canvasRecord) {
+  if (canvasRecord === null) {
+    return;
+  }
+
+  const liveNodes = canvasRecord.nodes.filter((nodeRecord) => typeof nodeRecord.terminalId === "string" && !nodeRecord.isExited);
+
+  if (liveNodes.length === 0) {
+    return;
+  }
+
+  try {
+    const cwdByTerminalId = await window.noteCanvas.resolveTrackedTerminalCwds(
+      liveNodes.map((nodeRecord) => nodeRecord.terminalId)
+    );
+
+    liveNodes.forEach((nodeRecord) => {
+      const resolvedCwd = cwdByTerminalId?.[nodeRecord.terminalId];
+
+      if (typeof resolvedCwd === "string" && resolvedCwd.length > 0) {
+        nodeRecord.cwd = resolvedCwd;
+      }
+    });
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 async function exportActiveCanvas() {
@@ -1191,6 +1224,8 @@ async function exportActiveCanvas() {
   if (activeCanvas === null) {
     return;
   }
+
+  await refreshCanvasTerminalWorkingDirectories(activeCanvas);
 
   const exportPayload = serializeCanvasRecord(activeCanvas);
   await window.noteCanvas.saveCanvasFile({
@@ -1217,6 +1252,7 @@ async function importCanvasFromData(importedCanvas) {
         y: nodeRecord.y,
         width: nodeRecord.width,
         height: nodeRecord.height,
+        cwd: nodeRecord.cwd,
         title: nodeRecord.title,
         isMaximized: nodeRecord.isMaximized
       });
@@ -1651,6 +1687,7 @@ async function createTerminalNode(options) {
     y: options.y,
     width: DEFAULT_NODE_WIDTH,
     height: DEFAULT_NODE_HEIGHT,
+    cwd: typeof options.cwd === "string" && options.cwd.trim().length > 0 ? options.cwd : null,
     isRemoved: false,
     isExited: false,
     isMaximized: options.isMaximized === true,
@@ -2067,6 +2104,7 @@ if (window.noteCanvas.isSmokeTest) {
         width: nodeRecord.width,
         height: nodeRecord.height
       })),
+      nodeWorkingDirectories: activeNodes.map((nodeRecord) => nodeRecord.cwd),
       exitedNodeTitles: activeNodes.filter((nodeRecord) => nodeRecord.isExited).map((nodeRecord) => nodeRecord.titleText),
       nodeScreenPositions,
       maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
@@ -2107,6 +2145,8 @@ if (window.noteCanvas.isSmokeTest) {
       window.setTimeout(resolve, 220);
     });
   };
+
+  const escapeShellPathForSingleQuotes = (targetPath) => targetPath.replace(/'/g, "'\\''");
 
   const dispatchPointer = (target, type, point, pointerId) => {
     target.dispatchEvent(new PointerEvent(type, {
@@ -2158,6 +2198,7 @@ if (window.noteCanvas.isSmokeTest) {
         terminalIds: snapshot.terminalIds,
         nodeTitles: snapshot.nodeTitles,
         nodeSizes: snapshot.nodeSizes,
+        nodeWorkingDirectories: snapshot.nodeWorkingDirectories,
         exitedNodeTitles: snapshot.exitedNodeTitles,
         firstNodeScreenPosition: snapshot.nodeScreenPositions[0] ?? null,
         maximizedNodeTitle: snapshot.maximizedNodeTitle,
@@ -2244,6 +2285,8 @@ if (window.noteCanvas.isSmokeTest) {
         toInput.value = nextDraftName;
       }
 
+      await waitForAnimationFrame();
+
       return getCanvasSnapshot();
     },
     toggleMaximizeFirstTerminal: async () => {
@@ -2303,14 +2346,62 @@ if (window.noteCanvas.isSmokeTest) {
 
       return getCanvasSnapshot();
     },
-    exportActiveCanvasData: () => serializeCanvasRecord(getActiveCanvas()),
+    exportActiveCanvasData: async () => {
+      const activeCanvas = getActiveCanvas();
+      await refreshCanvasTerminalWorkingDirectories(activeCanvas);
+      const exportPayload = serializeCanvasRecord(activeCanvas);
+      lastExportedCanvasDebugPayload = JSON.parse(JSON.stringify(exportPayload));
+      return exportPayload;
+    },
     importCanvasData: async (rawContents) => {
-      const importedCanvas = typeof rawContents === "string" ? parseImportedCanvas(rawContents) : rawContents;
+      const importedCanvas = typeof rawContents === "string"
+        ? parseImportedCanvas(rawContents)
+        : Array.isArray(rawContents?.canvas?.terminalNodes)
+          ? parseImportedCanvas(JSON.stringify(rawContents))
+          : rawContents;
       const canvasRecord = await importCanvasFromData(importedCanvas);
       return {
         importedCanvasName: canvasRecord.name,
         snapshot: getCanvasSnapshot()
       };
+    },
+    importLastExportedCanvasData: async () => {
+      if (lastExportedCanvasDebugPayload === null) {
+        throw new Error("No exported canvas payload available.");
+      }
+
+      return window.__canvasLearningDebug.importCanvasData(lastExportedCanvasDebugPayload);
+    },
+    updateLastExportedCanvasFirstCwd: (cwd) => {
+      if (
+        lastExportedCanvasDebugPayload === null
+        || !Array.isArray(lastExportedCanvasDebugPayload.canvas?.terminalNodes)
+        || lastExportedCanvasDebugPayload.canvas.terminalNodes[0] == null
+      ) {
+        throw new Error("No exported canvas payload available.");
+      }
+
+      lastExportedCanvasDebugPayload.canvas.terminalNodes[0].cwd = cwd;
+      return lastExportedCanvasDebugPayload;
+    },
+    setFirstTerminalWorkingDirectory: async (cwd) => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+
+      if (firstNode?.terminalId && typeof cwd === "string" && cwd.length > 0) {
+        await window.noteCanvas.writeTerminal(firstNode.terminalId, `cd '${escapeShellPathForSingleQuotes(cwd)}'\r`);
+      }
+
+      return getCanvasSnapshot();
+    },
+    resolveFirstTerminalWorkingDirectory: async () => {
+      const firstNode = getActiveCanvas()?.nodes[0];
+
+      if (!(typeof firstNode?.terminalId === "string")) {
+        return null;
+      }
+
+      const cwdByTerminalId = await window.noteCanvas.resolveTrackedTerminalCwds([firstNode.terminalId]);
+      return cwdByTerminalId?.[firstNode.terminalId] ?? null;
     },
     toggleSidebar: () => {
       toggleSidebar();
