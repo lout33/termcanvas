@@ -1800,6 +1800,16 @@ async function createTerminalNode(options) {
     startNodeDrag(event, nodeRecord, elements.dragArea);
   });
 
+  elements.dragArea.addEventListener("dblclick", (event) => {
+    if (!isElement(event.target) || event.target.closest(".terminal-node-title-input, .terminal-node-control") !== null) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setNodeMaximized(nodeRecord, !nodeRecord.isMaximized);
+  });
+
   elements.resizeHandles.forEach((handle) => {
     handle.addEventListener("pointerdown", (event) => {
       startNodeResize(event, nodeRecord, handle, handle.dataset.direction || "");
