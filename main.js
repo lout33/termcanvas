@@ -338,12 +338,30 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: creating a new canvas did not activate an empty second canvas.");
     }
 
+    logStep("handoff canvas rename focus");
+    const renameHandoffSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.handoffCanvasRename(0, 1, 'Workspace', 'Research draft')");
+
+    if (
+      renameHandoffSnapshot.canvasNames[0] !== "Workspace"
+      || renameHandoffSnapshot.activeCanvasRenameId === null
+      || renameHandoffSnapshot.focusedCanvasRenameId !== renameHandoffSnapshot.activeCanvasRenameId
+    ) {
+      throw new Error("Smoke test failed: canvas rename handoff did not keep the second inline editor focused.");
+    }
+
+    logStep("rename second canvas");
+    const renamedCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.renameCanvasAt(1, 'Research canvas')");
+
+    if (renamedCanvasSnapshot.canvasNames[1] !== "Research canvas" || renamedCanvasSnapshot.activeCanvasName !== "Research canvas") {
+      throw new Error("Smoke test failed: inline canvas rename did not persist for the active canvas.");
+    }
+
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.createTerminalAt(840, 360)");
     await delay(1000);
 
     const secondCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getCanvasSnapshot()");
 
-    if (secondCanvasSnapshot.activeCanvasName !== "Canvas 2" || secondCanvasSnapshot.activeNodeCount !== 1) {
+    if (secondCanvasSnapshot.activeCanvasName !== "Research canvas" || secondCanvasSnapshot.activeNodeCount !== 1) {
       throw new Error("Smoke test failed: second canvas did not keep its own terminal node.");
     }
 
@@ -354,7 +372,7 @@ async function runSmokeTest(window) {
     const firstCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getCanvasSnapshot()");
 
     if (
-      firstCanvasSnapshot.activeCanvasName !== "Canvas 1"
+      firstCanvasSnapshot.activeCanvasName !== "Workspace"
       || firstCanvasSnapshot.activeNodeCount !== 1
       || firstCanvasSnapshot.visibleNodeCount !== 1
       || firstCanvasSnapshot.nodeTitles[0] !== "Main shell"
