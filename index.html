@@ -11,17 +11,13 @@
   <body>
     <div class="app-shell">
       <aside class="canvas-sidebar" aria-label="Canvas manager">
-        <div class="canvas-sidebar-header">
-          <p class="canvas-sidebar-eyebrow">Canvas Learning</p>
-          <h1 class="canvas-sidebar-title">Canvases</h1>
-          <p class="canvas-sidebar-copy">Create a canvas, switch focus, and keep each terminal workspace separate.</p>
-        </div>
+        <div class="canvas-sidebar-controls">
+          <button class="canvas-create-button" id="create-canvas-button" type="button">New canvas</button>
 
-        <button class="canvas-create-button" id="create-canvas-button" type="button">New canvas</button>
-
-        <div class="canvas-file-actions" aria-label="Canvas file actions">
-          <button class="canvas-secondary-button" id="export-canvas-button" type="button">Export JSON</button>
-          <button class="canvas-secondary-button" id="import-canvas-button" type="button">Import JSON</button>
+          <div class="canvas-file-actions" aria-label="Canvas file actions">
+            <button class="canvas-secondary-button" id="export-canvas-button" type="button">Export JSON</button>
+            <button class="canvas-secondary-button" id="import-canvas-button" type="button">Import JSON</button>
+          </div>
         </div>
 
         <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>

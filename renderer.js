@@ -14,6 +14,7 @@ const FitAddonConstructor = window.FitAddon?.FitAddon;
 const DRAG_THRESHOLD = 3;
 const CANVAS_EXPORT_VERSION = 2;
 const LEGACY_CANVAS_EXPORT_VERSION = 1;
+const MAX_CANVAS_NAME_LENGTH = 80;
 const MAX_TERMINAL_TITLE_LENGTH = 80;
 const WHEEL_LINE_DELTA_PX = 16;
 const CANVAS_SCALE_MIN = 0.55;
@@ -35,6 +36,7 @@ const terminalNodeMap = new Map();
 let activeCanvasId = null;
 let activeNodeRecord = null;
 let activeTitleEditorRecord = null;
+let activeCanvasRenameId = null;
 let isSidebarCollapsed = false;
 let isWindowUnloading = false;
 let renderedCanvasId = null;
@@ -42,6 +44,7 @@ let viewportRenderFrame = 0;
 let terminalSizeSyncFrame = 0;
 let zoomIndicatorTimeout = 0;
 const pendingTerminalSizeNodes = new Set();
+let pendingCanvasListFocus = null;
 
 const panState = {
   pointerId: null,
@@ -115,6 +118,16 @@ function normalizeTerminalTitle(value, fallbackTitle) {
 
   const trimmedValue = value.trim().slice(0, MAX_TERMINAL_TITLE_LENGTH);
   return trimmedValue.length > 0 ? trimmedValue : fallbackTitle;
+}
+
+function normalizeCanvasName(value, fallbackName, excludedCanvasId = null) {
+  if (typeof value !== "string") {
+    return getUniqueCanvasName(fallbackName, excludedCanvasId);
+  }
+
+  const trimmedValue = value.trim().slice(0, MAX_CANVAS_NAME_LENGTH);
+  const baseName = trimmedValue.length > 0 ? trimmedValue : fallbackName;
+  return getUniqueCanvasName(baseName, excludedCanvasId);
 }
 
 function clampNodeDimension(value, minimum, fallback) {
@@ -470,19 +483,110 @@ async function reopenTerminalNode(nodeRecord) {
   }
 }
 
-function getUniqueCanvasName(baseName) {
+function getUniqueCanvasName(baseName, excludedCanvasId = null) {
   const trimmedBaseName = typeof baseName === "string" && baseName.trim().length > 0
     ? baseName.trim()
     : `Canvas ${canvasCount + 1}`;
   let candidateName = trimmedBaseName;
   let suffix = 2;
 
-  while (canvases.some((canvasRecord) => canvasRecord.name === candidateName)) {
+  while (canvases.some((canvasRecord) => canvasRecord.id !== excludedCanvasId && canvasRecord.name === candidateName)) {
     candidateName = `${trimmedBaseName} (${suffix})`;
     suffix += 1;
   }
 
   return candidateName;
+}
+
+function beginCanvasRename(canvasId) {
+  if (getCanvasById(canvasId) === null) {
+    return;
+  }
+
+  if (activeCanvasRenameId === canvasId) {
+    const activeRenameInput = canvasList?.querySelector(`[data-canvas-id="${canvasId}"][data-canvas-part="rename-input"]`);
+
+    if (activeRenameInput instanceof HTMLInputElement) {
+      activeRenameInput.focus();
+      activeRenameInput.select();
+      return;
+    }
+  }
+
+  if (activeCanvasRenameId !== null && activeCanvasRenameId !== canvasId) {
+    const activeRenameInput = canvasList?.querySelector(`[data-canvas-id="${activeCanvasRenameId}"][data-canvas-part="rename-input"]`);
+
+    if (activeRenameInput instanceof HTMLInputElement) {
+      commitCanvasRename(activeCanvasRenameId, activeRenameInput.value);
+    } else {
+      cancelCanvasRename(activeCanvasRenameId);
+    }
+  }
+
+  activeCanvasRenameId = canvasId;
+  pendingCanvasListFocus = {
+    canvasId,
+    part: "rename-input",
+    selectText: true
+  };
+  renderCanvasList();
+}
+
+function commitCanvasRename(canvasId, rawName, options = {}) {
+  const canvasRecord = getCanvasById(canvasId);
+
+  if (canvasRecord !== null) {
+    canvasRecord.name = normalizeCanvasName(rawName, canvasRecord.name, canvasId);
+  }
+
+  if (activeCanvasRenameId === canvasId) {
+    activeCanvasRenameId = null;
+  }
+
+  if (options.restoreFocus === true) {
+    pendingCanvasListFocus = {
+      canvasId,
+      part: "switch"
+    };
+  }
+
+  renderCanvasList();
+}
+
+function cancelCanvasRename(canvasId, options = {}) {
+  if (activeCanvasRenameId === canvasId) {
+    activeCanvasRenameId = null;
+  }
+
+  if (options.restoreFocus === true) {
+    pendingCanvasListFocus = {
+      canvasId,
+      part: "switch"
+    };
+  }
+
+  renderCanvasList();
+}
+
+function focusPendingCanvasListControl() {
+  if (!(canvasList instanceof HTMLElement) || pendingCanvasListFocus === null) {
+    return;
+  }
+
+  const { canvasId, part, selectText } = pendingCanvasListFocus;
+  pendingCanvasListFocus = null;
+  const selector = `[data-canvas-id="${canvasId}"][data-canvas-part="${part}"]`;
+  const target = canvasList.querySelector(selector);
+
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  target.focus();
+
+  if (selectText && target instanceof HTMLInputElement) {
+    target.select();
+  }
 }
 
 function getActiveCanvas() {
@@ -873,33 +977,116 @@ function renderCanvas(options = {}) {
 }
 
 function createCanvasListItem(canvasRecord) {
-  const item = document.createElement("li");
+    const item = document.createElement("li");
   item.className = "canvas-list-item";
+  item.classList.toggle("is-active", canvasRecord.id === activeCanvasId);
+  const isRenaming = canvasRecord.id === activeCanvasRenameId;
 
-  const switchButton = document.createElement("button");
-  switchButton.className = "canvas-list-button";
-  switchButton.type = "button";
-  switchButton.setAttribute("aria-label", `Open ${canvasRecord.name}`);
+    if (isRenaming) {
+    const editor = document.createElement("div");
+    editor.className = "canvas-list-editor";
+    let didCommitFromKeyboard = false;
+    let didCancelFromKeyboard = false;
 
-  if (canvasRecord.id === activeCanvasId) {
-    switchButton.classList.add("is-active");
-    switchButton.setAttribute("aria-current", "true");
+    const nameInput = document.createElement("input");
+    nameInput.className = "canvas-list-input";
+    nameInput.type = "text";
+    nameInput.value = canvasRecord.name;
+    nameInput.maxLength = MAX_CANVAS_NAME_LENGTH;
+    nameInput.spellcheck = false;
+    nameInput.setAttribute("aria-label", `Rename ${canvasRecord.name}`);
+    nameInput.dataset.canvasId = canvasRecord.id;
+    nameInput.dataset.canvasPart = "rename-input";
+
+    const meta = document.createElement("span");
+    meta.className = "canvas-list-meta";
+    meta.textContent = `${canvasRecord.nodes.length} ${canvasRecord.nodes.length === 1 ? "terminal" : "terminals"}`;
+
+      nameInput.addEventListener("blur", () => {
+        window.setTimeout(() => {
+          if (didCommitFromKeyboard || didCancelFromKeyboard) {
+            return;
+          }
+
+          if (activeCanvasRenameId !== canvasRecord.id) {
+            return;
+          }
+
+          commitCanvasRename(canvasRecord.id, nameInput.value);
+        }, 0);
+      });
+
+    nameInput.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        didCommitFromKeyboard = true;
+        commitCanvasRename(canvasRecord.id, nameInput.value, { restoreFocus: true });
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        didCancelFromKeyboard = true;
+        cancelCanvasRename(canvasRecord.id, { restoreFocus: true });
+      }
+    });
+
+    editor.append(nameInput, meta);
+    item.append(editor);
+  } else {
+    const switchButton = document.createElement("button");
+    switchButton.className = "canvas-list-button";
+    switchButton.type = "button";
+    switchButton.setAttribute("aria-label", `Open ${canvasRecord.name}`);
+    switchButton.dataset.canvasId = canvasRecord.id;
+    switchButton.dataset.canvasPart = "switch";
+
+    if (canvasRecord.id === activeCanvasId) {
+      switchButton.classList.add("is-active");
+      switchButton.setAttribute("aria-current", "true");
+    }
+
+    const name = document.createElement("span");
+    name.className = "canvas-list-name";
+    name.textContent = canvasRecord.name;
+
+    const meta = document.createElement("span");
+    meta.className = "canvas-list-meta";
+    meta.textContent = `${canvasRecord.nodes.length} ${canvasRecord.nodes.length === 1 ? "terminal" : "terminals"}`;
+
+    switchButton.append(name, meta);
+    switchButton.addEventListener("click", () => {
+      setActiveCanvas(canvasRecord.id);
+    });
+    switchButton.addEventListener("keydown", (event) => {
+      if (event.key === "F2") {
+        event.preventDefault();
+        beginCanvasRename(canvasRecord.id);
+      }
+    });
+
+    item.append(switchButton);
   }
 
-  const name = document.createElement("span");
-  name.className = "canvas-list-name";
-  name.textContent = canvasRecord.name;
+  const actions = document.createElement("div");
+  actions.className = "canvas-list-actions";
 
-  const meta = document.createElement("span");
-  meta.className = "canvas-list-meta";
-  meta.textContent = `${canvasRecord.nodes.length} ${canvasRecord.nodes.length === 1 ? "terminal" : "terminals"}`;
-
-  switchButton.append(name, meta);
-  switchButton.addEventListener("click", () => {
-    setActiveCanvas(canvasRecord.id);
-  });
-
-  item.append(switchButton);
+  if (!isRenaming) {
+    const renameButton = document.createElement("button");
+    renameButton.className = "canvas-list-action";
+    renameButton.type = "button";
+    renameButton.setAttribute("aria-label", `Rename ${canvasRecord.name}`);
+    renameButton.title = `Rename ${canvasRecord.name}`;
+    renameButton.textContent = "✎";
+    renameButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      beginCanvasRename(canvasRecord.id);
+    });
+    actions.append(renameButton);
+  }
 
   if (canvases.length > 1) {
     const deleteButton = document.createElement("button");
@@ -912,7 +1099,11 @@ function createCanvasListItem(canvasRecord) {
       event.stopPropagation();
       void deleteCanvas(canvasRecord.id);
     });
-    item.append(deleteButton);
+    actions.append(deleteButton);
+  }
+
+  if (actions.childElementCount > 0) {
+    item.append(actions);
   }
 
   return item;
@@ -926,6 +1117,7 @@ function renderCanvasList() {
   });
 
   canvasList.replaceChildren(fragment);
+  focusPendingCanvasListControl();
 }
 
 function sanitizeCanvasExportName(canvasName) {
@@ -1146,6 +1338,10 @@ function setActiveCanvas(canvasId) {
   if (activeCanvasId !== canvasId) {
     resetPointerInteractions();
 
+    if (activeCanvasRenameId !== null) {
+      activeCanvasRenameId = null;
+    }
+
     if (activeTitleEditorRecord !== null) {
       activeTitleEditorRecord.titleInput?.blur();
       activeTitleEditorRecord = null;
@@ -1176,6 +1372,10 @@ async function deleteCanvas(canvasId) {
   }
 
   resetPointerInteractions();
+
+  if (activeCanvasRenameId === canvasId) {
+    activeCanvasRenameId = null;
+  }
 
   if (activeNodeRecord?.canvas === canvasRecord) {
     setActiveNode(null);
@@ -1847,12 +2047,13 @@ if (window.noteCanvas.isSmokeTest) {
         };
       });
 
-    return {
-      canvasCount: canvases.length,
-      canvasNames: canvases.map((canvasRecord) => canvasRecord.name),
-      canvasNodeCounts: canvases.map((canvasRecord) => canvasRecord.nodes.length),
-      activeCanvasName: activeCanvas?.name ?? null,
-      activeNodeCount: activeNodes.length,
+      return {
+        canvasCount: canvases.length,
+        canvasNames: canvases.map((canvasRecord) => canvasRecord.name),
+        canvasNodeCounts: canvases.map((canvasRecord) => canvasRecord.nodes.length),
+        activeCanvasName: activeCanvas?.name ?? null,
+        activeCanvasRenameId,
+        activeNodeCount: activeNodes.length,
       viewportOffset: activeCanvas === null
         ? null
         : {
@@ -1879,11 +2080,20 @@ if (window.noteCanvas.isSmokeTest) {
         return nodeStyles.display !== "none" && nodeStyles.visibility !== "hidden" && Number.parseFloat(nodeStyles.opacity || "1") > 0;
       }).length,
       sidebarCollapsed: isSidebarCollapsed,
-      fullscreenExitVisible: boardFullscreenExitButton instanceof HTMLElement
-        && getComputedStyle(boardFullscreenExitButton).pointerEvents !== "none"
-        && Number.parseFloat(getComputedStyle(boardFullscreenExitButton).opacity) > 0.01
+        fullscreenExitVisible: boardFullscreenExitButton instanceof HTMLElement
+          && getComputedStyle(boardFullscreenExitButton).pointerEvents !== "none"
+          && Number.parseFloat(getComputedStyle(boardFullscreenExitButton).opacity) > 0.01
+        ,focusedCanvasRenameId: (() => {
+          const activeElement = document.activeElement;
+
+          if (!(activeElement instanceof HTMLInputElement) || activeElement.dataset.canvasPart !== "rename-input") {
+            return null;
+          }
+
+          return activeElement.dataset.canvasId ?? null;
+        })()
+      };
     };
-  };
 
   const waitForAnimationFrame = () => new Promise((resolve) => {
     requestAnimationFrame(() => {
@@ -1981,6 +2191,58 @@ if (window.noteCanvas.isSmokeTest) {
           resolve();
         });
       });
+
+      return getCanvasSnapshot();
+    },
+    renameCanvasAt: async (index, title) => {
+      const canvasRecord = canvases[index];
+
+      if (canvasRecord === undefined) {
+        return getCanvasSnapshot();
+      }
+
+      beginCanvasRename(canvasRecord.id);
+      await waitForAnimationFrame();
+
+      const renameInput = canvasList.querySelector(`[data-canvas-id="${canvasRecord.id}"][data-canvas-part="rename-input"]`);
+
+      if (renameInput instanceof HTMLInputElement) {
+        renameInput.value = title;
+        renameInput.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true
+        }));
+        await waitForAnimationFrame();
+      }
+
+      return getCanvasSnapshot();
+    },
+    handoffCanvasRename: async (fromIndex, toIndex, draftName = "", nextDraftName = "") => {
+      const fromCanvas = canvases[fromIndex];
+      const toCanvas = canvases[toIndex];
+
+      if (fromCanvas === undefined || toCanvas === undefined) {
+        return getCanvasSnapshot();
+      }
+
+      beginCanvasRename(fromCanvas.id);
+      await waitForAnimationFrame();
+
+      const fromInput = canvasList.querySelector(`[data-canvas-id="${fromCanvas.id}"][data-canvas-part="rename-input"]`);
+
+      if (fromInput instanceof HTMLInputElement) {
+        fromInput.value = draftName;
+      }
+
+      beginCanvasRename(toCanvas.id);
+      await waitForAnimationFrame();
+
+      const toInput = canvasList.querySelector(`[data-canvas-id="${toCanvas.id}"][data-canvas-part="rename-input"]`);
+
+      if (toInput instanceof HTMLInputElement) {
+        toInput.value = nextDraftName;
+      }
 
       return getCanvasSnapshot();
     },
