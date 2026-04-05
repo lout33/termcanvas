@@ -323,6 +323,18 @@ button {
   padding-right: var(--space-1);
 }
 
+.workspace-folder-list {
+  max-height: 12rem;
+}
+
+.workspace-folder-list .canvas-list-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
 .workspace-browser {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;

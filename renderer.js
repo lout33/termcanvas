@@ -10,6 +10,7 @@ const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
+const workspaceFolderList = document.getElementById("workspace-folder-list");
 const workspaceBrowser = document.getElementById("workspace-browser");
 const fileInspector = document.getElementById("file-inspector");
 const sidebarToggleButton = document.getElementById("sidebar-toggle-button");
@@ -51,9 +52,11 @@ const pendingTerminalSizeNodes = new Set();
 let pendingCanvasListFocus = null;
 let lastExportedCanvasDebugPayload = null;
 let workspacePreviewRequestId = 0;
-const expandedWorkspaceDirectories = new Set();
+let workspaceStateHydrationToken = 0;
+const expandedWorkspaceDirectoriesByFolderId = new Map();
 
 const workspacePreviewState = {
+  folderId: null,
   relativePath: null,
   status: "empty",
   data: null,
@@ -61,11 +64,8 @@ const workspacePreviewState = {
 };
 
 const workspaceState = {
-  rootPath: null,
-  rootName: "",
-  entries: [],
-  isTruncated: false,
-  lastError: "",
+  importedFolders: [],
+  activeFolderId: null,
   isRefreshing: false
 };
 
@@ -136,12 +136,7 @@ const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalI
 });
 
 const removeWorkspaceDirectoryDataListener = window.noteCanvas.onWorkspaceDirectoryData((snapshot) => {
-  if (snapshot === null) {
-    clearWorkspaceSnapshot("Workspace folder is unavailable.");
-    return;
-  }
-
-  applyWorkspaceSnapshot(snapshot);
+  applyWorkspaceState(snapshot);
 });
 
 function isElement(value) {
@@ -1167,10 +1162,6 @@ function renderCanvasList() {
   focusPendingCanvasListControl();
 }
 
-function hasWorkspaceDirectory() {
-  return typeof workspaceState.rootPath === "string" && workspaceState.rootPath.length > 0;
-}
-
 function getWorkspaceEntryName(relativePath) {
   return relativePath.split("/").at(-1) ?? relativePath;
 }
@@ -1200,31 +1191,85 @@ function normalizeWorkspaceEntries(entries) {
     }
 
     return [{
-      name: typeof entry.name === "string" ? entry.name : entry.relativePath.split("/").at(-1) ?? entry.relativePath,
+      name: typeof entry.name === "string" ? entry.name : getWorkspaceEntryName(entry.relativePath),
       relativePath: entry.relativePath,
       kind: entry.kind === "directory" ? "directory" : "file"
     }];
   });
 }
 
-function getWorkspaceDirectoryPaths() {
+function normalizeWorkspaceFolders(folders) {
+  if (!Array.isArray(folders)) {
+    return [];
+  }
+
+  return folders.flatMap((folder) => {
+    if (typeof folder?.id !== "string" || typeof folder?.rootPath !== "string" || folder.rootPath.length === 0) {
+      return [];
+    }
+
+    return [{
+      id: folder.id,
+      rootPath: folder.rootPath,
+      rootName: typeof folder.rootName === "string" && folder.rootName.length > 0 ? folder.rootName : folder.rootPath,
+      entries: normalizeWorkspaceEntries(folder.entries),
+      isTruncated: folder.isTruncated === true,
+      lastError: typeof folder.lastError === "string" ? folder.lastError : ""
+    }];
+  });
+}
+
+function getWorkspaceFolderById(folderId) {
+  return workspaceState.importedFolders.find((folder) => folder.id === folderId) ?? null;
+}
+
+function getActiveWorkspaceFolder() {
+  return typeof workspaceState.activeFolderId === "string"
+    ? getWorkspaceFolderById(workspaceState.activeFolderId)
+    : null;
+}
+
+function hasWorkspaceDirectory() {
+  return getActiveWorkspaceFolder() !== null;
+}
+
+function getWorkspaceDirectoryPaths(folderRecord) {
+  if (folderRecord === null) {
+    return new Set();
+  }
+
   return new Set(
-    workspaceState.entries
+    folderRecord.entries
       .filter((entry) => entry.kind === "directory")
       .map((entry) => entry.relativePath)
   );
 }
 
-function getWorkspaceFilePaths() {
+function getWorkspaceFilePaths(folderRecord) {
+  if (folderRecord === null) {
+    return new Set();
+  }
+
   return new Set(
-    workspaceState.entries
+    folderRecord.entries
       .filter((entry) => entry.kind === "file")
       .map((entry) => entry.relativePath)
   );
 }
 
+function getExpandedDirectoriesForFolder(folderId) {
+  const normalizedFolderId = typeof folderId === "string" ? folderId : "";
+
+  if (!expandedWorkspaceDirectoriesByFolderId.has(normalizedFolderId)) {
+    expandedWorkspaceDirectoriesByFolderId.set(normalizedFolderId, new Set());
+  }
+
+  return expandedWorkspaceDirectoriesByFolderId.get(normalizedFolderId);
+}
+
 function clearWorkspacePreview() {
   workspacePreviewRequestId += 1;
+  workspacePreviewState.folderId = null;
   workspacePreviewState.relativePath = null;
   workspacePreviewState.status = "empty";
   workspacePreviewState.data = null;
@@ -1232,7 +1277,9 @@ function clearWorkspacePreview() {
 }
 
 function isWorkspacePreviewOpen() {
-  return typeof workspacePreviewState.relativePath === "string" && workspacePreviewState.relativePath.length > 0;
+  return typeof workspacePreviewState.folderId === "string"
+    && typeof workspacePreviewState.relativePath === "string"
+    && workspacePreviewState.relativePath.length > 0;
 }
 
 function getWorkspacePreviewTypeLabel() {
@@ -1246,10 +1293,15 @@ function syncAppShellWorkspaceState() {
   appShell?.classList.toggle("has-file-inspector", isWorkspacePreviewOpen());
 }
 
-function buildWorkspaceTreeRows() {
-  const childrenByParentPath = new Map();
+function buildWorkspaceTreeRows(folderRecord) {
+  if (folderRecord === null) {
+    return [];
+  }
 
-  workspaceState.entries.forEach((entry) => {
+  const childrenByParentPath = new Map();
+  const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
+
+  folderRecord.entries.forEach((entry) => {
     const parentPath = getWorkspaceEntryParentPath(entry.relativePath);
     const currentChildren = childrenByParentPath.get(parentPath) ?? [];
     currentChildren.push(entry);
@@ -1267,13 +1319,13 @@ function buildWorkspaceTreeRows() {
 
     children.forEach((entry) => {
       const isDirectory = entry.kind === "directory";
-      const isExpanded = isDirectory && expandedWorkspaceDirectories.has(entry.relativePath);
+      const isExpanded = isDirectory && expandedDirectories.has(entry.relativePath);
 
       rows.push({
         ...entry,
         depth,
         isExpanded,
-        isSelected: workspacePreviewState.relativePath === entry.relativePath
+        isSelected: workspacePreviewState.folderId === folderRecord.id && workspacePreviewState.relativePath === entry.relativePath
       });
 
       if (isExpanded) {
@@ -1284,6 +1336,70 @@ function buildWorkspaceTreeRows() {
 
   appendRows("", 0);
   return rows;
+}
+
+function createWorkspaceFolderListItem(folderRecord) {
+  const item = document.createElement("li");
+  item.className = "canvas-list-item";
+  item.classList.toggle("is-active", folderRecord.id === workspaceState.activeFolderId);
+
+  const switchButton = document.createElement("button");
+  switchButton.className = "canvas-list-button";
+  switchButton.type = "button";
+  switchButton.setAttribute("aria-label", `Open folder ${folderRecord.rootName}`);
+  switchButton.dataset.workspaceFolderId = folderRecord.id;
+
+  if (folderRecord.id === workspaceState.activeFolderId) {
+    switchButton.classList.add("is-active");
+    switchButton.setAttribute("aria-current", "true");
+  }
+
+  const name = document.createElement("span");
+  name.className = "canvas-list-name";
+  name.textContent = folderRecord.rootName;
+
+  const meta = document.createElement("span");
+  meta.className = "canvas-list-meta";
+  meta.textContent = folderRecord.lastError.length > 0 ? folderRecord.lastError : folderRecord.rootPath;
+
+  switchButton.append(name, meta);
+  switchButton.addEventListener("click", () => {
+    void activateWorkspaceFolderById(folderRecord.id).catch((error) => {
+      console.error(error);
+    });
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "canvas-list-actions";
+
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "canvas-list-delete";
+  deleteButton.type = "button";
+  deleteButton.setAttribute("aria-label", `Remove folder ${folderRecord.rootName}`);
+  deleteButton.textContent = "×";
+  deleteButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void removeWorkspaceFolderById(folderRecord.id).catch((error) => {
+      console.error(error);
+    });
+  });
+  actions.append(deleteButton);
+
+  item.append(switchButton, actions);
+  return item;
+}
+
+function renderWorkspaceFolderList() {
+  if (!(workspaceFolderList instanceof HTMLElement)) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  workspaceState.importedFolders.forEach((folderRecord) => {
+    fragment.append(createWorkspaceFolderListItem(folderRecord));
+  });
+  workspaceFolderList.replaceChildren(fragment);
 }
 
 function renderFileInspector() {
@@ -1383,8 +1499,16 @@ function renderFileInspector() {
 }
 
 async function loadWorkspaceFilePreview(relativePath) {
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (activeFolder === null) {
+    return null;
+  }
+
   const requestId = ++workspacePreviewRequestId;
-  const previewRootPath = workspaceState.rootPath;
+  const previewFolderId = activeFolder.id;
+  const previewRootPath = activeFolder.rootPath;
+  workspacePreviewState.folderId = previewFolderId;
   workspacePreviewState.relativePath = relativePath;
   workspacePreviewState.status = "loading";
   workspacePreviewState.data = null;
@@ -1393,12 +1517,13 @@ async function loadWorkspaceFilePreview(relativePath) {
   renderFileInspector();
 
   try {
-    const preview = await window.noteCanvas.readWorkspaceFile(relativePath);
+    const preview = await window.noteCanvas.readWorkspaceFile(previewFolderId, relativePath);
 
     if (
       requestId !== workspacePreviewRequestId
+      || workspacePreviewState.folderId !== previewFolderId
       || workspacePreviewState.relativePath !== relativePath
-      || workspaceState.rootPath !== previewRootPath
+      || getWorkspaceFolderById(previewFolderId)?.rootPath !== previewRootPath
     ) {
       return null;
     }
@@ -1412,8 +1537,9 @@ async function loadWorkspaceFilePreview(relativePath) {
   } catch (error) {
     if (
       requestId !== workspacePreviewRequestId
+      || workspacePreviewState.folderId !== previewFolderId
       || workspacePreviewState.relativePath !== relativePath
-      || workspaceState.rootPath !== previewRootPath
+      || getWorkspaceFolderById(previewFolderId)?.rootPath !== previewRootPath
     ) {
       return null;
     }
@@ -1428,7 +1554,9 @@ async function loadWorkspaceFilePreview(relativePath) {
 }
 
 async function selectWorkspaceFile(relativePath) {
-  if (!getWorkspaceFilePaths().has(relativePath)) {
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (!getWorkspaceFilePaths(activeFolder).has(relativePath)) {
     return null;
   }
 
@@ -1444,10 +1572,18 @@ async function refreshSelectedWorkspaceFilePreview() {
 }
 
 function toggleWorkspaceDirectory(relativePath) {
-  if (expandedWorkspaceDirectories.has(relativePath)) {
-    expandedWorkspaceDirectories.delete(relativePath);
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (activeFolder === null) {
+    return;
+  }
+
+  const expandedDirectories = getExpandedDirectoriesForFolder(activeFolder.id);
+
+  if (expandedDirectories.has(relativePath)) {
+    expandedDirectories.delete(relativePath);
   } else {
-    expandedWorkspaceDirectories.add(relativePath);
+    expandedDirectories.add(relativePath);
   }
 
   renderWorkspaceBrowser();
@@ -1467,32 +1603,38 @@ function renderWorkspaceBrowser() {
 
   updateWorkspaceControls();
   const fragment = document.createDocumentFragment();
+  const activeFolder = getActiveWorkspaceFolder();
 
-  if (hasWorkspaceDirectory()) {
+  if (activeFolder !== null) {
     const summary = document.createElement("div");
     summary.className = "workspace-browser-summary";
 
     const name = document.createElement("div");
     name.className = "workspace-browser-name";
-    name.textContent = workspaceState.rootName;
+    name.textContent = activeFolder.rootName;
 
     const currentPath = document.createElement("div");
     currentPath.className = "workspace-browser-path";
-    currentPath.textContent = workspaceState.rootPath;
-    currentPath.title = workspaceState.rootPath;
+    currentPath.textContent = activeFolder.rootPath;
+    currentPath.title = activeFolder.rootPath;
 
     const meta = document.createElement("div");
     meta.className = "workspace-browser-meta";
-    meta.textContent = `${workspaceState.entries.length} ${workspaceState.entries.length === 1 ? "entry" : "entries"}`;
+    meta.textContent = `${activeFolder.entries.length} ${activeFolder.entries.length === 1 ? "entry" : "entries"}`;
 
     summary.append(name, currentPath, meta);
     fragment.append(summary);
 
-    if (workspaceState.entries.length > 0) {
+    if (activeFolder.lastError.length > 0) {
+      const error = document.createElement("div");
+      error.className = "workspace-browser-error";
+      error.textContent = activeFolder.lastError;
+      fragment.append(error);
+    } else if (activeFolder.entries.length > 0) {
       const entryList = document.createElement("ul");
       entryList.className = "workspace-browser-list";
 
-      buildWorkspaceTreeRows().forEach((entry) => {
+      buildWorkspaceTreeRows(activeFolder).forEach((entry) => {
         const item = document.createElement("li");
         item.className = "workspace-browser-row";
 
@@ -1539,7 +1681,7 @@ function renderWorkspaceBrowser() {
       fragment.append(empty);
     }
 
-    if (workspaceState.isTruncated) {
+    if (activeFolder.isTruncated) {
       const truncated = document.createElement("div");
       truncated.className = "workspace-browser-truncated";
       truncated.textContent = "Listing trimmed to keep the sidebar responsive.";
@@ -1547,53 +1689,57 @@ function renderWorkspaceBrowser() {
     }
   } else {
     const empty = document.createElement("div");
-    empty.className = workspaceState.lastError.length > 0 ? "workspace-browser-error" : "workspace-browser-empty";
-    empty.textContent = workspaceState.lastError.length > 0
-      ? workspaceState.lastError
-      : "Open a folder to browse files here and make new terminals start there.";
+    empty.className = "workspace-browser-empty";
+    empty.textContent = "Open a folder to browse files here and make new terminals start there.";
     fragment.append(empty);
   }
 
   workspaceBrowser.replaceChildren(fragment);
 }
 
-function applyWorkspaceSnapshot(snapshot) {
-  const previousRootPath = workspaceState.rootPath;
-  workspaceState.rootPath = typeof snapshot?.rootPath === "string" ? snapshot.rootPath : null;
-  workspaceState.rootName = typeof snapshot?.rootName === "string" ? snapshot.rootName : "";
-  workspaceState.entries = normalizeWorkspaceEntries(snapshot?.entries);
-  workspaceState.isTruncated = snapshot?.isTruncated === true;
-  workspaceState.lastError = "";
-  const validDirectoryPaths = getWorkspaceDirectoryPaths();
-  const validFilePaths = getWorkspaceFilePaths();
+function applyWorkspaceState(nextState) {
+  workspaceStateHydrationToken += 1;
+  const previousActiveFolderId = workspaceState.activeFolderId;
+  workspaceState.importedFolders = normalizeWorkspaceFolders(nextState?.importedFolders);
+  workspaceState.activeFolderId = typeof nextState?.activeFolderId === "string" ? nextState.activeFolderId : null;
 
-  [...expandedWorkspaceDirectories].forEach((directoryPath) => {
-    if (!validDirectoryPaths.has(directoryPath)) {
-      expandedWorkspaceDirectories.delete(directoryPath);
+  if (workspaceState.activeFolderId !== null && getWorkspaceFolderById(workspaceState.activeFolderId) === null) {
+    workspaceState.activeFolderId = workspaceState.importedFolders[0]?.id ?? null;
+  }
+
+  const validFolderIds = new Set(workspaceState.importedFolders.map((folder) => folder.id));
+
+  [...expandedWorkspaceDirectoriesByFolderId.keys()].forEach((folderId) => {
+    if (!validFolderIds.has(folderId)) {
+      expandedWorkspaceDirectoriesByFolderId.delete(folderId);
     }
   });
 
-  if (previousRootPath !== null && previousRootPath !== workspaceState.rootPath) {
-    expandedWorkspaceDirectories.clear();
+  workspaceState.importedFolders.forEach((folderRecord) => {
+    const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
+    const validDirectoryPaths = getWorkspaceDirectoryPaths(folderRecord);
+
+    [...expandedDirectories].forEach((directoryPath) => {
+      if (!validDirectoryPaths.has(directoryPath)) {
+        expandedDirectories.delete(directoryPath);
+      }
+    });
+  });
+
+  if (previousActiveFolderId !== workspaceState.activeFolderId) {
     clearWorkspacePreview();
   }
 
-  if (workspacePreviewState.relativePath !== null && !validFilePaths.has(workspacePreviewState.relativePath)) {
+  const previewFolder = workspacePreviewState.folderId === null ? null : getWorkspaceFolderById(workspacePreviewState.folderId);
+
+  if (
+    previewFolder === null
+    || !getWorkspaceFilePaths(previewFolder).has(workspacePreviewState.relativePath)
+  ) {
     clearWorkspacePreview();
   }
 
-  renderWorkspaceBrowser();
-  renderFileInspector();
-}
-
-function clearWorkspaceSnapshot(errorMessage = "") {
-  workspaceState.rootPath = null;
-  workspaceState.rootName = "";
-  workspaceState.entries = [];
-  workspaceState.isTruncated = false;
-  workspaceState.lastError = typeof errorMessage === "string" ? errorMessage : "";
-  expandedWorkspaceDirectories.clear();
-  clearWorkspacePreview();
+  renderWorkspaceFolderList();
   renderWorkspaceBrowser();
   renderFileInspector();
 }
@@ -1607,18 +1753,15 @@ async function refreshWorkspaceDirectory(options = {}) {
   updateWorkspaceControls();
 
   try {
-    const snapshot = await window.noteCanvas.refreshWorkspaceDirectory();
+    const nextState = await window.noteCanvas.refreshWorkspaceDirectory();
 
-    if (snapshot === null) {
-      clearWorkspaceSnapshot();
+    if (nextState === null) {
       return null;
     }
 
-    applyWorkspaceSnapshot(snapshot);
-    return snapshot;
+    applyWorkspaceState(nextState);
+    return nextState;
   } catch (error) {
-    clearWorkspaceSnapshot(error instanceof Error ? error.message : String(error));
-
     if (options.silent !== true) {
       console.error(error);
     }
@@ -1637,16 +1780,40 @@ async function openWorkspaceDirectory() {
     return null;
   }
 
-  if (opened?.snapshot == null) {
+  if (opened?.state == null) {
     throw new Error("Workspace folder contents were unavailable.");
   }
 
-  applyWorkspaceSnapshot(opened.snapshot);
-  return opened.snapshot;
+  applyWorkspaceState(opened.state);
+  return opened.state;
+}
+
+async function initializeWorkspaceState() {
+  const hydrationToken = workspaceStateHydrationToken;
+  const nextState = await window.noteCanvas.getWorkspaceDirectoryState();
+
+  if (hydrationToken !== workspaceStateHydrationToken) {
+    return null;
+  }
+
+  applyWorkspaceState(nextState);
+  return nextState;
+}
+
+async function activateWorkspaceFolderById(folderId) {
+  const nextState = await window.noteCanvas.activateWorkspaceFolder(folderId);
+  applyWorkspaceState(nextState);
+  return nextState;
+}
+
+async function removeWorkspaceFolderById(folderId) {
+  const nextState = await window.noteCanvas.removeWorkspaceFolder(folderId);
+  applyWorkspaceState(nextState);
+  return nextState;
 }
 
 function getDefaultTerminalWorkingDirectory() {
-  return hasWorkspaceDirectory() ? workspaceState.rootPath : null;
+  return getActiveWorkspaceFolder()?.rootPath ?? null;
 }
 
 function sanitizeCanvasExportName(canvasName) {
@@ -2569,8 +2736,12 @@ function handleWindowKeyDown(event) {
 
 createCanvas();
 setSidebarCollapsed(false);
+renderWorkspaceFolderList();
 renderWorkspaceBrowser();
 renderFileInspector();
+void initializeWorkspaceState().catch((error) => {
+  console.error(error);
+});
 
 window.addEventListener("beforeunload", () => {
   isWindowUnloading = true;
@@ -2660,10 +2831,14 @@ if (window.noteCanvas.isSmokeTest) {
         return nodeStyles.display !== "none" && nodeStyles.visibility !== "hidden" && Number.parseFloat(nodeStyles.opacity || "1") > 0;
       }).length,
       sidebarCollapsed: isSidebarCollapsed,
-        workspaceRootPath: workspaceState.rootPath,
-        workspaceEntryPaths: workspaceState.entries.map((entry) => entry.relativePath),
+        workspaceRootPath: getActiveWorkspaceFolder()?.rootPath ?? null,
+        workspaceEntryPaths: getActiveWorkspaceFolder()?.entries.map((entry) => entry.relativePath) ?? [],
         workspaceVisibleEntryPaths: [...workspaceBrowser.querySelectorAll("[data-workspace-path]")].map((entryElement) => entryElement.dataset.workspacePath).filter((entryPath) => typeof entryPath === "string"),
-        workspaceIsTruncated: workspaceState.isTruncated,
+        workspaceIsTruncated: getActiveWorkspaceFolder()?.isTruncated === true,
+        workspaceImportedFolderIds: workspaceState.importedFolders.map((folder) => folder.id),
+        workspaceImportedFolderPaths: workspaceState.importedFolders.map((folder) => folder.rootPath),
+        workspaceImportedFolders: workspaceState.importedFolders.map((folder) => ({ id: folder.id, rootPath: folder.rootPath })),
+        workspaceActiveFolderId: workspaceState.activeFolderId,
         workspaceSelectedFilePath: workspacePreviewState.relativePath,
         workspacePreviewStatus: workspacePreviewState.status,
         workspacePreviewKind: workspacePreviewState.data?.kind ?? null,
@@ -2765,6 +2940,10 @@ if (window.noteCanvas.isSmokeTest) {
         sidebarCollapsed: snapshot.sidebarCollapsed,
         workspaceRootPath: snapshot.workspaceRootPath,
         workspaceEntryPaths: snapshot.workspaceEntryPaths,
+        workspaceImportedFolderIds: snapshot.workspaceImportedFolderIds,
+        workspaceImportedFolderPaths: snapshot.workspaceImportedFolderPaths,
+        workspaceImportedFolders: snapshot.workspaceImportedFolders,
+        workspaceActiveFolderId: snapshot.workspaceActiveFolderId,
         workspaceVisibleEntryPaths: snapshot.workspaceVisibleEntryPaths,
         workspaceSelectedFilePath: snapshot.workspaceSelectedFilePath,
         workspacePreviewStatus: snapshot.workspacePreviewStatus,
@@ -2939,11 +3118,24 @@ if (window.noteCanvas.isSmokeTest) {
       return window.__canvasLearningDebug.importCanvasData(lastExportedCanvasDebugPayload);
     },
     openWorkspaceDirectoryForPath: async (directoryPath) => {
-      const snapshot = await window.noteCanvas.debugOpenWorkspaceDirectory(directoryPath);
-      applyWorkspaceSnapshot(snapshot);
+      const state = await window.noteCanvas.debugOpenWorkspaceDirectory(directoryPath);
+      applyWorkspaceState(state);
       await waitForAnimationFrame();
       return getCanvasSnapshot();
     },
+    activateWorkspaceFolder: async (folderId) => {
+      const state = await window.noteCanvas.activateWorkspaceFolder(folderId);
+      applyWorkspaceState(state);
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
+    },
+    removeWorkspaceFolder: async (folderId) => {
+      const state = await window.noteCanvas.removeWorkspaceFolder(folderId);
+      applyWorkspaceState(state);
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
+    },
+    getDefaultTerminalWorkingDirectory: () => getDefaultTerminalWorkingDirectory(),
     toggleWorkspaceDirectory: async (relativePath) => {
       const workspaceButton = workspaceBrowser.querySelector(`[data-workspace-kind="directory"][data-workspace-path="${CSS.escape(relativePath)}"]`);
 
@@ -2976,16 +3168,20 @@ if (window.noteCanvas.isSmokeTest) {
     },
     populateWorkspaceEntries: async (count = 120) => {
       const entryCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 120;
-      applyWorkspaceSnapshot({
-        rootPath: "/tmp/canvas-learning-workspace-debug",
-        rootName: "canvas_desktop",
-        isTruncated: false,
-        entries: Array.from({ length: entryCount }, (_value, index) => ({
-          name: `file-${index + 1}.txt`,
-          relativePath: `nested/path/file-${index + 1}.txt`,
-          kind: "file",
-          depth: 2
-        }))
+      applyWorkspaceState({
+        importedFolders: [{
+          id: "workspace-folder-debug",
+          rootPath: "/tmp/canvas-learning-workspace-debug",
+          rootName: "canvas_desktop",
+          isTruncated: false,
+          lastError: "",
+          entries: Array.from({ length: entryCount }, (_value, index) => ({
+            name: `file-${index + 1}.txt`,
+            relativePath: `nested/path/file-${index + 1}.txt`,
+            kind: "file"
+          }))
+        }],
+        activeFolderId: "workspace-folder-debug"
       });
       await waitForAnimationFrame();
       return getCanvasSnapshot();

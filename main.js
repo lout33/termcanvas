@@ -4,10 +4,20 @@ const path = require("node:path");
 const os = require("node:os");
 const pty = require("node-pty");
 const { createDirectorySnapshot } = require("./directory_snapshot");
+const {
+  activateWorkspaceFolder,
+  createWorkspaceRegistry,
+  getWorkspaceFolder,
+  importWorkspaceFolder,
+  removeWorkspaceFolder,
+  serializeWorkspaceRegistry,
+  setWorkspaceFolderError,
+  updateWorkspaceFolderSnapshot
+} = require("./workspace_registry");
 const { readWorkspaceFilePreview } = require("./workspace_file_preview");
 
 const terminalSessions = new Map();
-const workspaceDirectories = new Map();
+const workspaceRegistries = new Map();
 const workspaceWatchers = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 
@@ -55,12 +65,50 @@ function resolveTerminalWorkingDirectory(requestedCwd) {
   return resolveExistingDirectoryPath(requestedCwd) ?? resolveInitialWorkingDirectory();
 }
 
-function getOwnerWorkspaceDirectory(ownerWebContentsId) {
-  return workspaceDirectories.get(ownerWebContentsId) ?? null;
+function getOwnerWorkspaceRegistry(ownerWebContentsId) {
+  let workspaceRegistry = workspaceRegistries.get(ownerWebContentsId);
+
+  if (workspaceRegistry == null) {
+    workspaceRegistry = createWorkspaceRegistry();
+    workspaceRegistries.set(ownerWebContentsId, workspaceRegistry);
+  }
+
+  return workspaceRegistry;
 }
 
-function destroyWorkspaceWatcher(ownerWebContentsId) {
-  const workspaceWatcher = workspaceWatchers.get(ownerWebContentsId);
+function getExistingOwnerWorkspaceRegistry(ownerWebContentsId) {
+  return workspaceRegistries.get(ownerWebContentsId) ?? null;
+}
+
+function getActiveWorkspaceFolderForOwner(ownerWebContentsId) {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
+
+  if (workspaceRegistry == null || workspaceRegistry.activeFolderId === null) {
+    return null;
+  }
+
+  return getWorkspaceFolder(workspaceRegistry, workspaceRegistry.activeFolderId);
+}
+
+function getOwnerWorkspaceWatchers(ownerWebContentsId) {
+  let ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
+
+  if (ownerWatchers == null) {
+    ownerWatchers = new Map();
+    workspaceWatchers.set(ownerWebContentsId, ownerWatchers);
+  }
+
+  return ownerWatchers;
+}
+
+function destroyWorkspaceWatcher(ownerWebContentsId, folderId) {
+  const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
+
+  if (ownerWatchers == null) {
+    return;
+  }
+
+  const workspaceWatcher = ownerWatchers.get(folderId);
 
   if (workspaceWatcher === undefined) {
     return;
@@ -71,29 +119,89 @@ function destroyWorkspaceWatcher(ownerWebContentsId) {
   }
 
   workspaceWatcher.watcher?.close();
-  workspaceWatchers.delete(ownerWebContentsId);
+  ownerWatchers.delete(folderId);
+
+  if (ownerWatchers.size === 0) {
+    workspaceWatchers.delete(ownerWebContentsId);
+  }
 }
 
-function pushWorkspaceSnapshotToOwner(ownerWebContentsId) {
-  const workspaceDirectory = getOwnerWorkspaceDirectory(ownerWebContentsId);
-  const resolvedDirectoryPath = resolveExistingDirectoryPath(workspaceDirectory);
+function destroyOwnedWorkspaceWatchers(ownerWebContentsId) {
+  const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
 
-  if (resolvedDirectoryPath === null) {
-    setOwnerWorkspaceDirectory(ownerWebContentsId, null);
-    sendToOwner(ownerWebContentsId, "workspace-directory:data", null);
+  if (ownerWatchers == null) {
     return;
   }
 
-  try {
-    sendToOwner(ownerWebContentsId, "workspace-directory:data", createDirectorySnapshot(resolvedDirectoryPath));
-  } catch {
-    setOwnerWorkspaceDirectory(ownerWebContentsId, null);
-    sendToOwner(ownerWebContentsId, "workspace-directory:data", null);
-  }
+  ownerWatchers.forEach((workspaceWatcher) => {
+    if (workspaceWatcher.refreshTimeout !== 0) {
+      clearTimeout(workspaceWatcher.refreshTimeout);
+    }
+
+    workspaceWatcher.watcher?.close();
+  });
+
+  workspaceWatchers.delete(ownerWebContentsId);
 }
 
-function scheduleWorkspaceSnapshotPush(ownerWebContentsId) {
-  const workspaceWatcher = workspaceWatchers.get(ownerWebContentsId);
+function pushWorkspaceRegistryToOwner(ownerWebContentsId) {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
+
+  if (workspaceRegistry === null) {
+    sendToOwner(ownerWebContentsId, "workspace-directory:data", {
+      importedFolders: [],
+      activeFolderId: null
+    });
+    return;
+  }
+
+  sendToOwner(ownerWebContentsId, "workspace-directory:data", serializeWorkspaceRegistry(workspaceRegistry));
+}
+
+function refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId) {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
+
+  if (workspaceRegistry === null) {
+    return {
+      importedFolders: [],
+      activeFolderId: null
+    };
+  }
+
+  const workspaceFolder = getWorkspaceFolder(workspaceRegistry, folderId);
+
+  if (workspaceFolder === null) {
+    destroyWorkspaceWatcher(ownerWebContentsId, folderId);
+    return serializeWorkspaceRegistry(workspaceRegistry);
+  }
+
+  const resolvedDirectoryPath = resolveExistingDirectoryPath(workspaceFolder.rootPath);
+
+  if (resolvedDirectoryPath === null) {
+    setWorkspaceFolderError(workspaceRegistry, folderId, "Workspace folder is unavailable.");
+    return serializeWorkspaceRegistry(workspaceRegistry);
+  }
+
+  try {
+    updateWorkspaceFolderSnapshot(workspaceRegistry, folderId, {
+      ...createDirectorySnapshot(resolvedDirectoryPath),
+      lastError: ""
+    });
+  } catch {
+    setWorkspaceFolderError(workspaceRegistry, folderId, "Workspace folder is unavailable.");
+  }
+
+  return serializeWorkspaceRegistry(workspaceRegistry);
+}
+
+function scheduleWorkspaceSnapshotPush(ownerWebContentsId, folderId) {
+  const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
+
+  if (ownerWatchers == null) {
+    return;
+  }
+
+  const workspaceWatcher = ownerWatchers.get(folderId);
 
   if (workspaceWatcher === undefined) {
     return;
@@ -105,43 +213,39 @@ function scheduleWorkspaceSnapshotPush(ownerWebContentsId) {
 
   workspaceWatcher.refreshTimeout = setTimeout(() => {
     workspaceWatcher.refreshTimeout = 0;
-    pushWorkspaceSnapshotToOwner(ownerWebContentsId);
+    refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId);
+    pushWorkspaceRegistryToOwner(ownerWebContentsId);
   }, WORKSPACE_WATCH_DEBOUNCE_MS);
 }
 
-function watchWorkspaceDirectory(ownerWebContentsId, directoryPath) {
-  destroyWorkspaceWatcher(ownerWebContentsId);
+function watchWorkspaceDirectory(ownerWebContentsId, folderId, directoryPath) {
+  destroyWorkspaceWatcher(ownerWebContentsId, folderId);
 
   try {
     const watcher = fs.watch(directoryPath, { recursive: true }, () => {
-      scheduleWorkspaceSnapshotPush(ownerWebContentsId);
+      scheduleWorkspaceSnapshotPush(ownerWebContentsId, folderId);
     });
 
     watcher.on("error", () => {
-      scheduleWorkspaceSnapshotPush(ownerWebContentsId);
+      scheduleWorkspaceSnapshotPush(ownerWebContentsId, folderId);
     });
 
-    workspaceWatchers.set(ownerWebContentsId, {
+    getOwnerWorkspaceWatchers(ownerWebContentsId).set(folderId, {
       watcher,
       refreshTimeout: 0
     });
   } catch {
-    workspaceWatchers.delete(ownerWebContentsId);
-  }
-}
+    const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
 
-function setOwnerWorkspaceDirectory(ownerWebContentsId, directoryPath) {
-  if (typeof directoryPath === "string" && directoryPath.length > 0) {
-    workspaceDirectories.set(ownerWebContentsId, directoryPath);
-    return;
+    if (workspaceRegistry !== null) {
+      setWorkspaceFolderError(workspaceRegistry, folderId, "Workspace folder watch is unavailable.");
+      pushWorkspaceRegistryToOwner(ownerWebContentsId);
+    }
   }
-
-  workspaceDirectories.delete(ownerWebContentsId);
-  destroyWorkspaceWatcher(ownerWebContentsId);
 }
 
 function resolveDialogDefaultDirectory(ownerWebContentsId) {
-  return resolveExistingDirectoryPath(getOwnerWorkspaceDirectory(ownerWebContentsId)) ?? app.getPath("documents");
+  return resolveExistingDirectoryPath(getActiveWorkspaceFolderForOwner(ownerWebContentsId)?.rootPath) ?? app.getPath("documents");
 }
 
 function openWorkspaceDirectoryForOwner(ownerWebContentsId, directoryPath) {
@@ -151,10 +255,21 @@ function openWorkspaceDirectoryForOwner(ownerWebContentsId, directoryPath) {
     throw new Error("Selected workspace folder is unavailable.");
   }
 
-  const snapshot = createDirectorySnapshot(resolvedDirectoryPath);
-  setOwnerWorkspaceDirectory(ownerWebContentsId, resolvedDirectoryPath);
-  watchWorkspaceDirectory(ownerWebContentsId, resolvedDirectoryPath);
-  return snapshot;
+  const canonicalDirectoryPath = fs.realpathSync(resolvedDirectoryPath);
+
+  const workspaceRegistry = getOwnerWorkspaceRegistry(ownerWebContentsId);
+  const snapshot = {
+    ...createDirectorySnapshot(canonicalDirectoryPath),
+    lastError: ""
+  };
+  const importResult = importWorkspaceFolder(workspaceRegistry, snapshot);
+
+  if (importResult.deduplicated) {
+    updateWorkspaceFolderSnapshot(workspaceRegistry, importResult.folderId, snapshot);
+  }
+
+  watchWorkspaceDirectory(ownerWebContentsId, importResult.folderId, canonicalDirectoryPath);
+  return serializeWorkspaceRegistry(workspaceRegistry);
 }
 
 function escapeShellPathForSingleQuotes(targetPath) {
@@ -268,7 +383,8 @@ function destroyOwnedTerminalSessions(ownerWebContentsId) {
 
 function destroyOwnedWindowState(ownerWebContentsId) {
   destroyOwnedTerminalSessions(ownerWebContentsId);
-  setOwnerWorkspaceDirectory(ownerWebContentsId, null);
+  destroyOwnedWorkspaceWatchers(ownerWebContentsId);
+  workspaceRegistries.delete(ownerWebContentsId);
 }
 
 function ensureAuthorizedSession(event, terminalId) {
@@ -324,7 +440,7 @@ function delay(milliseconds) {
 }
 
 async function runSmokeTest(window) {
-  let smokeWorkspacePath = null;
+  const smokeWorkspacePaths = [];
 
   try {
     const logStep = (label) => {
@@ -503,7 +619,9 @@ async function runSmokeTest(window) {
     }
 
     logStep("preview workspace markdown file");
-    smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
+    const smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
+    smokeWorkspacePaths.push(smokeWorkspacePath);
+    const canonicalSmokeWorkspacePath = fs.realpathSync(smokeWorkspacePath);
     fs.mkdirSync(path.join(smokeWorkspacePath, "agent-output", "reports"), { recursive: true });
     fs.writeFileSync(path.join(smokeWorkspacePath, "agent-output", "reports", "notes.md"), "# Smoke Report\n\nfirst pass\n", "utf8");
     fs.writeFileSync(path.join(smokeWorkspacePath, "artifact.bin"), Buffer.from([0xde, 0xad, 0xbe, 0xef]));
@@ -511,11 +629,11 @@ async function runSmokeTest(window) {
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(smokeWorkspacePath)})`);
     const workspaceOpenSnapshot = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspaceRootPath === smokeWorkspacePath && snapshot.workspaceVisibleEntryPaths.includes("agent-output"),
+      (snapshot) => snapshot.workspaceRootPath === canonicalSmokeWorkspacePath && snapshot.workspaceVisibleEntryPaths.includes("agent-output"),
       4000
     );
 
-    if (workspaceOpenSnapshot.workspaceRootPath !== smokeWorkspacePath) {
+    if (workspaceOpenSnapshot.workspaceRootPath !== canonicalSmokeWorkspacePath) {
       throw new Error("Smoke test failed: debug workspace path did not open in the renderer.");
     }
 
@@ -570,15 +688,97 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: unsupported workspace file did not produce the expected fallback preview state.");
     }
 
+    logStep("import second workspace folder");
+    const secondWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
+    smokeWorkspacePaths.push(secondWorkspacePath);
+    const canonicalSecondWorkspacePath = fs.realpathSync(secondWorkspacePath);
+    fs.mkdirSync(path.join(secondWorkspacePath, "secondary"), { recursive: true });
+    fs.writeFileSync(path.join(secondWorkspacePath, "secondary", "beta.txt"), "second workspace\n", "utf8");
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(secondWorkspacePath)})`);
+    const multiWorkspaceSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceImportedFolderPaths.includes(canonicalSmokeWorkspacePath) && snapshot.workspaceImportedFolderPaths.includes(canonicalSecondWorkspacePath),
+      4000
+    );
+
+    if (
+      multiWorkspaceSnapshot.workspaceImportedFolderPaths.length !== 2
+      || multiWorkspaceSnapshot.workspaceRootPath !== canonicalSecondWorkspacePath
+      || multiWorkspaceSnapshot.workspaceSelectedFilePath !== null
+      || multiWorkspaceSnapshot.fileInspectorVisible !== false
+    ) {
+      throw new Error(`Smoke test failed: importing a second workspace folder did not produce the expected active-folder state. Snapshot: ${JSON.stringify(multiWorkspaceSnapshot)}`);
+    }
+
+    const firstWorkspaceFolderId = multiWorkspaceSnapshot.workspaceImportedFolders.find((folder) => folder.rootPath === canonicalSmokeWorkspacePath)?.id ?? null;
+    const secondWorkspaceFolderId = multiWorkspaceSnapshot.workspaceImportedFolders.find((folder) => folder.rootPath === canonicalSecondWorkspacePath)?.id ?? null;
+
+    if (firstWorkspaceFolderId === null || secondWorkspaceFolderId === null) {
+      throw new Error(`Smoke test failed: imported workspace folder ids were unavailable. Snapshot: ${JSON.stringify(multiWorkspaceSnapshot)}`);
+    }
+
+    logStep("switch active workspace folder");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.activateWorkspaceFolder(${JSON.stringify(firstWorkspaceFolderId)})`);
+    const switchedWorkspaceSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceRootPath === canonicalSmokeWorkspacePath && snapshot.workspaceVisibleEntryPaths.includes("agent-output"),
+      4000
+    );
+
+    if (
+      switchedWorkspaceSnapshot.workspaceRootPath !== canonicalSmokeWorkspacePath
+      || switchedWorkspaceSnapshot.workspaceVisibleEntryPaths.includes("secondary")
+    ) {
+      throw new Error(`Smoke test failed: switching the active workspace folder did not swap the visible tree. Snapshot: ${JSON.stringify(switchedWorkspaceSnapshot)}`);
+    }
+
+    logStep("new terminal follows active workspace folder");
+    const defaultWorkspaceCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
+
+    if (defaultWorkspaceCwd !== canonicalSmokeWorkspacePath) {
+      throw new Error(`Smoke test failed: active workspace folder did not drive the default terminal cwd. Value: ${JSON.stringify(defaultWorkspaceCwd)}`);
+    }
+
+    logStep("remove active workspace folder");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.removeWorkspaceFolder(${JSON.stringify(firstWorkspaceFolderId)})`);
+    const removedWorkspaceSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceRootPath === canonicalSecondWorkspacePath && snapshot.workspaceImportedFolderPaths.length === 1,
+      4000
+    );
+
+    if (
+      removedWorkspaceSnapshot.workspaceRootPath !== canonicalSecondWorkspacePath
+      || removedWorkspaceSnapshot.workspaceImportedFolderPaths.includes(canonicalSmokeWorkspacePath)
+    ) {
+      throw new Error(`Smoke test failed: removing the active workspace folder did not fall back cleanly. Snapshot: ${JSON.stringify(removedWorkspaceSnapshot)}`);
+    }
+
+    logStep("duplicate workspace import re-selects existing folder");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(secondWorkspacePath)})`);
+    const deduplicatedWorkspaceSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceImportedFolderPaths.filter((folderPath) => folderPath === canonicalSecondWorkspacePath).length === 1,
+      4000
+    );
+
+    if (
+      deduplicatedWorkspaceSnapshot.workspaceImportedFolderPaths.length !== 1
+      || deduplicatedWorkspaceSnapshot.workspaceActiveFolderId !== secondWorkspaceFolderId
+    ) {
+      throw new Error(`Smoke test failed: importing a duplicate workspace folder created an unexpected list state. Snapshot: ${JSON.stringify(deduplicatedWorkspaceSnapshot)}`);
+    }
+
     console.log("Smoke test passed.");
     app.quit();
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     app.exit(1);
   } finally {
-    if (typeof smokeWorkspacePath === "string") {
-      fs.rmSync(smokeWorkspacePath, { recursive: true, force: true });
-    }
+    smokeWorkspacePaths.forEach((workspacePath) => {
+      fs.rmSync(workspacePath, { recursive: true, force: true });
+    });
   }
 }
 
@@ -600,6 +800,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("web-contents-created", (_event, contents) => {
+  contents.on("did-finish-load", () => {
+    pushWorkspaceRegistryToOwner(contents.id);
+  });
+
   contents.on("destroyed", () => {
     destroyOwnedWindowState(contents.id);
   });
@@ -628,8 +832,16 @@ ipcMain.handle("workspace-directory:open", async (event) => {
 
   return {
     canceled: false,
-    snapshot
+    state: snapshot
   };
+});
+
+ipcMain.handle("workspace-directory:state", (event) => {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
+
+  return workspaceRegistry === null
+    ? { importedFolders: [], activeFolderId: null }
+    : serializeWorkspaceRegistry(workspaceRegistry);
 });
 
 ipcMain.handle("workspace-directory:debug-open", (event, payload) => {
@@ -643,37 +855,82 @@ ipcMain.handle("workspace-directory:debug-open", (event, payload) => {
   );
 });
 
-ipcMain.handle("workspace-directory:refresh", (event) => {
-  const workspaceDirectory = getOwnerWorkspaceDirectory(event.sender.id);
+ipcMain.handle("workspace-folder:activate", (event, payload) => {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
 
-  if (workspaceDirectory === null) {
+  if (workspaceRegistry === null) {
+    return {
+      importedFolders: [],
+      activeFolderId: null
+    };
+  }
+
+  activateWorkspaceFolder(
+    workspaceRegistry,
+    typeof payload?.folderId === "string" ? payload.folderId : ""
+  );
+
+  return refreshWorkspaceFolderForOwner(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : ""
+  );
+});
+
+ipcMain.handle("workspace-folder:remove", (event, payload) => {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
+
+  if (workspaceRegistry === null) {
+    return {
+      importedFolders: [],
+      activeFolderId: null
+    };
+  }
+
+  const folderId = typeof payload?.folderId === "string" ? payload.folderId : "";
+  destroyWorkspaceWatcher(event.sender.id, folderId);
+  removeWorkspaceFolder(workspaceRegistry, folderId);
+
+  if (workspaceRegistry.importedFolders.size === 0) {
+    workspaceRegistries.delete(event.sender.id);
+    return {
+      importedFolders: [],
+      activeFolderId: null
+    };
+  }
+
+  return workspaceRegistry.activeFolderId === null
+    ? serializeWorkspaceRegistry(workspaceRegistry)
+    : refreshWorkspaceFolderForOwner(event.sender.id, workspaceRegistry.activeFolderId);
+});
+
+ipcMain.handle("workspace-directory:refresh", (event) => {
+  const workspaceFolder = getActiveWorkspaceFolderForOwner(event.sender.id);
+
+  if (workspaceFolder === null) {
     return null;
   }
 
-  const resolvedDirectoryPath = resolveExistingDirectoryPath(workspaceDirectory);
-
-  if (resolvedDirectoryPath === null) {
-    setOwnerWorkspaceDirectory(event.sender.id, null);
-    throw new Error("Workspace folder is unavailable.");
-  }
-
-  try {
-    return createDirectorySnapshot(resolvedDirectoryPath);
-  } catch {
-    setOwnerWorkspaceDirectory(event.sender.id, null);
-    throw new Error("Workspace folder is unavailable.");
-  }
+  return refreshWorkspaceFolderForOwner(event.sender.id, workspaceFolder.id);
 });
 
 ipcMain.handle("workspace-file:read", (event, payload) => {
-  const workspaceDirectory = getOwnerWorkspaceDirectory(event.sender.id);
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
 
-  if (workspaceDirectory === null) {
+  if (workspaceRegistry === null) {
+    throw new Error("Open a workspace folder before previewing files.");
+  }
+
+  const workspaceFolder = getWorkspaceFolder(
+    workspaceRegistry,
+    typeof payload?.folderId === "string" ? payload.folderId : ""
+  );
+
+  if (workspaceFolder === null) {
     throw new Error("Open a workspace folder before previewing files.");
   }
 
   return readWorkspaceFilePreview(
-    workspaceDirectory,
+    workspaceFolder.rootPath,
     typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
 });
