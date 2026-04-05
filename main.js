@@ -9,6 +9,7 @@ const {
   createWorkspaceRegistry,
   getWorkspaceFolder,
   importWorkspaceFolder,
+  reorderWorkspaceFolder,
   removeWorkspaceFolder,
   serializeWorkspaceRegistry,
   setWorkspaceFolderError,
@@ -718,6 +719,21 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: imported workspace folder ids were unavailable. Snapshot: ${JSON.stringify(multiWorkspaceSnapshot)}`);
     }
 
+    logStep("reorder workspace folders");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.reorderWorkspaceFolder(${JSON.stringify(secondWorkspaceFolderId)}, 0)`);
+    const reorderedWorkspaceSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceImportedFolderPaths[0] === canonicalSecondWorkspacePath,
+      4000
+    );
+
+    if (
+      reorderedWorkspaceSnapshot.workspaceImportedFolderPaths[0] !== canonicalSecondWorkspacePath
+      || reorderedWorkspaceSnapshot.workspaceActiveFolderId !== secondWorkspaceFolderId
+    ) {
+      throw new Error(`Smoke test failed: reordering workspace folders did not preserve the requested order. Snapshot: ${JSON.stringify(reorderedWorkspaceSnapshot)}`);
+    }
+
     logStep("switch active workspace folder");
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.activateWorkspaceFolder(${JSON.stringify(firstWorkspaceFolderId)})`);
     const switchedWorkspaceSnapshot = await waitForSnapshot(
@@ -768,6 +784,27 @@ async function runSmokeTest(window) {
       || deduplicatedWorkspaceSnapshot.workspaceActiveFolderId !== secondWorkspaceFolderId
     ) {
       throw new Error(`Smoke test failed: importing a duplicate workspace folder created an unexpected list state. Snapshot: ${JSON.stringify(deduplicatedWorkspaceSnapshot)}`);
+    }
+
+    logStep("reorder canvases");
+    const activeCanvasIndex = deduplicatedWorkspaceSnapshot.canvasNames.indexOf(deduplicatedWorkspaceSnapshot.activeCanvasName);
+
+    if (activeCanvasIndex < 0) {
+      throw new Error(`Smoke test failed: active canvas was unavailable before reorder. Snapshot: ${JSON.stringify(deduplicatedWorkspaceSnapshot)}`);
+    }
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.reorderCanvas(${activeCanvasIndex}, 0)`);
+    const reorderedCanvasSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.canvasNames[0] === deduplicatedWorkspaceSnapshot.activeCanvasName && snapshot.activeCanvasName === deduplicatedWorkspaceSnapshot.activeCanvasName,
+      4000
+    );
+
+    if (
+      reorderedCanvasSnapshot.canvasNames[0] !== deduplicatedWorkspaceSnapshot.activeCanvasName
+      || reorderedCanvasSnapshot.activeCanvasName !== deduplicatedWorkspaceSnapshot.activeCanvasName
+    ) {
+      throw new Error(`Smoke test failed: reordering canvases did not preserve the requested order. Snapshot: ${JSON.stringify(reorderedCanvasSnapshot)}`);
     }
 
     console.log("Smoke test passed.");
@@ -901,6 +938,23 @@ ipcMain.handle("workspace-folder:remove", (event, payload) => {
   return workspaceRegistry.activeFolderId === null
     ? serializeWorkspaceRegistry(workspaceRegistry)
     : refreshWorkspaceFolderForOwner(event.sender.id, workspaceRegistry.activeFolderId);
+});
+
+ipcMain.handle("workspace-folder:reorder", (event, payload) => {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
+
+  if (workspaceRegistry === null) {
+    return {
+      importedFolders: [],
+      activeFolderId: null
+    };
+  }
+
+  return reorderWorkspaceFolder(
+    workspaceRegistry,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    Number.isFinite(payload?.targetIndex) ? payload.targetIndex : 0
+  ).state;
 });
 
 ipcMain.handle("workspace-directory:refresh", (event) => {

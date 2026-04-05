@@ -42,7 +42,8 @@ let activeCanvasId = null;
 let activeNodeRecord = null;
 let activeTitleEditorRecord = null;
 let activeCanvasRenameId = null;
-let isSidebarCollapsed = false;
+let isSidebarCollapsed = true;
+let hasDismissedBoardIntro = false;
 let isWindowUnloading = false;
 let renderedCanvasId = null;
 let viewportRenderFrame = 0;
@@ -114,6 +115,17 @@ const resizeState = {
   originWidth: 0,
   originHeight: 0,
   hasMoved: false
+};
+
+const listReorderState = {
+  kind: null,
+  itemId: null,
+  sourceIndex: -1,
+  targetIndex: -1,
+  sourceElement: null,
+  targetElement: null,
+  isAfterTarget: false,
+  moveItem: null
 };
 
 const removeTerminalDataListener = window.noteCanvas.onTerminalData(({ terminalId, data }) => {
@@ -345,7 +357,7 @@ function updateExitedOverlay(nodeRecord) {
         : "Shell ended";
 
     nodeRecord.overlayTitle.textContent = "Shell exited";
-    nodeRecord.overlayMeta.textContent = `${exitLabel} · Reopen to start a fresh shell here.`;
+    nodeRecord.overlayMeta.textContent = `${exitLabel} · Reopen shell to continue here.`;
     nodeRecord.overlay.hidden = false;
   } else {
     nodeRecord.overlay.hidden = true;
@@ -635,6 +647,129 @@ function getActiveCanvas() {
   return activeCanvasId === null ? null : getCanvasById(activeCanvasId);
 }
 
+function moveArrayItemLocal(items, fromIndex, toIndex) {
+  const sourceIndex = Math.max(0, Math.min(items.length - 1, Math.trunc(fromIndex)));
+  const targetIndex = Math.max(0, Math.min(items.length - 1, Math.trunc(toIndex)));
+  const nextItems = [...items];
+  const [movedItem] = nextItems.splice(sourceIndex, 1);
+  nextItems.splice(targetIndex, 0, movedItem);
+  return nextItems;
+}
+
+function clearListReorderState() {
+  listReorderState.sourceElement?.classList.remove("is-dragging");
+  listReorderState.targetElement?.classList.remove("is-drop-before", "is-drop-after");
+  listReorderState.kind = null;
+  listReorderState.itemId = null;
+  listReorderState.sourceIndex = -1;
+  listReorderState.targetIndex = -1;
+  listReorderState.sourceElement = null;
+  listReorderState.targetElement = null;
+  listReorderState.isAfterTarget = false;
+  listReorderState.moveItem = null;
+}
+
+function updateListReorderTarget(targetElement, targetIndex, isAfterTarget) {
+  if (listReorderState.targetElement !== null && listReorderState.targetElement !== targetElement) {
+    listReorderState.targetElement.classList.remove("is-drop-before", "is-drop-after");
+  }
+
+  listReorderState.targetElement = targetElement;
+  listReorderState.targetIndex = targetIndex;
+  listReorderState.isAfterTarget = isAfterTarget;
+
+  if (targetElement instanceof HTMLElement) {
+    targetElement.classList.toggle("is-drop-before", !isAfterTarget);
+    targetElement.classList.toggle("is-drop-after", isAfterTarget);
+  }
+}
+
+function attachReorderableListItem(item, handleElement, options) {
+  if (!(item instanceof HTMLElement) || !(handleElement instanceof HTMLElement)) {
+    return;
+  }
+
+  handleElement.draggable = true;
+
+  handleElement.addEventListener("dragstart", (event) => {
+    if (options.kind === "canvas" && activeCanvasRenameId !== null) {
+      event.preventDefault();
+      return;
+    }
+
+    listReorderState.kind = options.kind;
+    listReorderState.itemId = options.itemId;
+    listReorderState.sourceIndex = options.index;
+    listReorderState.targetIndex = options.index;
+    listReorderState.sourceElement = item;
+    listReorderState.moveItem = options.onMove;
+    item.classList.add("is-dragging");
+
+    if (event.dataTransfer != null) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", `${options.kind}:${options.itemId}`);
+    }
+  });
+
+  handleElement.addEventListener("dragend", () => {
+    clearListReorderState();
+  });
+
+  item.addEventListener("dragover", (event) => {
+    if (listReorderState.kind !== options.kind || listReorderState.itemId === null) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (event.dataTransfer != null) {
+      event.dataTransfer.dropEffect = "move";
+    }
+
+    const itemRect = item.getBoundingClientRect();
+    const isAfterTarget = (event.clientY - itemRect.top) > (itemRect.height / 2);
+    const rawTargetIndex = options.index + (isAfterTarget ? 1 : 0);
+    const adjustedTargetIndex = rawTargetIndex > listReorderState.sourceIndex
+      ? rawTargetIndex - 1
+      : rawTargetIndex;
+
+    updateListReorderTarget(item, adjustedTargetIndex, isAfterTarget);
+  });
+
+  item.addEventListener("drop", (event) => {
+    if (listReorderState.kind !== options.kind || typeof listReorderState.moveItem !== "function") {
+      return;
+    }
+
+    event.preventDefault();
+    const sourceId = listReorderState.itemId;
+    const sourceIndex = listReorderState.sourceIndex;
+    const targetIndex = listReorderState.targetIndex;
+    const moveItem = listReorderState.moveItem;
+    clearListReorderState();
+
+    if (typeof sourceId !== "string" || targetIndex < 0 || sourceIndex === targetIndex) {
+      return;
+    }
+
+    void moveItem(sourceId, targetIndex).catch((error) => {
+      console.error(error);
+    });
+  });
+}
+
+function reorderCanvasById(canvasId, targetIndex) {
+  const sourceIndex = canvases.findIndex((canvasRecord) => canvasRecord.id === canvasId);
+
+  if (sourceIndex < 0 || sourceIndex === targetIndex) {
+    return;
+  }
+
+  const reorderedCanvases = moveArrayItemLocal(canvases, sourceIndex, targetIndex);
+  canvases.splice(0, canvases.length, ...reorderedCanvases);
+  renderCanvasList();
+}
+
 function getBoardPoint(event) {
   const boardRect = board.getBoundingClientRect();
 
@@ -760,17 +895,10 @@ function updateSidebarToggleButton() {
     return;
   }
 
-  const label = sidebarToggleButton.querySelector(".sidebar-toggle-label");
-  const actionLabel = isSidebarCollapsed ? "Show panel" : "Hide panel";
-
-  if (label !== null) {
-    label.textContent = actionLabel;
-  } else {
-    sidebarToggleButton.textContent = actionLabel;
-  }
+  const actionLabel = isSidebarCollapsed ? "Open drawer" : "Close drawer";
 
   sidebarToggleButton.setAttribute("aria-label", `${actionLabel} with Command+B`);
-  sidebarToggleButton.setAttribute("aria-pressed", String(isSidebarCollapsed));
+  sidebarToggleButton.setAttribute("aria-pressed", String(!isSidebarCollapsed));
 }
 
 function setSidebarCollapsed(nextValue) {
@@ -781,6 +909,20 @@ function setSidebarCollapsed(nextValue) {
 
 function toggleSidebar() {
   setSidebarCollapsed(!isSidebarCollapsed);
+}
+
+function openWorkspaceDrawer() {
+  setSidebarCollapsed(false);
+  document.getElementById("workspace-browser-section")?.scrollIntoView({ block: "nearest" });
+}
+
+function dismissBoardIntro() {
+  if (hasDismissedBoardIntro) {
+    return;
+  }
+
+  hasDismissedBoardIntro = true;
+  appShell?.classList.add("has-dismissed-board-intro");
 }
 
 function getTerminalTheme() {
@@ -1019,12 +1161,14 @@ function renderCanvas(options = {}) {
 }
 
 function createCanvasListItem(canvasRecord) {
-    const item = document.createElement("li");
+  const item = document.createElement("li");
   item.className = "canvas-list-item";
   item.classList.toggle("is-active", canvasRecord.id === activeCanvasId);
   const isRenaming = canvasRecord.id === activeCanvasRenameId;
+  const canvasIndex = canvases.findIndex((candidate) => candidate.id === canvasRecord.id);
+  let reorderHandle = null;
 
-    if (isRenaming) {
+  if (isRenaming) {
     const editor = document.createElement("div");
     editor.className = "canvas-list-editor";
     let didCommitFromKeyboard = false;
@@ -1044,19 +1188,19 @@ function createCanvasListItem(canvasRecord) {
     meta.className = "canvas-list-meta";
     meta.textContent = `${canvasRecord.nodes.length} ${canvasRecord.nodes.length === 1 ? "terminal" : "terminals"}`;
 
-      nameInput.addEventListener("blur", () => {
-        window.setTimeout(() => {
-          if (didCommitFromKeyboard || didCancelFromKeyboard) {
-            return;
-          }
+    nameInput.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (didCommitFromKeyboard || didCancelFromKeyboard) {
+          return;
+        }
 
-          if (activeCanvasRenameId !== canvasRecord.id) {
-            return;
-          }
+        if (activeCanvasRenameId !== canvasRecord.id) {
+          return;
+        }
 
-          commitCanvasRename(canvasRecord.id, nameInput.value);
-        }, 0);
-      });
+        commitCanvasRename(canvasRecord.id, nameInput.value);
+      }, 0);
+    });
 
     nameInput.addEventListener("keydown", (event) => {
       event.stopPropagation();
@@ -1109,6 +1253,7 @@ function createCanvasListItem(canvasRecord) {
       }
     });
 
+    reorderHandle = switchButton;
     item.append(switchButton);
   }
 
@@ -1146,6 +1291,17 @@ function createCanvasListItem(canvasRecord) {
 
   if (actions.childElementCount > 0) {
     item.append(actions);
+  }
+
+  if (reorderHandle !== null) {
+    attachReorderableListItem(item, reorderHandle, {
+      kind: "canvas",
+      itemId: canvasRecord.id,
+      index: canvasIndex,
+      onMove: async (canvasId, targetIndex) => {
+        reorderCanvasById(canvasId, targetIndex);
+      }
+    });
   }
 
   return item;
@@ -1342,11 +1498,12 @@ function createWorkspaceFolderListItem(folderRecord) {
   const item = document.createElement("li");
   item.className = "canvas-list-item";
   item.classList.toggle("is-active", folderRecord.id === workspaceState.activeFolderId);
+  const folderIndex = workspaceState.importedFolders.findIndex((candidate) => candidate.id === folderRecord.id);
 
   const switchButton = document.createElement("button");
   switchButton.className = "canvas-list-button";
   switchButton.type = "button";
-  switchButton.setAttribute("aria-label", `Open folder ${folderRecord.rootName}`);
+  switchButton.setAttribute("aria-label", `Open workspace ${folderRecord.rootName}`);
   switchButton.dataset.workspaceFolderId = folderRecord.id;
 
   if (folderRecord.id === workspaceState.activeFolderId) {
@@ -1375,7 +1532,7 @@ function createWorkspaceFolderListItem(folderRecord) {
   const deleteButton = document.createElement("button");
   deleteButton.className = "canvas-list-delete";
   deleteButton.type = "button";
-  deleteButton.setAttribute("aria-label", `Remove folder ${folderRecord.rootName}`);
+  deleteButton.setAttribute("aria-label", `Remove workspace ${folderRecord.rootName}`);
   deleteButton.textContent = "×";
   deleteButton.addEventListener("click", (event) => {
     event.preventDefault();
@@ -1387,6 +1544,12 @@ function createWorkspaceFolderListItem(folderRecord) {
   actions.append(deleteButton);
 
   item.append(switchButton, actions);
+  attachReorderableListItem(item, switchButton, {
+    kind: "workspace-folder",
+    itemId: folderRecord.id,
+    index: folderIndex,
+    onMove: reorderWorkspaceFolderById
+  });
   return item;
 }
 
@@ -1560,6 +1723,7 @@ async function selectWorkspaceFile(relativePath) {
     return null;
   }
 
+  setSidebarCollapsed(true);
   return loadWorkspaceFilePreview(relativePath);
 }
 
@@ -1690,7 +1854,7 @@ function renderWorkspaceBrowser() {
   } else {
     const empty = document.createElement("div");
     empty.className = "workspace-browser-empty";
-    empty.textContent = "Open a folder to browse files here and make new terminals start there.";
+    empty.textContent = "Open a workspace to browse files here and make new terminals start there.";
     fragment.append(empty);
   }
 
@@ -1785,6 +1949,7 @@ async function openWorkspaceDirectory() {
   }
 
   applyWorkspaceState(opened.state);
+  openWorkspaceDrawer();
   return opened.state;
 }
 
@@ -1802,6 +1967,13 @@ async function initializeWorkspaceState() {
 
 async function activateWorkspaceFolderById(folderId) {
   const nextState = await window.noteCanvas.activateWorkspaceFolder(folderId);
+  applyWorkspaceState(nextState);
+  openWorkspaceDrawer();
+  return nextState;
+}
+
+async function reorderWorkspaceFolderById(folderId, targetIndex) {
+  const nextState = await window.noteCanvas.reorderWorkspaceFolder(folderId, targetIndex);
   applyWorkspaceState(nextState);
   return nextState;
 }
@@ -2370,6 +2542,8 @@ async function createTerminalNode(options) {
     return;
   }
 
+  dismissBoardIntro();
+
   terminalCount += 1;
 
   const nodeRecord = {
@@ -2602,6 +2776,8 @@ function startPan(event) {
     return;
   }
 
+  dismissBoardIntro();
+
   panState.pointerId = event.pointerId;
   panState.startClientX = event.clientX;
   panState.startClientY = event.clientY;
@@ -2620,6 +2796,10 @@ function handleBoardPointerDown(event) {
 
   if (!isBoardBackgroundTarget(event.target)) {
     return;
+  }
+
+  if (!isSidebarCollapsed) {
+    setSidebarCollapsed(true);
   }
 
   startPan(event);
@@ -2719,6 +2899,20 @@ function handleWindowKeyDown(event) {
   }
 
   if (event.key === "Escape") {
+    if (isWorkspacePreviewOpen()) {
+      event.preventDefault();
+      clearWorkspacePreview();
+      renderWorkspaceBrowser();
+      renderFileInspector();
+      return;
+    }
+
+    if (!isSidebarCollapsed) {
+      event.preventDefault();
+      setSidebarCollapsed(true);
+      return;
+    }
+
     const visibleMaximizedNode = getVisibleMaximizedNode();
 
     if (visibleMaximizedNode !== null) {
@@ -2735,7 +2929,7 @@ function handleWindowKeyDown(event) {
 }
 
 createCanvas();
-setSidebarCollapsed(false);
+setSidebarCollapsed(true);
 renderWorkspaceFolderList();
 renderWorkspaceBrowser();
 renderFileInspector();
@@ -2912,6 +3106,16 @@ if (window.noteCanvas.isSmokeTest) {
 
       return getCanvasSnapshot();
     },
+    reorderCanvas: async (fromIndex, targetIndex) => {
+      const canvasRecord = canvases[fromIndex];
+
+      if (canvasRecord !== undefined) {
+        reorderCanvasById(canvasRecord.id, targetIndex);
+        await waitForAnimationFrame();
+      }
+
+      return getCanvasSnapshot();
+    },
     deleteActiveCanvas: async () => {
       const activeCanvas = getActiveCanvas();
 
@@ -2926,6 +3130,8 @@ if (window.noteCanvas.isSmokeTest) {
 
       return {
         hasNodes: snapshot.activeNodeCount > 0,
+        canvasNames: snapshot.canvasNames,
+        activeCanvasName: snapshot.activeCanvasName,
         viewportOffset: snapshot.viewportOffset,
         viewportScale: snapshot.viewportScale,
         terminalIds: snapshot.terminalIds,
@@ -3120,6 +3326,7 @@ if (window.noteCanvas.isSmokeTest) {
     openWorkspaceDirectoryForPath: async (directoryPath) => {
       const state = await window.noteCanvas.debugOpenWorkspaceDirectory(directoryPath);
       applyWorkspaceState(state);
+      openWorkspaceDrawer();
       await waitForAnimationFrame();
       return getCanvasSnapshot();
     },
@@ -3132,6 +3339,11 @@ if (window.noteCanvas.isSmokeTest) {
     removeWorkspaceFolder: async (folderId) => {
       const state = await window.noteCanvas.removeWorkspaceFolder(folderId);
       applyWorkspaceState(state);
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
+    },
+    reorderWorkspaceFolder: async (folderId, targetIndex) => {
+      const state = await reorderWorkspaceFolderById(folderId, targetIndex);
       await waitForAnimationFrame();
       return getCanvasSnapshot();
     },
@@ -3183,6 +3395,7 @@ if (window.noteCanvas.isSmokeTest) {
         }],
         activeFolderId: "workspace-folder-debug"
       });
+      openWorkspaceDrawer();
       await waitForAnimationFrame();
       return getCanvasSnapshot();
     },
@@ -3301,6 +3514,7 @@ refreshWorkspaceButton?.addEventListener("click", () => {
 sidebarToggleButton?.addEventListener("click", () => {
   toggleSidebar();
 });
+
 
 boardFullscreenExitButton?.addEventListener("click", (event) => {
   event.preventDefault();
