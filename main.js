@@ -16,11 +16,13 @@ const {
   updateWorkspaceFolderSnapshot
 } = require("./workspace_registry");
 const { readWorkspaceFilePreview } = require("./workspace_file_preview");
+const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessions = new Map();
 const workspaceRegistries = new Map();
 const workspaceWatchers = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
+const APP_SESSION_FILE_NAME = "app-session.json";
 
 function resolveShell() {
   return process.env.SHELL || "/bin/zsh";
@@ -64,6 +66,48 @@ function resolveExistingDirectoryPath(requestedPath) {
 
 function resolveTerminalWorkingDirectory(requestedCwd) {
   return resolveExistingDirectoryPath(requestedCwd) ?? resolveInitialWorkingDirectory();
+}
+
+function isAppSessionPersistenceEnabled() {
+  return process.env.CANVAS_SMOKE_TEST !== "1";
+}
+
+function getAppSessionFilePath() {
+  return path.join(app.getPath("userData"), APP_SESSION_FILE_NAME);
+}
+
+function loadPersistedAppSession() {
+  if (!isAppSessionPersistenceEnabled()) {
+    return null;
+  }
+
+  try {
+    const appSessionFilePath = getAppSessionFilePath();
+
+    if (!fs.existsSync(appSessionFilePath)) {
+      return null;
+    }
+
+    return normalizeAppSessionSnapshot(JSON.parse(fs.readFileSync(appSessionFilePath, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedAppSession(snapshot) {
+  if (!isAppSessionPersistenceEnabled()) {
+    return null;
+  }
+
+  const normalizedSnapshot = normalizeAppSessionSnapshot(snapshot);
+  const appSessionFilePath = getAppSessionFilePath();
+  const tempFilePath = `${appSessionFilePath}.tmp`;
+
+  fs.mkdirSync(path.dirname(appSessionFilePath), { recursive: true });
+  fs.writeFileSync(tempFilePath, JSON.stringify(normalizedSnapshot, null, 2), "utf8");
+  fs.renameSync(tempFilePath, appSessionFilePath);
+
+  return normalizedSnapshot;
 }
 
 function getOwnerWorkspaceRegistry(ownerWebContentsId) {
@@ -271,6 +315,64 @@ function openWorkspaceDirectoryForOwner(ownerWebContentsId, directoryPath) {
 
   watchWorkspaceDirectory(ownerWebContentsId, importResult.folderId, canonicalDirectoryPath);
   return serializeWorkspaceRegistry(workspaceRegistry);
+}
+
+function resetWorkspaceSessionForOwner(ownerWebContentsId) {
+  destroyOwnedWorkspaceWatchers(ownerWebContentsId);
+  workspaceRegistries.delete(ownerWebContentsId);
+}
+
+function restoreWorkspaceSessionForOwner(ownerWebContentsId, snapshot) {
+  resetWorkspaceSessionForOwner(ownerWebContentsId);
+
+  const importedRootPaths = Array.isArray(snapshot?.importedRootPaths)
+    ? snapshot.importedRootPaths.filter((rootPath) => typeof rootPath === "string")
+    : [];
+  const activeRootPath = typeof snapshot?.activeRootPath === "string" ? snapshot.activeRootPath : null;
+  let lastState = {
+    importedFolders: [],
+    activeFolderId: null
+  };
+
+  importedRootPaths.forEach((rootPath) => {
+    try {
+      lastState = openWorkspaceDirectoryForOwner(ownerWebContentsId, rootPath);
+    } catch {
+      // Skip missing or inaccessible workspace folders during session restore.
+    }
+  });
+
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
+
+  if (workspaceRegistry === null) {
+    return lastState;
+  }
+
+  if (activeRootPath !== null) {
+    const normalizedActiveRootPath = resolveExistingDirectoryPath(activeRootPath);
+    let canonicalActiveRootPath = null;
+
+    if (normalizedActiveRootPath !== null) {
+      try {
+        canonicalActiveRootPath = fs.realpathSync(normalizedActiveRootPath);
+      } catch {
+        canonicalActiveRootPath = null;
+      }
+    }
+
+    const matchingFolder = canonicalActiveRootPath === null
+      ? null
+      : [...workspaceRegistry.importedFolders.values()].find((folderRecord) => folderRecord.rootPath === canonicalActiveRootPath) ?? null;
+
+    if (matchingFolder !== null) {
+      activateWorkspaceFolder(workspaceRegistry, matchingFolder.id);
+      return refreshWorkspaceFolderForOwner(ownerWebContentsId, matchingFolder.id);
+    }
+  }
+
+  return workspaceRegistry.activeFolderId === null
+    ? serializeWorkspaceRegistry(workspaceRegistry)
+    : refreshWorkspaceFolderForOwner(ownerWebContentsId, workspaceRegistry.activeFolderId);
 }
 
 function escapeShellPathForSingleQuotes(targetPath) {
@@ -660,6 +762,7 @@ async function runSmokeTest(window) {
     if (
       markdownPreviewSnapshot.workspaceSelectedFilePath !== "agent-output/reports/notes.md"
       || markdownPreviewSnapshot.workspacePreviewContents.includes("# Smoke Report") !== true
+      || markdownPreviewSnapshot.sidebarCollapsed !== false
     ) {
       throw new Error(`Smoke test failed: markdown preview did not open correctly. Snapshot: ${JSON.stringify(markdownPreviewSnapshot)}`);
     }
@@ -675,6 +778,22 @@ async function runSmokeTest(window) {
 
     if (!refreshedPreviewSnapshot.workspacePreviewContents.includes("second pass")) {
       throw new Error("Smoke test failed: manual file preview refresh did not reload updated content.");
+    }
+
+    logStep("close workspace preview with Command+L");
+    await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "l", metaKey: true, bubbles: true, cancelable: true }))`);
+    const closedPreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.fileInspectorVisible === false && snapshot.workspaceSelectedFilePath === null,
+      4000
+    );
+
+    if (
+      closedPreviewSnapshot.fileInspectorVisible !== false
+      || closedPreviewSnapshot.workspaceSelectedFilePath !== null
+      || closedPreviewSnapshot.sidebarCollapsed !== false
+    ) {
+      throw new Error(`Smoke test failed: Command+L did not close the file inspector without collapsing the workspace drawer. Snapshot: ${JSON.stringify(closedPreviewSnapshot)}`);
     }
 
     logStep("preview unsupported workspace file");
@@ -841,9 +960,25 @@ app.on("web-contents-created", (_event, contents) => {
     pushWorkspaceRegistryToOwner(contents.id);
   });
 
-  contents.on("destroyed", () => {
-    destroyOwnedWindowState(contents.id);
-  });
+contents.on("destroyed", () => {
+  destroyOwnedWindowState(contents.id);
+});
+});
+
+ipcMain.handle("app-session:load", () => {
+  return loadPersistedAppSession();
+});
+
+ipcMain.on("app-session:save", (_event, payload) => {
+  try {
+    savePersistedAppSession(payload);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+  }
+});
+
+ipcMain.handle("workspace-session:restore", (event, payload) => {
+  return restoreWorkspaceSessionForOwner(event.sender.id, payload);
 });
 
 ipcMain.handle("workspace-directory:open", async (event) => {
@@ -1082,6 +1217,10 @@ ipcMain.handle("terminal:write", (event, payload) => {
 
     if (trackedCwd !== null) {
       session.cwd = trackedCwd;
+      sendToOwner(session.ownerWebContentsId, "terminal:cwd-changed", {
+        terminalId: payload.terminalId,
+        cwd: trackedCwd
+      });
     }
 
     session.pty.write(data);

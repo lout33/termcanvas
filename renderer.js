@@ -32,6 +32,8 @@ const MIN_NODE_WIDTH = 320;
 const MIN_NODE_HEIGHT = 220;
 const ZOOM_INDICATOR_VISIBLE_MS = 1200;
 const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
+const APP_SESSION_VERSION = 1;
+const APP_SESSION_SAVE_DEBOUNCE_MS = 180;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -55,6 +57,8 @@ let lastExportedCanvasDebugPayload = null;
 let workspacePreviewRequestId = 0;
 let workspaceStateHydrationToken = 0;
 const expandedWorkspaceDirectoriesByFolderId = new Map();
+let appSessionSaveTimeout = 0;
+let isSessionHydrating = false;
 
 const workspacePreviewState = {
   folderId: null,
@@ -145,6 +149,17 @@ const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalI
 
   setNodeExitedState(nodeRecord, exitCode, signal);
   renderCanvasList();
+});
+
+const removeTerminalCwdChangeListener = window.noteCanvas.onTerminalCwdChange(({ terminalId, cwd }) => {
+  const nodeRecord = terminalNodeMap.get(terminalId);
+
+  if (nodeRecord === undefined || typeof cwd !== "string" || cwd.length === 0) {
+    return;
+  }
+
+  nodeRecord.cwd = cwd;
+  scheduleAppSessionSave();
 });
 
 const removeWorkspaceDirectoryDataListener = window.noteCanvas.onWorkspaceDirectoryData((snapshot) => {
@@ -286,6 +301,7 @@ function commitNodeTitle(nodeRecord, rawTitle) {
   nodeRecord.titleText = nextTitle;
   updateNodeTitleInput(nodeRecord);
   syncMaximizeButton(nodeRecord);
+  scheduleAppSessionSave();
 }
 
 function cancelNodeTitleEditing(nodeRecord) {
@@ -341,6 +357,8 @@ function setNodeMaximized(nodeRecord, shouldMaximize) {
       nodeRecord.terminal?.focus();
     }
   });
+
+  scheduleAppSessionSave();
 }
 
 function updateExitedOverlay(nodeRecord) {
@@ -384,6 +402,7 @@ function setNodeExitedState(nodeRecord, exitCode, signal) {
   nodeRecord.terminal?.blur?.();
   nodeRecord.terminal?.write(`\r\n[process exited${typeof exitCode === "number" ? ` with code ${exitCode}` : ""}]\r\n`);
   updateExitedOverlay(nodeRecord);
+  scheduleAppSessionSave();
 }
 
 function setNodeLiveState(nodeRecord, shellName) {
@@ -395,6 +414,7 @@ function setNodeLiveState(nodeRecord, shellName) {
   nodeRecord.meta.textContent = shellName;
   nodeRecord.element.classList.remove("is-exited");
   updateExitedOverlay(nodeRecord);
+  scheduleAppSessionSave();
 }
 
 async function releaseTerminalSession(nodeRecord, options = {}) {
@@ -605,6 +625,7 @@ function commitCanvasRename(canvasId, rawName, options = {}) {
   }
 
   renderCanvasList();
+  scheduleAppSessionSave();
 }
 
 function cancelCanvasRename(canvasId, options = {}) {
@@ -768,6 +789,7 @@ function reorderCanvasById(canvasId, targetIndex) {
   const reorderedCanvases = moveArrayItemLocal(canvases, sourceIndex, targetIndex);
   canvases.splice(0, canvases.length, ...reorderedCanvases);
   renderCanvasList();
+  scheduleAppSessionSave();
 }
 
 function getBoardPoint(event) {
@@ -841,6 +863,7 @@ function setActiveCanvasViewport(nextX, nextY, nextScale) {
   activeCanvas.viewportOffset.y = nextY;
   activeCanvas.viewportScale = resolvedScale;
   requestViewportRender();
+  scheduleAppSessionSave();
   return true;
 }
 
@@ -901,10 +924,47 @@ function updateSidebarToggleButton() {
   sidebarToggleButton.setAttribute("aria-pressed", String(!isSidebarCollapsed));
 }
 
+function persistAppSession() {
+  if (isSessionHydrating) {
+    return;
+  }
+
+  try {
+    window.noteCanvas.saveAppSession(serializeAppSession());
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function scheduleAppSessionSave() {
+  if (isSessionHydrating) {
+    return;
+  }
+
+  if (appSessionSaveTimeout !== 0) {
+    window.clearTimeout(appSessionSaveTimeout);
+  }
+
+  appSessionSaveTimeout = window.setTimeout(() => {
+    appSessionSaveTimeout = 0;
+    persistAppSession();
+  }, APP_SESSION_SAVE_DEBOUNCE_MS);
+}
+
+function flushAppSessionSave() {
+  if (appSessionSaveTimeout !== 0) {
+    window.clearTimeout(appSessionSaveTimeout);
+    appSessionSaveTimeout = 0;
+  }
+
+  persistAppSession();
+}
+
 function setSidebarCollapsed(nextValue) {
   isSidebarCollapsed = nextValue;
   appShell?.classList.toggle("is-sidebar-collapsed", isSidebarCollapsed);
   updateSidebarToggleButton();
+  scheduleAppSessionSave();
 }
 
 function toggleSidebar() {
@@ -916,13 +976,18 @@ function openWorkspaceDrawer() {
   document.getElementById("workspace-browser-section")?.scrollIntoView({ block: "nearest" });
 }
 
+function setBoardIntroDismissed(nextValue) {
+  hasDismissedBoardIntro = nextValue === true;
+  appShell?.classList.toggle("has-dismissed-board-intro", hasDismissedBoardIntro);
+  scheduleAppSessionSave();
+}
+
 function dismissBoardIntro() {
   if (hasDismissedBoardIntro) {
     return;
   }
 
-  hasDismissedBoardIntro = true;
-  appShell?.classList.add("has-dismissed-board-intro");
+  setBoardIntroDismissed(true);
 }
 
 function getTerminalTheme() {
@@ -963,13 +1028,14 @@ function createCanvasRecord(options = {}) {
   canvasCount += 1;
 
   const requestedName = typeof options.name === "string" ? options.name : `Canvas ${canvasCount}`;
+  const requestedId = typeof options.id === "string" && options.id.trim().length > 0 ? options.id : crypto.randomUUID();
   const viewportOffset = options.viewportOffset ?? { x: 0, y: 0 };
   const viewportScale = roundCanvasScale(options.viewportScale ?? 1);
   const safeViewportX = Number.isFinite(viewportOffset.x) ? viewportOffset.x : 0;
   const safeViewportY = Number.isFinite(viewportOffset.y) ? viewportOffset.y : 0;
 
   const canvasRecord = {
-    id: crypto.randomUUID(),
+    id: canvasMap.has(requestedId) ? crypto.randomUUID() : requestedId,
     name: getUniqueCanvasName(requestedName),
     viewportOffset: {
       x: safeViewportX,
@@ -982,6 +1048,7 @@ function createCanvasRecord(options = {}) {
 
   canvases.push(canvasRecord);
   canvasMap.set(canvasRecord.id, canvasRecord);
+  scheduleAppSessionSave();
   return canvasRecord;
 }
 
@@ -1430,6 +1497,13 @@ function clearWorkspacePreview() {
   workspacePreviewState.status = "empty";
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
+  scheduleAppSessionSave();
+}
+
+function closeWorkspacePreview() {
+  clearWorkspacePreview();
+  renderWorkspaceBrowser();
+  renderFileInspector();
 }
 
 function isWorkspacePreviewOpen() {
@@ -1616,11 +1690,10 @@ function renderFileInspector() {
   closeButton.className = "canvas-secondary-button file-inspector-button";
   closeButton.type = "button";
   closeButton.dataset.fileInspectorAction = "close";
+  closeButton.setAttribute("aria-label", "Close preview with Command+L");
   closeButton.textContent = "Close";
   closeButton.addEventListener("click", () => {
-    clearWorkspacePreview();
-    renderWorkspaceBrowser();
-    renderFileInspector();
+    closeWorkspacePreview();
   });
 
   actions.append(refreshButton, closeButton);
@@ -1678,6 +1751,7 @@ async function loadWorkspaceFilePreview(relativePath) {
   workspacePreviewState.errorMessage = "";
   renderWorkspaceBrowser();
   renderFileInspector();
+  scheduleAppSessionSave();
 
   try {
     const preview = await window.noteCanvas.readWorkspaceFile(previewFolderId, relativePath);
@@ -1696,6 +1770,7 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.errorMessage = "";
     renderWorkspaceBrowser();
     renderFileInspector();
+    scheduleAppSessionSave();
     return preview;
   } catch (error) {
     if (
@@ -1712,6 +1787,7 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.errorMessage = error instanceof Error ? error.message : String(error);
     renderWorkspaceBrowser();
     renderFileInspector();
+    scheduleAppSessionSave();
     return null;
   }
 }
@@ -1723,7 +1799,6 @@ async function selectWorkspaceFile(relativePath) {
     return null;
   }
 
-  setSidebarCollapsed(true);
   return loadWorkspaceFilePreview(relativePath);
 }
 
@@ -1751,6 +1826,7 @@ function toggleWorkspaceDirectory(relativePath) {
   }
 
   renderWorkspaceBrowser();
+  scheduleAppSessionSave();
 }
 
 function updateWorkspaceControls() {
@@ -1906,6 +1982,7 @@ function applyWorkspaceState(nextState) {
   renderWorkspaceFolderList();
   renderWorkspaceBrowser();
   renderFileInspector();
+  scheduleAppSessionSave();
 }
 
 async function refreshWorkspaceDirectory(options = {}) {
@@ -1951,18 +2028,6 @@ async function openWorkspaceDirectory() {
   applyWorkspaceState(opened.state);
   openWorkspaceDrawer();
   return opened.state;
-}
-
-async function initializeWorkspaceState() {
-  const hydrationToken = workspaceStateHydrationToken;
-  const nextState = await window.noteCanvas.getWorkspaceDirectoryState();
-
-  if (hydrationToken !== workspaceStateHydrationToken) {
-    return null;
-  }
-
-  applyWorkspaceState(nextState);
-  return nextState;
 }
 
 async function activateWorkspaceFolderById(folderId) {
@@ -2023,6 +2088,215 @@ function serializeCanvasRecord(canvasRecord) {
       }))
     }
   };
+}
+
+function serializeCanvasSessionRecord(canvasRecord) {
+  const exportedCanvas = serializeCanvasRecord(canvasRecord).canvas;
+
+  return {
+    id: canvasRecord.id,
+    name: exportedCanvas.name,
+    viewportOffset: exportedCanvas.viewportOffset,
+    viewportScale: exportedCanvas.viewportScale,
+    terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
+      ...exportedCanvas.terminalNodes[index],
+      isExited: nodeRecord.isExited,
+      exitCode: nodeRecord.exitCode,
+      exitSignal: nodeRecord.exitSignal
+    }))
+  };
+}
+
+function serializeWorkspaceSession() {
+  return {
+    importedRootPaths: workspaceState.importedFolders.map((folderRecord) => folderRecord.rootPath),
+    activeRootPath: getActiveWorkspaceFolder()?.rootPath ?? null,
+    expandedDirectoriesByRootPath: workspaceState.importedFolders.flatMap((folderRecord) => {
+      const directoryPaths = [...getExpandedDirectoriesForFolder(folderRecord.id)];
+
+      return directoryPaths.length === 0
+        ? []
+        : [{
+            rootPath: folderRecord.rootPath,
+            directoryPaths
+          }];
+    }),
+    preview: (() => {
+      if (!isWorkspacePreviewOpen()) {
+        return null;
+      }
+
+      const previewFolder = getWorkspaceFolderById(workspacePreviewState.folderId);
+
+      return previewFolder === null
+        ? null
+        : {
+            rootPath: previewFolder.rootPath,
+            relativePath: workspacePreviewState.relativePath
+          };
+    })()
+  };
+}
+
+function serializeAppSession() {
+  return {
+    version: APP_SESSION_VERSION,
+    ui: {
+      isSidebarCollapsed,
+      hasDismissedBoardIntro
+    },
+    workspace: serializeWorkspaceSession(),
+    canvases: canvases.map(serializeCanvasSessionRecord),
+    activeCanvasId
+  };
+}
+
+function restoreExpandedWorkspaceDirectories(workspaceSnapshot) {
+  const expandedDirectoriesByRootPath = new Map(
+    Array.isArray(workspaceSnapshot?.expandedDirectoriesByRootPath)
+      ? workspaceSnapshot.expandedDirectoriesByRootPath.map((entry) => [entry.rootPath, entry.directoryPaths])
+      : []
+  );
+
+  workspaceState.importedFolders.forEach((folderRecord) => {
+    const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
+    const validDirectoryPaths = getWorkspaceDirectoryPaths(folderRecord);
+    expandedDirectories.clear();
+
+    (expandedDirectoriesByRootPath.get(folderRecord.rootPath) ?? []).forEach((directoryPath) => {
+      if (validDirectoryPaths.has(directoryPath)) {
+        expandedDirectories.add(directoryPath);
+      }
+    });
+  });
+}
+
+function expandWorkspacePreviewAncestors(folderRecord, relativePath) {
+  let parentPath = getWorkspaceEntryParentPath(relativePath);
+  const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
+
+  while (parentPath.length > 0) {
+    expandedDirectories.add(parentPath);
+    parentPath = getWorkspaceEntryParentPath(parentPath);
+  }
+}
+
+async function restoreWorkspacePreview(workspaceSnapshot) {
+  const preview = workspaceSnapshot?.preview;
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (
+    activeFolder === null
+    || typeof preview?.rootPath !== "string"
+    || activeFolder.rootPath !== preview.rootPath
+    || typeof preview.relativePath !== "string"
+    || !getWorkspaceFilePaths(activeFolder).has(preview.relativePath)
+  ) {
+    clearWorkspacePreview();
+    renderWorkspaceBrowser();
+    renderFileInspector();
+    return;
+  }
+
+  expandWorkspacePreviewAncestors(activeFolder, preview.relativePath);
+  renderWorkspaceBrowser();
+  await loadWorkspaceFilePreview(preview.relativePath);
+}
+
+async function restoreCanvasSession(sessionSnapshot) {
+  const persistedCanvases = Array.isArray(sessionSnapshot?.canvases) ? sessionSnapshot.canvases : [];
+
+  if (persistedCanvases.length === 0) {
+    return;
+  }
+
+  persistedCanvases.forEach((canvasSnapshot) => {
+    createCanvasRecord({
+      id: canvasSnapshot.id,
+      name: canvasSnapshot.name,
+      viewportOffset: canvasSnapshot.viewportOffset,
+      viewportScale: canvasSnapshot.viewportScale
+    });
+  });
+
+  for (const canvasSnapshot of persistedCanvases) {
+    const restoredCanvas = getCanvasById(canvasSnapshot.id);
+
+    if (restoredCanvas === null) {
+      continue;
+    }
+
+    setActiveCanvas(restoredCanvas.id);
+
+    for (const nodeSnapshot of canvasSnapshot.terminalNodes) {
+      try {
+        await createTerminalNode({
+          x: nodeSnapshot.x,
+          y: nodeSnapshot.y,
+          width: nodeSnapshot.width,
+          height: nodeSnapshot.height,
+          cwd: nodeSnapshot.cwd,
+          shellName: nodeSnapshot.shellName,
+          title: nodeSnapshot.title,
+          isMaximized: nodeSnapshot.isMaximized,
+          isExited: nodeSnapshot.isExited,
+          exitCode: nodeSnapshot.exitCode,
+          exitSignal: nodeSnapshot.exitSignal,
+          shouldFocus: false
+        });
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  }
+
+  const restoredActiveCanvas = getCanvasById(sessionSnapshot.activeCanvasId) ?? canvases[0] ?? null;
+
+  if (restoredActiveCanvas !== null) {
+    setActiveCanvas(restoredActiveCanvas.id);
+  }
+}
+
+async function initializeApp() {
+  isSessionHydrating = true;
+
+  try {
+    setSidebarCollapsed(true);
+    setBoardIntroDismissed(false);
+    renderWorkspaceFolderList();
+    renderWorkspaceBrowser();
+    renderFileInspector();
+
+    const sessionSnapshot = await window.noteCanvas.loadAppSession();
+    const workspaceSnapshot = sessionSnapshot?.workspace ?? null;
+    const nextWorkspaceState = Array.isArray(workspaceSnapshot?.importedRootPaths) && workspaceSnapshot.importedRootPaths.length > 0
+      ? await window.noteCanvas.restoreWorkspaceSession(workspaceSnapshot)
+      : await window.noteCanvas.getWorkspaceDirectoryState();
+
+    applyWorkspaceState(nextWorkspaceState);
+
+    if (sessionSnapshot !== null) {
+      setSidebarCollapsed(sessionSnapshot.ui.isSidebarCollapsed);
+      setBoardIntroDismissed(sessionSnapshot.ui.hasDismissedBoardIntro);
+      restoreExpandedWorkspaceDirectories(workspaceSnapshot);
+      renderWorkspaceBrowser();
+      await restoreCanvasSession(sessionSnapshot);
+      await restoreWorkspacePreview(workspaceSnapshot);
+    }
+
+    if (canvases.length === 0) {
+      createCanvas();
+    }
+  } catch (error) {
+    console.error(error);
+
+    if (canvases.length === 0) {
+      createCanvas();
+    }
+  } finally {
+    isSessionHydrating = false;
+    flushAppSessionSave();
+  }
 }
 
 function parseImportedCanvas(rawContents) {
@@ -2188,6 +2462,10 @@ function stopNodeDrag(event) {
     if (event !== undefined && !hasMoved && nodeRecord.canvas.id === activeCanvasId && !nodeRecord.isExited) {
       nodeRecord.terminal?.focus();
     }
+
+    if (hasMoved) {
+      scheduleAppSessionSave();
+    }
   }
 
   dragState.pointerId = null;
@@ -2197,7 +2475,7 @@ function stopNodeDrag(event) {
 }
 
 function stopNodeResize(event) {
-  const { handleElement, nodeRecord, pointerId } = resizeState;
+  const { handleElement, nodeRecord, pointerId, hasMoved } = resizeState;
 
   if (handleElement !== null && pointerId !== null && handleElement.hasPointerCapture(pointerId)) {
     handleElement.releasePointerCapture(pointerId);
@@ -2208,6 +2486,10 @@ function stopNodeResize(event) {
 
     if (event !== undefined && nodeRecord.canvas.id === activeCanvasId && !nodeRecord.isExited) {
       nodeRecord.syncSize();
+    }
+
+    if (hasMoved) {
+      scheduleAppSessionSave();
     }
   }
 
@@ -2250,6 +2532,7 @@ function setActiveCanvas(canvasId) {
 
     setActiveNode(null);
     activeCanvasId = canvasId;
+    scheduleAppSessionSave();
   }
 
   renderCanvasList();
@@ -2308,6 +2591,7 @@ async function deleteCanvas(canvasId) {
   renderCanvas({ syncTerminalSizes: true });
 
   await Promise.all(nodesToRemove.map((nodeRecord) => destroyTerminalNode(nodeRecord)));
+  scheduleAppSessionSave();
 }
 
 function startNodeDrag(event, nodeRecord, handleElement) {
@@ -2537,6 +2821,7 @@ function createTerminalElement(nodeRecord) {
 
 async function createTerminalNode(options) {
   const activeCanvas = getActiveCanvas();
+  const shouldFocus = options?.shouldFocus !== false;
 
   if (activeCanvas === null) {
     return;
@@ -2556,10 +2841,10 @@ async function createTerminalNode(options) {
     height: DEFAULT_NODE_HEIGHT,
     cwd: typeof options.cwd === "string" && options.cwd.trim().length > 0 ? options.cwd : getDefaultTerminalWorkingDirectory(),
     isRemoved: false,
-    isExited: false,
+    isExited: options.isExited === true,
     isMaximized: options.isMaximized === true,
-    exitCode: null,
-    exitSignal: null,
+    exitCode: Number.isInteger(options.exitCode) ? options.exitCode : null,
+    exitSignal: typeof options.exitSignal === "string" && options.exitSignal.length > 0 ? options.exitSignal : null,
     element: null,
     surface: null,
     terminalMount: null,
@@ -2577,7 +2862,7 @@ async function createTerminalNode(options) {
     maximizeButton: null,
     reopenButton: null,
     resizeHandles: [],
-    shellName: "Shell",
+    shellName: typeof options.shellName === "string" && options.shellName.length > 0 ? options.shellName : "Shell",
     titleText: normalizeTerminalTitle(options.title, `Terminal ${terminalCount}`)
   };
   const elements = createTerminalElement(nodeRecord);
@@ -2695,7 +2980,11 @@ async function createTerminalNode(options) {
   updateEmptyState();
 
   try {
-    await bindTerminalSession(nodeRecord);
+    if (nodeRecord.isExited) {
+      setNodeExitedState(nodeRecord, nodeRecord.exitCode, nodeRecord.exitSignal);
+    } else {
+      await bindTerminalSession(nodeRecord, { shouldFocus });
+    }
 
     if (nodeRecord.isMaximized) {
       setNodeMaximized(nodeRecord, true);
@@ -2705,6 +2994,7 @@ async function createTerminalNode(options) {
     throw error;
   }
 
+  scheduleAppSessionSave();
   return nodeRecord;
 }
 
@@ -2747,6 +3037,8 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     applyCanvasFocusMode();
     renderCanvasList();
   }
+
+  scheduleAppSessionSave();
 }
 
 async function handleBoardDoubleClick(event) {
@@ -2901,9 +3193,7 @@ function handleWindowKeyDown(event) {
   if (event.key === "Escape") {
     if (isWorkspacePreviewOpen()) {
       event.preventDefault();
-      clearWorkspacePreview();
-      renderWorkspaceBrowser();
-      renderFileInspector();
+      closeWorkspacePreview();
       return;
     }
 
@@ -2922,22 +3212,28 @@ function handleWindowKeyDown(event) {
     }
   }
 
-  if (event.metaKey && !event.ctrlKey && !event.altKey && String(event.key).toLowerCase() === "b") {
+  const shortcutKey = String(event.key).toLowerCase();
+  const isCommandShortcut = event.metaKey && !event.ctrlKey && !event.altKey;
+
+  if (isCommandShortcut && shortcutKey === "l" && isWorkspacePreviewOpen()) {
+    event.preventDefault();
+    closeWorkspacePreview();
+    return;
+  }
+
+  if (isCommandShortcut && shortcutKey === "b") {
     event.preventDefault();
     toggleSidebar();
+    return;
   }
 }
 
-createCanvas();
-setSidebarCollapsed(true);
-renderWorkspaceFolderList();
-renderWorkspaceBrowser();
-renderFileInspector();
-void initializeWorkspaceState().catch((error) => {
+void initializeApp().catch((error) => {
   console.error(error);
 });
 
 window.addEventListener("beforeunload", () => {
+  flushAppSessionSave();
   isWindowUnloading = true;
 
   if (zoomIndicatorTimeout !== 0) {
@@ -2959,6 +3255,7 @@ window.addEventListener("beforeunload", () => {
   window.removeEventListener("keydown", handleWindowKeyDown);
   removeTerminalDataListener();
   removeTerminalExitListener();
+  removeTerminalCwdChangeListener();
   removeWorkspaceDirectoryDataListener();
   terminalNodeMap.forEach((nodeRecord) => {
     nodeRecord.resizeObserver?.disconnect();
