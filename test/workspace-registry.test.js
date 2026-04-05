@@ -5,6 +5,7 @@ const {
   activateWorkspaceFolder,
   createWorkspaceRegistry,
   importWorkspaceFolder,
+  reorderWorkspaceFolder,
   removeWorkspaceFolder,
   updateWorkspaceFolderSnapshot
 } = require("../workspace_registry.js");
@@ -61,4 +62,18 @@ test("updateWorkspaceFolderSnapshot refreshes the targeted folder without replac
 
   assert.deepEqual(updatedFirst.entries, [{ relativePath: "new.txt", kind: "file", name: "new.txt" }]);
   assert.deepEqual(untouchedSecond.entries, [{ relativePath: "stay.txt", kind: "file", name: "stay.txt" }]);
+});
+
+test("reorderWorkspaceFolder moves the requested folder while keeping the active folder selected", () => {
+  const registry = createWorkspaceRegistry();
+  const firstFolder = importWorkspaceFolder(registry, createSnapshot("/tmp/a", "a"));
+  const secondFolder = importWorkspaceFolder(registry, createSnapshot("/tmp/b", "b"));
+  const thirdFolder = importWorkspaceFolder(registry, createSnapshot("/tmp/c", "c"));
+
+  activateWorkspaceFolder(registry, secondFolder.folderId);
+  const reordered = reorderWorkspaceFolder(registry, thirdFolder.folderId, 0);
+
+  assert.deepEqual(reordered.state.importedFolders.map((folder) => folder.rootPath), ["/tmp/c", "/tmp/a", "/tmp/b"]);
+  assert.equal(reordered.state.activeFolderId, secondFolder.folderId);
+  assert.equal(reordered.folderId, thirdFolder.folderId);
 });

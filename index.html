@@ -11,41 +11,42 @@
   <body>
     <div class="app-shell">
       <aside class="canvas-sidebar" aria-label="Canvas manager">
-        <div class="canvas-sidebar-controls">
-          <button class="canvas-create-button" id="create-canvas-button" type="button">New canvas</button>
+        <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Open drawer with Command+B">
+          <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
+        </button>
 
-          <div class="canvas-file-actions" aria-label="Canvas file actions">
-            <button class="canvas-secondary-button" id="export-canvas-button" type="button">Export JSON</button>
-            <button class="canvas-secondary-button" id="import-canvas-button" type="button">Import JSON</button>
-            <button class="canvas-secondary-button" id="open-workspace-button" type="button">Open Folder</button>
-            <button class="canvas-secondary-button" id="refresh-workspace-button" type="button">Refresh</button>
+        <div class="canvas-sidebar-panel">
+          <div class="canvas-sidebar-controls">
+            <button class="canvas-create-button" id="create-canvas-button" type="button">New canvas</button>
+
+            <div class="canvas-file-actions" aria-label="Canvas file actions">
+              <button class="canvas-secondary-button" id="export-canvas-button" type="button">Export canvas</button>
+              <button class="canvas-secondary-button" id="import-canvas-button" type="button">Import canvas</button>
+              <button class="canvas-secondary-button" id="open-workspace-button" type="button">Open workspace</button>
+              <button class="canvas-secondary-button" id="refresh-workspace-button" type="button">Refresh</button>
+            </div>
           </div>
-        </div>
 
-        <div class="canvas-sidebar-content">
-          <section class="sidebar-section" aria-label="Canvas list section">
-            <div class="sidebar-section-header">Canvases</div>
-            <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>
-          </section>
+          <div class="canvas-sidebar-content">
+            <section class="sidebar-section" id="canvas-list-section" aria-label="Canvas list section">
+              <div class="sidebar-section-header">Canvases</div>
+              <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>
+            </section>
 
-          <section class="sidebar-section" aria-label="Imported folders section">
-            <div class="sidebar-section-header">Imported Folders</div>
-            <ul class="canvas-list workspace-folder-list" id="workspace-folder-list" aria-label="Imported folders"></ul>
-          </section>
+            <section class="sidebar-section" id="workspace-folders-section" aria-label="Imported folders section">
+              <div class="sidebar-section-header">Workspaces</div>
+              <ul class="canvas-list workspace-folder-list" id="workspace-folder-list" aria-label="Imported folders"></ul>
+            </section>
 
-          <section class="sidebar-section" aria-label="Workspace browser section">
-            <div class="sidebar-section-header">Folders</div>
-            <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
-          </section>
+            <section class="sidebar-section" id="workspace-browser-section" aria-label="Workspace browser section">
+              <div class="sidebar-section-header">Workspace</div>
+              <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
+            </section>
+          </div>
         </div>
       </aside>
 
       <main class="workspace-shell">
-        <button class="sidebar-toggle-button" id="sidebar-toggle-button" type="button" aria-label="Hide canvas sidebar">
-          <span class="sidebar-toggle-label">Hide panel</span>
-          <span class="sidebar-toggle-shortcut">⌘B</span>
-        </button>
-
         <section class="board" id="board">
           <div class="board-grid" aria-hidden="true"></div>
 
@@ -55,12 +56,17 @@
             Exit fullscreen
           </button>
 
-          <header class="board-intro">
-            <p class="board-eyebrow">Canvas Learning</p>
-            <p class="board-copy">Double-click empty space to open a terminal. Drag blank paper or use a two-finger trackpad gesture to pan, hold ⌘ or Ctrl while wheeling on the background to zoom, drag a node by its header to move it, or press ⌘B to hide the canvas list.</p>
-          </header>
+          <div class="board-hints" id="board-hints" aria-live="polite">
+            <span class="board-hint-chip">Double-click to open a terminal</span>
+            <span class="board-hint-chip">Drag to move the canvas</span>
+            <span class="board-hint-chip">Cmd/Ctrl + wheel to zoom</span>
+            <span class="board-hint-chip">Cmd+B for drawers</span>
+          </div>
 
-          <div class="empty-state" id="empty-state">Double-click to open a terminal node. Drag blank paper or use a two-finger trackpad gesture to pan, hold ⌘ or Ctrl while wheeling on the background to zoom, or use a node header to move it.</div>
+          <div class="empty-state" id="empty-state">
+            <strong class="empty-state-title">Double-click to open a terminal</strong>
+            <span class="empty-state-copy">Drag to move the canvas. Cmd/Ctrl + wheel to zoom.</span>
+          </div>
 
           <section class="nodes-layer" id="nodes-layer" aria-label="Infinite terminal canvas"></section>
         </section>

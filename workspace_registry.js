@@ -1,3 +1,5 @@
+const { moveArrayItem } = require("./list_reorder");
+
 function normalizeWorkspaceFolderSnapshot(snapshot) {
   if (typeof snapshot?.rootPath !== "string" || snapshot.rootPath.length === 0) {
     throw new Error("Workspace folder snapshot requires a root path.");
@@ -134,6 +136,23 @@ function updateWorkspaceFolderSnapshot(registry, folderId, snapshot) {
   };
 }
 
+function reorderWorkspaceFolder(registry, folderId, targetIndex) {
+  const folderEntries = [...registry.importedFolders.entries()];
+  const sourceIndex = folderEntries.findIndex(([currentFolderId]) => currentFolderId === folderId);
+
+  if (sourceIndex < 0) {
+    throw new Error("Workspace folder not found.");
+  }
+
+  const reorderedEntries = moveArrayItem(folderEntries, sourceIndex, targetIndex);
+  registry.importedFolders = new Map(reorderedEntries);
+
+  return {
+    folderId,
+    state: serializeWorkspaceRegistry(registry)
+  };
+}
+
 function setWorkspaceFolderError(registry, folderId, errorMessage) {
   const currentFolder = registry.importedFolders.get(folderId);
 
@@ -157,6 +176,7 @@ module.exports = {
   createWorkspaceRegistry,
   getWorkspaceFolder,
   importWorkspaceFolder,
+  reorderWorkspaceFolder,
   removeWorkspaceFolder,
   serializeWorkspaceRegistry,
   setWorkspaceFolderError,

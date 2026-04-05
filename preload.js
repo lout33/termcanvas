@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld(
     openWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:open"),
     refreshWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:refresh"),
     activateWorkspaceFolder: (folderId) => ipcRenderer.invoke("workspace-folder:activate", { folderId }),
+    reorderWorkspaceFolder: (folderId, targetIndex) => ipcRenderer.invoke("workspace-folder:reorder", { folderId, targetIndex }),
     removeWorkspaceFolder: (folderId) => ipcRenderer.invoke("workspace-folder:remove", { folderId }),
     debugOpenWorkspaceDirectory: (directoryPath) => ipcRenderer.invoke("workspace-directory:debug-open", { directoryPath }),
     readWorkspaceFile: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:read", { folderId, relativePath }),
