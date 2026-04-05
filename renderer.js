@@ -13,7 +13,10 @@ const refreshWorkspaceButton = document.getElementById("refresh-workspace-button
 const workspaceFolderList = document.getElementById("workspace-folder-list");
 const workspaceBrowser = document.getElementById("workspace-browser");
 const fileInspector = document.getElementById("file-inspector");
+const fileInspectorResizeHandle = document.getElementById("file-inspector-resize-handle");
 const sidebarToggleButton = document.getElementById("sidebar-toggle-button");
+const sidebarResizeHandle = document.getElementById("sidebar-resize-handle");
+const sidebarPanel = document.querySelector(".canvas-sidebar-panel");
 const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
 const DRAG_THRESHOLD = 3;
@@ -30,6 +33,9 @@ const DEFAULT_NODE_WIDTH = 544;
 const DEFAULT_NODE_HEIGHT = 352;
 const MIN_NODE_WIDTH = 320;
 const MIN_NODE_HEIGHT = 220;
+const MIN_SIDEBAR_PANEL_WIDTH = 224;
+const MIN_FILE_INSPECTOR_WIDTH = 240;
+const PANEL_VIEWPORT_MARGIN = 24;
 const ZOOM_INDICATOR_VISIBLE_MS = 1200;
 const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 const APP_SESSION_VERSION = 1;
@@ -118,6 +124,15 @@ const resizeState = {
   originY: 0,
   originWidth: 0,
   originHeight: 0,
+  hasMoved: false
+};
+
+const panelResizeState = {
+  pointerId: null,
+  handleElement: null,
+  panelKind: "",
+  startClientX: 0,
+  originWidth: 0,
   hasMoved: false
 };
 
@@ -1834,8 +1849,43 @@ function toggleWorkspaceDirectory(relativePath) {
 function updateWorkspaceControls() {
   if (refreshWorkspaceButton instanceof HTMLButtonElement) {
     refreshWorkspaceButton.disabled = !hasWorkspaceDirectory() || workspaceState.isRefreshing;
-    refreshWorkspaceButton.textContent = workspaceState.isRefreshing ? "Refreshing" : "Refresh";
+    refreshWorkspaceButton.classList.toggle("is-loading", workspaceState.isRefreshing);
+    refreshWorkspaceButton.setAttribute(
+      "aria-label",
+      workspaceState.isRefreshing ? "Refreshing workspace" : "Refresh workspace"
+    );
+    refreshWorkspaceButton.title = workspaceState.isRefreshing ? "Refreshing workspace" : "Refresh workspace";
   }
+}
+
+function createWorkspaceEntryDecoration(entry) {
+  const decoration = document.createElement("span");
+  decoration.className = "workspace-browser-entry-decoration";
+  decoration.setAttribute("aria-hidden", "true");
+
+  const disclosure = document.createElement("span");
+  disclosure.className = "workspace-browser-entry-disclosure";
+
+  if (entry.kind === "directory") {
+    disclosure.classList.toggle("is-expanded", entry.isExpanded);
+    disclosure.innerHTML = '<svg class="workspace-browser-entry-disclosure-icon" viewBox="0 0 16 16"><path d="M6 3.75 10.75 8 6 12.25"></path></svg>';
+  } else {
+    disclosure.classList.add("is-placeholder");
+  }
+
+  const icon = document.createElement("span");
+  icon.className = `workspace-browser-entry-icon is-${entry.kind}`;
+
+  if (entry.kind === "directory") {
+    icon.innerHTML = entry.isExpanded
+      ? '<svg class="workspace-browser-entry-icon-svg" viewBox="0 0 16 16"><path d="M1.75 5.25h4l1.35-1.5h6.15c.55 0 1 .45 1 1v1"></path><path d="M1.75 5.25h12.5c.55 0 1 .45 1 1v5c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1v-6c0-.55.45-1 1-1Z"></path></svg>'
+      : '<svg class="workspace-browser-entry-icon-svg" viewBox="0 0 16 16"><path d="M1.75 4.75h4l1.35-1.5h6.15c.55 0 1 .45 1 1v1"></path><path d="M1.75 5.25h12.5c.55 0 1 .45 1 1v5c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1v-6c0-.55.45-1 1-1Z"></path></svg>';
+  } else {
+    icon.innerHTML = '<svg class="workspace-browser-entry-icon-svg" viewBox="0 0 16 16"><path d="M4 2.75h5.25L12.5 6v7.25c0 .55-.45 1-1 1H4c-.55 0-1-.45-1-1v-9.5c0-.55.45-1 1-1Z"></path><path d="M9.25 2.75V6h3.25"></path></svg>';
+  }
+
+  decoration.append(disclosure, icon);
+  return decoration;
 }
 
 function renderWorkspaceBrowser() {
@@ -1890,15 +1940,13 @@ function renderWorkspaceBrowser() {
         button.setAttribute("aria-label", entry.kind === "directory" ? `${entry.isExpanded ? "Collapse" : "Expand"} ${entry.relativePath}` : `Preview ${entry.relativePath}`);
         button.classList.toggle("is-selected", entry.isSelected);
 
-        const kind = document.createElement("span");
-        kind.className = "workspace-browser-entry-kind";
-        kind.textContent = entry.kind === "directory" ? (entry.isExpanded ? "open" : "dir") : "file";
+        const decoration = createWorkspaceEntryDecoration(entry);
 
         const label = document.createElement("span");
         label.className = "workspace-browser-entry-label";
         label.textContent = entry.name;
 
-        button.append(kind, label);
+        button.append(decoration, label);
 
         if (entry.kind === "directory") {
           button.setAttribute("aria-expanded", entry.isExpanded ? "true" : "false");
@@ -2504,7 +2552,23 @@ function stopNodeResize(event) {
   resizeState.hasMoved = false;
 }
 
+function stopPanelResize() {
+  const { handleElement, pointerId } = panelResizeState;
+
+  if (handleElement !== null && pointerId !== null && handleElement.hasPointerCapture(pointerId)) {
+    handleElement.releasePointerCapture(pointerId);
+  }
+
+  handleElement?.classList.remove("is-active");
+  appShell?.classList.remove("is-resizing-panel");
+  panelResizeState.pointerId = null;
+  panelResizeState.handleElement = null;
+  panelResizeState.panelKind = "";
+  panelResizeState.hasMoved = false;
+}
+
 function resetPointerInteractions() {
+  stopPanelResize();
   stopNodeResize();
   stopNodeDrag();
 
@@ -2513,6 +2577,79 @@ function resetPointerInteractions() {
   }
 
   stopPan();
+}
+
+function getPanelResizeBounds(panelKind) {
+  const minimumWidth = panelKind === "sidebar" ? MIN_SIDEBAR_PANEL_WIDTH : MIN_FILE_INSPECTOR_WIDTH;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || minimumWidth;
+
+  return {
+    minimumWidth,
+    maximumWidth: Math.max(minimumWidth, viewportWidth - PANEL_VIEWPORT_MARGIN)
+  };
+}
+
+function setPanelWidth(panelKind, nextWidth) {
+  const propertyName = panelKind === "sidebar" ? "--drawer-panel-width" : "--inspector-width";
+  document.documentElement.style.setProperty(propertyName, `${Math.round(nextWidth)}px`);
+}
+
+function startPanelResize(event, handleElement, panelKind) {
+  if (
+    event.button !== 0
+    || panState.pointerId !== null
+    || dragState.pointerId !== null
+    || resizeState.pointerId !== null
+    || panelResizeState.pointerId !== null
+  ) {
+    return;
+  }
+
+  const panelElement = panelKind === "sidebar" ? sidebarPanel : fileInspector;
+
+  if (
+    !(panelElement instanceof HTMLElement)
+    || (panelKind === "sidebar" && isSidebarCollapsed)
+    || (panelKind === "inspector" && !isWorkspacePreviewOpen())
+  ) {
+    return;
+  }
+
+  panelResizeState.pointerId = event.pointerId;
+  panelResizeState.handleElement = handleElement;
+  panelResizeState.panelKind = panelKind;
+  panelResizeState.startClientX = event.clientX;
+  panelResizeState.originWidth = panelElement.getBoundingClientRect().width;
+  panelResizeState.hasMoved = false;
+
+  handleElement.classList.add("is-active");
+  appShell?.classList.add("is-resizing-panel");
+  handleElement.setPointerCapture(event.pointerId);
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function moveResizedPanel(event) {
+  if (panelResizeState.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const deltaX = event.clientX - panelResizeState.startClientX;
+  const nextWidth = panelResizeState.panelKind === "sidebar"
+    ? panelResizeState.originWidth + deltaX
+    : panelResizeState.originWidth - deltaX;
+  const { minimumWidth, maximumWidth } = getPanelResizeBounds(panelResizeState.panelKind);
+  const clampedWidth = Math.min(maximumWidth, Math.max(minimumWidth, nextWidth));
+
+  if (!panelResizeState.hasMoved && Math.abs(deltaX) > DRAG_THRESHOLD) {
+    panelResizeState.hasMoved = true;
+  }
+
+  setPanelWidth(panelResizeState.panelKind, clampedWidth);
+
+  if (event.cancelable) {
+    event.preventDefault();
+  }
 }
 
 function setActiveCanvas(canvasId) {
@@ -3185,6 +3322,22 @@ function handleBoardWheel(event) {
   }
 }
 
+function handleWindowPointerMove(event) {
+  moveResizedPanel(event);
+}
+
+function handleWindowPointerUp(event) {
+  if (panelResizeState.pointerId === event.pointerId) {
+    stopPanelResize();
+  }
+}
+
+function handleWindowPointerCancel(event) {
+  if (panelResizeState.pointerId === event.pointerId) {
+    stopPanelResize();
+  }
+}
+
 function handleWindowKeyDown(event) {
   if (event.defaultPrevented || event.repeat) {
     return;
@@ -3260,6 +3413,9 @@ window.addEventListener("beforeunload", () => {
   }
 
   window.removeEventListener("keydown", handleWindowKeyDown);
+  window.removeEventListener("pointermove", handleWindowPointerMove);
+  window.removeEventListener("pointerup", handleWindowPointerUp);
+  window.removeEventListener("pointercancel", handleWindowPointerCancel);
   removeTerminalDataListener();
   removeTerminalExitListener();
   removeTerminalCwdChangeListener();
@@ -3824,6 +3980,18 @@ sidebarToggleButton?.addEventListener("click", () => {
   toggleSidebar();
 });
 
+if (sidebarResizeHandle instanceof HTMLElement) {
+  sidebarResizeHandle.addEventListener("pointerdown", (event) => {
+    startPanelResize(event, sidebarResizeHandle, "sidebar");
+  });
+}
+
+if (fileInspectorResizeHandle instanceof HTMLElement) {
+  fileInspectorResizeHandle.addEventListener("pointerdown", (event) => {
+    startPanelResize(event, fileInspectorResizeHandle, "inspector");
+  });
+}
+
 
 boardFullscreenExitButton?.addEventListener("click", (event) => {
   event.preventDefault();
@@ -3840,4 +4008,7 @@ board.addEventListener("pointerup", handleBoardPointerUp);
 board.addEventListener("pointercancel", handleBoardPointerCancel);
 board.addEventListener("wheel", handleBoardWheel, { passive: false });
 board.addEventListener("dblclick", handleBoardDoubleClick);
+window.addEventListener("pointermove", handleWindowPointerMove);
+window.addEventListener("pointerup", handleWindowPointerUp);
+window.addEventListener("pointercancel", handleWindowPointerCancel);
 window.addEventListener("keydown", handleWindowKeyDown);
