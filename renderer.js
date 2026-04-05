@@ -8,6 +8,10 @@ const canvasList = document.getElementById("canvas-list");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
+const openWorkspaceButton = document.getElementById("open-workspace-button");
+const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
+const workspaceBrowser = document.getElementById("workspace-browser");
+const fileInspector = document.getElementById("file-inspector");
 const sidebarToggleButton = document.getElementById("sidebar-toggle-button");
 const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
@@ -46,6 +50,37 @@ let zoomIndicatorTimeout = 0;
 const pendingTerminalSizeNodes = new Set();
 let pendingCanvasListFocus = null;
 let lastExportedCanvasDebugPayload = null;
+let workspacePreviewRequestId = 0;
+const expandedWorkspaceDirectories = new Set();
+
+const workspacePreviewState = {
+  relativePath: null,
+  status: "empty",
+  data: null,
+  errorMessage: ""
+};
+
+const workspaceState = {
+  rootPath: null,
+  rootName: "",
+  entries: [],
+  isTruncated: false,
+  lastError: "",
+  isRefreshing: false
+};
+
+const WORKSPACE_PREVIEW_KIND_LABELS = {
+  json: "JSON",
+  markdown: "Markdown",
+  text: "Text",
+  javascript: "JS",
+  typescript: "TS",
+  python: "PY",
+  shell: "Shell",
+  html: "HTML",
+  css: "CSS",
+  yaml: "YAML"
+};
 
 const panState = {
   pointerId: null,
@@ -98,6 +133,15 @@ const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalI
 
   setNodeExitedState(nodeRecord, exitCode, signal);
   renderCanvasList();
+});
+
+const removeWorkspaceDirectoryDataListener = window.noteCanvas.onWorkspaceDirectoryData((snapshot) => {
+  if (snapshot === null) {
+    clearWorkspaceSnapshot("Workspace folder is unavailable.");
+    return;
+  }
+
+  applyWorkspaceSnapshot(snapshot);
 });
 
 function isElement(value) {
@@ -1123,6 +1167,488 @@ function renderCanvasList() {
   focusPendingCanvasListControl();
 }
 
+function hasWorkspaceDirectory() {
+  return typeof workspaceState.rootPath === "string" && workspaceState.rootPath.length > 0;
+}
+
+function getWorkspaceEntryName(relativePath) {
+  return relativePath.split("/").at(-1) ?? relativePath;
+}
+
+function getWorkspaceEntryParentPath(relativePath) {
+  const segments = relativePath.split("/");
+  segments.pop();
+  return segments.join("/");
+}
+
+function compareWorkspaceEntries(leftEntry, rightEntry) {
+  if (leftEntry.kind !== rightEntry.kind) {
+    return leftEntry.kind === "directory" ? -1 : 1;
+  }
+
+  return leftEntry.name.localeCompare(rightEntry.name);
+}
+
+function normalizeWorkspaceEntries(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries.flatMap((entry) => {
+    if (typeof entry?.relativePath !== "string" || entry.relativePath.length === 0) {
+      return [];
+    }
+
+    return [{
+      name: typeof entry.name === "string" ? entry.name : entry.relativePath.split("/").at(-1) ?? entry.relativePath,
+      relativePath: entry.relativePath,
+      kind: entry.kind === "directory" ? "directory" : "file"
+    }];
+  });
+}
+
+function getWorkspaceDirectoryPaths() {
+  return new Set(
+    workspaceState.entries
+      .filter((entry) => entry.kind === "directory")
+      .map((entry) => entry.relativePath)
+  );
+}
+
+function getWorkspaceFilePaths() {
+  return new Set(
+    workspaceState.entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => entry.relativePath)
+  );
+}
+
+function clearWorkspacePreview() {
+  workspacePreviewRequestId += 1;
+  workspacePreviewState.relativePath = null;
+  workspacePreviewState.status = "empty";
+  workspacePreviewState.data = null;
+  workspacePreviewState.errorMessage = "";
+}
+
+function isWorkspacePreviewOpen() {
+  return typeof workspacePreviewState.relativePath === "string" && workspacePreviewState.relativePath.length > 0;
+}
+
+function getWorkspacePreviewTypeLabel() {
+  const language = workspacePreviewState.data?.language;
+  return typeof language === "string" && language.length > 0
+    ? (WORKSPACE_PREVIEW_KIND_LABELS[language] ?? language.toUpperCase())
+    : "File";
+}
+
+function syncAppShellWorkspaceState() {
+  appShell?.classList.toggle("has-file-inspector", isWorkspacePreviewOpen());
+}
+
+function buildWorkspaceTreeRows() {
+  const childrenByParentPath = new Map();
+
+  workspaceState.entries.forEach((entry) => {
+    const parentPath = getWorkspaceEntryParentPath(entry.relativePath);
+    const currentChildren = childrenByParentPath.get(parentPath) ?? [];
+    currentChildren.push(entry);
+    childrenByParentPath.set(parentPath, currentChildren);
+  });
+
+  childrenByParentPath.forEach((entries, parentPath) => {
+    childrenByParentPath.set(parentPath, entries.sort(compareWorkspaceEntries));
+  });
+
+  const rows = [];
+
+  function appendRows(parentPath, depth) {
+    const children = childrenByParentPath.get(parentPath) ?? [];
+
+    children.forEach((entry) => {
+      const isDirectory = entry.kind === "directory";
+      const isExpanded = isDirectory && expandedWorkspaceDirectories.has(entry.relativePath);
+
+      rows.push({
+        ...entry,
+        depth,
+        isExpanded,
+        isSelected: workspacePreviewState.relativePath === entry.relativePath
+      });
+
+      if (isExpanded) {
+        appendRows(entry.relativePath, depth + 1);
+      }
+    });
+  }
+
+  appendRows("", 0);
+  return rows;
+}
+
+function renderFileInspector() {
+  if (!(fileInspector instanceof HTMLElement)) {
+    return;
+  }
+
+  syncAppShellWorkspaceState();
+
+  if (!isWorkspacePreviewOpen()) {
+    fileInspector.replaceChildren();
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const header = document.createElement("div");
+  header.className = "file-inspector-header";
+
+  const heading = document.createElement("div");
+  heading.className = "file-inspector-heading";
+
+  const title = document.createElement("div");
+  title.className = "file-inspector-title";
+  title.textContent = workspacePreviewState.data?.fileName ?? getWorkspaceEntryName(workspacePreviewState.relativePath);
+
+  const pathMeta = document.createElement("div");
+  pathMeta.className = "file-inspector-path";
+  pathMeta.textContent = workspacePreviewState.relativePath;
+  pathMeta.title = workspacePreviewState.relativePath;
+
+  const typeBadge = document.createElement("div");
+  typeBadge.className = "file-inspector-type";
+  typeBadge.textContent = getWorkspacePreviewTypeLabel();
+
+  heading.append(title, pathMeta, typeBadge);
+
+  const actions = document.createElement("div");
+  actions.className = "file-inspector-actions";
+
+  const refreshButton = document.createElement("button");
+  refreshButton.className = "canvas-secondary-button file-inspector-button";
+  refreshButton.type = "button";
+  refreshButton.dataset.fileInspectorAction = "refresh";
+  refreshButton.textContent = workspacePreviewState.status === "loading" ? "Loading" : "Refresh";
+  refreshButton.disabled = workspacePreviewState.status === "loading";
+  refreshButton.addEventListener("click", () => {
+    void refreshSelectedWorkspaceFilePreview();
+  });
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "canvas-secondary-button file-inspector-button";
+  closeButton.type = "button";
+  closeButton.dataset.fileInspectorAction = "close";
+  closeButton.textContent = "Close";
+  closeButton.addEventListener("click", () => {
+    clearWorkspacePreview();
+    renderWorkspaceBrowser();
+    renderFileInspector();
+  });
+
+  actions.append(refreshButton, closeButton);
+  header.append(heading, actions);
+  fragment.append(header);
+
+  const body = document.createElement("div");
+  body.className = "file-inspector-body";
+
+  if (workspacePreviewState.status === "loading") {
+    const loading = document.createElement("div");
+    loading.className = "file-inspector-empty";
+    loading.textContent = "Loading file preview...";
+    body.append(loading);
+  } else if (workspacePreviewState.status === "error") {
+    const error = document.createElement("div");
+    error.className = "file-inspector-error";
+    error.textContent = workspacePreviewState.errorMessage;
+    body.append(error);
+  } else if (workspacePreviewState.data?.kind === "unsupported") {
+    const unsupported = document.createElement("div");
+    unsupported.className = "file-inspector-empty";
+    unsupported.textContent = "Preview not available for this file type.";
+    body.append(unsupported);
+  } else if (workspacePreviewState.data?.kind === "too-large") {
+    const tooLarge = document.createElement("div");
+    tooLarge.className = "file-inspector-empty";
+    tooLarge.textContent = "This file is too large to preview here.";
+    body.append(tooLarge);
+  } else {
+    const pre = document.createElement("pre");
+    pre.className = "file-inspector-content";
+    pre.textContent = workspacePreviewState.data?.contents ?? "";
+    body.append(pre);
+  }
+
+  fragment.append(body);
+  fileInspector.replaceChildren(fragment);
+}
+
+async function loadWorkspaceFilePreview(relativePath) {
+  const requestId = ++workspacePreviewRequestId;
+  const previewRootPath = workspaceState.rootPath;
+  workspacePreviewState.relativePath = relativePath;
+  workspacePreviewState.status = "loading";
+  workspacePreviewState.data = null;
+  workspacePreviewState.errorMessage = "";
+  renderWorkspaceBrowser();
+  renderFileInspector();
+
+  try {
+    const preview = await window.noteCanvas.readWorkspaceFile(relativePath);
+
+    if (
+      requestId !== workspacePreviewRequestId
+      || workspacePreviewState.relativePath !== relativePath
+      || workspaceState.rootPath !== previewRootPath
+    ) {
+      return null;
+    }
+
+    workspacePreviewState.data = preview;
+    workspacePreviewState.status = "ready";
+    workspacePreviewState.errorMessage = "";
+    renderWorkspaceBrowser();
+    renderFileInspector();
+    return preview;
+  } catch (error) {
+    if (
+      requestId !== workspacePreviewRequestId
+      || workspacePreviewState.relativePath !== relativePath
+      || workspaceState.rootPath !== previewRootPath
+    ) {
+      return null;
+    }
+
+    workspacePreviewState.status = "error";
+    workspacePreviewState.data = null;
+    workspacePreviewState.errorMessage = error instanceof Error ? error.message : String(error);
+    renderWorkspaceBrowser();
+    renderFileInspector();
+    return null;
+  }
+}
+
+async function selectWorkspaceFile(relativePath) {
+  if (!getWorkspaceFilePaths().has(relativePath)) {
+    return null;
+  }
+
+  return loadWorkspaceFilePreview(relativePath);
+}
+
+async function refreshSelectedWorkspaceFilePreview() {
+  if (!isWorkspacePreviewOpen()) {
+    return null;
+  }
+
+  return loadWorkspaceFilePreview(workspacePreviewState.relativePath);
+}
+
+function toggleWorkspaceDirectory(relativePath) {
+  if (expandedWorkspaceDirectories.has(relativePath)) {
+    expandedWorkspaceDirectories.delete(relativePath);
+  } else {
+    expandedWorkspaceDirectories.add(relativePath);
+  }
+
+  renderWorkspaceBrowser();
+}
+
+function updateWorkspaceControls() {
+  if (refreshWorkspaceButton instanceof HTMLButtonElement) {
+    refreshWorkspaceButton.disabled = !hasWorkspaceDirectory() || workspaceState.isRefreshing;
+    refreshWorkspaceButton.textContent = workspaceState.isRefreshing ? "Refreshing" : "Refresh";
+  }
+}
+
+function renderWorkspaceBrowser() {
+  if (!(workspaceBrowser instanceof HTMLElement)) {
+    return;
+  }
+
+  updateWorkspaceControls();
+  const fragment = document.createDocumentFragment();
+
+  if (hasWorkspaceDirectory()) {
+    const summary = document.createElement("div");
+    summary.className = "workspace-browser-summary";
+
+    const name = document.createElement("div");
+    name.className = "workspace-browser-name";
+    name.textContent = workspaceState.rootName;
+
+    const currentPath = document.createElement("div");
+    currentPath.className = "workspace-browser-path";
+    currentPath.textContent = workspaceState.rootPath;
+    currentPath.title = workspaceState.rootPath;
+
+    const meta = document.createElement("div");
+    meta.className = "workspace-browser-meta";
+    meta.textContent = `${workspaceState.entries.length} ${workspaceState.entries.length === 1 ? "entry" : "entries"}`;
+
+    summary.append(name, currentPath, meta);
+    fragment.append(summary);
+
+    if (workspaceState.entries.length > 0) {
+      const entryList = document.createElement("ul");
+      entryList.className = "workspace-browser-list";
+
+      buildWorkspaceTreeRows().forEach((entry) => {
+        const item = document.createElement("li");
+        item.className = "workspace-browser-row";
+
+        const button = document.createElement("button");
+        button.className = `workspace-browser-entry is-${entry.kind}`;
+        button.type = "button";
+        button.dataset.workspacePath = entry.relativePath;
+        button.dataset.workspaceKind = entry.kind;
+        button.style.setProperty("--workspace-entry-depth", String(entry.depth));
+        button.title = entry.relativePath;
+        button.setAttribute("aria-label", entry.kind === "directory" ? `${entry.isExpanded ? "Collapse" : "Expand"} ${entry.relativePath}` : `Preview ${entry.relativePath}`);
+        button.classList.toggle("is-selected", entry.isSelected);
+
+        const kind = document.createElement("span");
+        kind.className = "workspace-browser-entry-kind";
+        kind.textContent = entry.kind === "directory" ? (entry.isExpanded ? "open" : "dir") : "file";
+
+        const label = document.createElement("span");
+        label.className = "workspace-browser-entry-label";
+        label.textContent = entry.name;
+
+        button.append(kind, label);
+
+        if (entry.kind === "directory") {
+          button.setAttribute("aria-expanded", entry.isExpanded ? "true" : "false");
+          button.addEventListener("click", () => {
+            toggleWorkspaceDirectory(entry.relativePath);
+          });
+        } else {
+          button.addEventListener("click", () => {
+            void selectWorkspaceFile(entry.relativePath);
+          });
+        }
+
+        item.append(button);
+        entryList.append(item);
+      });
+
+      fragment.append(entryList);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "workspace-browser-empty";
+      empty.textContent = "This folder is empty.";
+      fragment.append(empty);
+    }
+
+    if (workspaceState.isTruncated) {
+      const truncated = document.createElement("div");
+      truncated.className = "workspace-browser-truncated";
+      truncated.textContent = "Listing trimmed to keep the sidebar responsive.";
+      fragment.append(truncated);
+    }
+  } else {
+    const empty = document.createElement("div");
+    empty.className = workspaceState.lastError.length > 0 ? "workspace-browser-error" : "workspace-browser-empty";
+    empty.textContent = workspaceState.lastError.length > 0
+      ? workspaceState.lastError
+      : "Open a folder to browse files here and make new terminals start there.";
+    fragment.append(empty);
+  }
+
+  workspaceBrowser.replaceChildren(fragment);
+}
+
+function applyWorkspaceSnapshot(snapshot) {
+  const previousRootPath = workspaceState.rootPath;
+  workspaceState.rootPath = typeof snapshot?.rootPath === "string" ? snapshot.rootPath : null;
+  workspaceState.rootName = typeof snapshot?.rootName === "string" ? snapshot.rootName : "";
+  workspaceState.entries = normalizeWorkspaceEntries(snapshot?.entries);
+  workspaceState.isTruncated = snapshot?.isTruncated === true;
+  workspaceState.lastError = "";
+  const validDirectoryPaths = getWorkspaceDirectoryPaths();
+  const validFilePaths = getWorkspaceFilePaths();
+
+  [...expandedWorkspaceDirectories].forEach((directoryPath) => {
+    if (!validDirectoryPaths.has(directoryPath)) {
+      expandedWorkspaceDirectories.delete(directoryPath);
+    }
+  });
+
+  if (previousRootPath !== null && previousRootPath !== workspaceState.rootPath) {
+    expandedWorkspaceDirectories.clear();
+    clearWorkspacePreview();
+  }
+
+  if (workspacePreviewState.relativePath !== null && !validFilePaths.has(workspacePreviewState.relativePath)) {
+    clearWorkspacePreview();
+  }
+
+  renderWorkspaceBrowser();
+  renderFileInspector();
+}
+
+function clearWorkspaceSnapshot(errorMessage = "") {
+  workspaceState.rootPath = null;
+  workspaceState.rootName = "";
+  workspaceState.entries = [];
+  workspaceState.isTruncated = false;
+  workspaceState.lastError = typeof errorMessage === "string" ? errorMessage : "";
+  expandedWorkspaceDirectories.clear();
+  clearWorkspacePreview();
+  renderWorkspaceBrowser();
+  renderFileInspector();
+}
+
+async function refreshWorkspaceDirectory(options = {}) {
+  if (!hasWorkspaceDirectory() || workspaceState.isRefreshing) {
+    return null;
+  }
+
+  workspaceState.isRefreshing = true;
+  updateWorkspaceControls();
+
+  try {
+    const snapshot = await window.noteCanvas.refreshWorkspaceDirectory();
+
+    if (snapshot === null) {
+      clearWorkspaceSnapshot();
+      return null;
+    }
+
+    applyWorkspaceSnapshot(snapshot);
+    return snapshot;
+  } catch (error) {
+    clearWorkspaceSnapshot(error instanceof Error ? error.message : String(error));
+
+    if (options.silent !== true) {
+      console.error(error);
+    }
+
+    return null;
+  } finally {
+    workspaceState.isRefreshing = false;
+    updateWorkspaceControls();
+  }
+}
+
+async function openWorkspaceDirectory() {
+  const opened = await window.noteCanvas.openWorkspaceDirectory();
+
+  if (opened?.canceled) {
+    return null;
+  }
+
+  if (opened?.snapshot == null) {
+    throw new Error("Workspace folder contents were unavailable.");
+  }
+
+  applyWorkspaceSnapshot(opened.snapshot);
+  return opened.snapshot;
+}
+
+function getDefaultTerminalWorkingDirectory() {
+  return hasWorkspaceDirectory() ? workspaceState.rootPath : null;
+}
+
 function sanitizeCanvasExportName(canvasName) {
   const fallbackName = "canvas-learning-canvas";
   const normalizedName = typeof canvasName === "string" && canvasName.trim().length > 0 ? canvasName.trim() : fallbackName;
@@ -1687,7 +2213,7 @@ async function createTerminalNode(options) {
     y: options.y,
     width: DEFAULT_NODE_WIDTH,
     height: DEFAULT_NODE_HEIGHT,
-    cwd: typeof options.cwd === "string" && options.cwd.trim().length > 0 ? options.cwd : null,
+    cwd: typeof options.cwd === "string" && options.cwd.trim().length > 0 ? options.cwd : getDefaultTerminalWorkingDirectory(),
     isRemoved: false,
     isExited: false,
     isMaximized: options.isMaximized === true,
@@ -2043,6 +2569,8 @@ function handleWindowKeyDown(event) {
 
 createCanvas();
 setSidebarCollapsed(false);
+renderWorkspaceBrowser();
+renderFileInspector();
 
 window.addEventListener("beforeunload", () => {
   isWindowUnloading = true;
@@ -2066,6 +2594,7 @@ window.addEventListener("beforeunload", () => {
   window.removeEventListener("keydown", handleWindowKeyDown);
   removeTerminalDataListener();
   removeTerminalExitListener();
+  removeWorkspaceDirectoryDataListener();
   terminalNodeMap.forEach((nodeRecord) => {
     nodeRecord.resizeObserver?.disconnect();
     void window.noteCanvas.destroyTerminal(nodeRecord.terminalId);
@@ -2079,6 +2608,9 @@ if (window.noteCanvas.isSmokeTest) {
     const activeCanvas = getActiveCanvas();
     const activeNodes = activeCanvas?.nodes ?? [];
     const boardRect = board.getBoundingClientRect();
+    const sidebarRect = appShell?.querySelector(".canvas-sidebar")?.getBoundingClientRect();
+    const workspaceSection = workspaceBrowser?.closest(".sidebar-section");
+    const workspaceSectionRect = workspaceSection instanceof HTMLElement ? workspaceSection.getBoundingClientRect() : null;
     const nodeScreenPositions = activeCanvas === null
       ? []
       : activeNodes.map((nodeRecord) => {
@@ -2128,6 +2660,22 @@ if (window.noteCanvas.isSmokeTest) {
         return nodeStyles.display !== "none" && nodeStyles.visibility !== "hidden" && Number.parseFloat(nodeStyles.opacity || "1") > 0;
       }).length,
       sidebarCollapsed: isSidebarCollapsed,
+        workspaceRootPath: workspaceState.rootPath,
+        workspaceEntryPaths: workspaceState.entries.map((entry) => entry.relativePath),
+        workspaceVisibleEntryPaths: [...workspaceBrowser.querySelectorAll("[data-workspace-path]")].map((entryElement) => entryElement.dataset.workspacePath).filter((entryPath) => typeof entryPath === "string"),
+        workspaceIsTruncated: workspaceState.isTruncated,
+        workspaceSelectedFilePath: workspacePreviewState.relativePath,
+        workspacePreviewStatus: workspacePreviewState.status,
+        workspacePreviewKind: workspacePreviewState.data?.kind ?? null,
+        workspacePreviewContents: workspacePreviewState.data?.contents ?? "",
+        fileInspectorVisible: appShell?.classList.contains("has-file-inspector") === true,
+        workspaceSectionVisible: Boolean(
+          sidebarRect
+          && workspaceSectionRect
+          && workspaceSectionRect.height > 0
+          && workspaceSectionRect.top >= sidebarRect.top
+          && workspaceSectionRect.bottom <= sidebarRect.bottom
+        ),
         fullscreenExitVisible: boardFullscreenExitButton instanceof HTMLElement
           && getComputedStyle(boardFullscreenExitButton).pointerEvents !== "none"
           && Number.parseFloat(getComputedStyle(boardFullscreenExitButton).opacity) > 0.01
@@ -2215,6 +2763,14 @@ if (window.noteCanvas.isSmokeTest) {
         firstTerminalText: snapshot.firstTerminalText,
         visibleNodeCount: snapshot.visibleNodeCount,
         sidebarCollapsed: snapshot.sidebarCollapsed,
+        workspaceRootPath: snapshot.workspaceRootPath,
+        workspaceEntryPaths: snapshot.workspaceEntryPaths,
+        workspaceVisibleEntryPaths: snapshot.workspaceVisibleEntryPaths,
+        workspaceSelectedFilePath: snapshot.workspaceSelectedFilePath,
+        workspacePreviewStatus: snapshot.workspacePreviewStatus,
+        workspacePreviewKind: snapshot.workspacePreviewKind,
+        workspacePreviewContents: snapshot.workspacePreviewContents,
+        fileInspectorVisible: snapshot.fileInspectorVisible,
         fullscreenExitVisible: snapshot.fullscreenExitVisible
       };
     },
@@ -2382,6 +2938,58 @@ if (window.noteCanvas.isSmokeTest) {
 
       return window.__canvasLearningDebug.importCanvasData(lastExportedCanvasDebugPayload);
     },
+    openWorkspaceDirectoryForPath: async (directoryPath) => {
+      const snapshot = await window.noteCanvas.debugOpenWorkspaceDirectory(directoryPath);
+      applyWorkspaceSnapshot(snapshot);
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
+    },
+    toggleWorkspaceDirectory: async (relativePath) => {
+      const workspaceButton = workspaceBrowser.querySelector(`[data-workspace-kind="directory"][data-workspace-path="${CSS.escape(relativePath)}"]`);
+
+      if (workspaceButton instanceof HTMLButtonElement) {
+        workspaceButton.click();
+        await waitForAnimationFrame();
+      }
+
+      return getCanvasSnapshot();
+    },
+    selectWorkspaceFile: async (relativePath) => {
+      const workspaceButton = workspaceBrowser.querySelector(`[data-workspace-kind="file"][data-workspace-path="${CSS.escape(relativePath)}"]`);
+
+      if (workspaceButton instanceof HTMLButtonElement) {
+        workspaceButton.click();
+        await waitForAnimationFrame();
+      }
+
+      return getCanvasSnapshot();
+    },
+    refreshSelectedWorkspaceFilePreview: async () => {
+      const refreshButton = fileInspector?.querySelector('[data-file-inspector-action="refresh"]');
+
+      if (refreshButton instanceof HTMLButtonElement) {
+        refreshButton.click();
+        await waitForAnimationFrame();
+      }
+
+      return getCanvasSnapshot();
+    },
+    populateWorkspaceEntries: async (count = 120) => {
+      const entryCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 120;
+      applyWorkspaceSnapshot({
+        rootPath: "/tmp/canvas-learning-workspace-debug",
+        rootName: "canvas_desktop",
+        isTruncated: false,
+        entries: Array.from({ length: entryCount }, (_value, index) => ({
+          name: `file-${index + 1}.txt`,
+          relativePath: `nested/path/file-${index + 1}.txt`,
+          kind: "file",
+          depth: 2
+        }))
+      });
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
+    },
     updateLastExportedCanvasFirstCwd: (cwd) => {
       if (
         lastExportedCanvasDebugPayload === null
@@ -2478,6 +3086,18 @@ exportCanvasButton?.addEventListener("click", () => {
 
 importCanvasButton?.addEventListener("click", () => {
   void importCanvas().catch((error) => {
+    console.error(error);
+  });
+});
+
+openWorkspaceButton?.addEventListener("click", () => {
+  void openWorkspaceDirectory().catch((error) => {
+    console.error(error);
+  });
+});
+
+refreshWorkspaceButton?.addEventListener("click", () => {
+  void refreshWorkspaceDirectory().catch((error) => {
     console.error(error);
   });
 });

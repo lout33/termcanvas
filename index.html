@@ -17,10 +17,22 @@
           <div class="canvas-file-actions" aria-label="Canvas file actions">
             <button class="canvas-secondary-button" id="export-canvas-button" type="button">Export JSON</button>
             <button class="canvas-secondary-button" id="import-canvas-button" type="button">Import JSON</button>
+            <button class="canvas-secondary-button" id="open-workspace-button" type="button">Open Folder</button>
+            <button class="canvas-secondary-button" id="refresh-workspace-button" type="button">Refresh</button>
           </div>
         </div>
 
-        <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>
+        <div class="canvas-sidebar-content">
+          <section class="sidebar-section" aria-label="Canvas list section">
+            <div class="sidebar-section-header">Canvases</div>
+            <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>
+          </section>
+
+          <section class="sidebar-section" aria-label="Workspace browser section">
+            <div class="sidebar-section-header">Folders</div>
+            <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
+          </section>
+        </div>
       </aside>
 
       <main class="workspace-shell">
@@ -48,6 +60,8 @@
           <section class="nodes-layer" id="nodes-layer" aria-label="Infinite terminal canvas"></section>
         </section>
       </main>
+
+      <aside class="file-inspector" id="file-inspector" aria-label="File preview"></aside>
     </div>
 
     <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>

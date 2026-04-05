@@ -84,6 +84,7 @@
   --note-width: 18rem;
   --note-min-height: 10rem;
   --sidebar-width: 17rem;
+  --inspector-width: 23rem;
   --grid-size: 1.25rem;
   --measure-hairline: 0.0625rem;
   --measure-focus-ring: 0.0625rem;
@@ -133,13 +134,21 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0;
   min-height: 100vh;
   transition: grid-template-columns 220ms ease;
 }
 
+.app-shell.has-file-inspector {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(18rem, var(--inspector-width));
+}
+
 .app-shell.is-sidebar-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
+.app-shell.is-sidebar-collapsed.has-file-inspector {
+  grid-template-columns: 0 minmax(0, 1fr) minmax(18rem, var(--inspector-width));
 }
 
 .canvas-sidebar {
@@ -148,6 +157,7 @@ button {
   grid-template-rows: auto minmax(0, 1fr);
   align-content: start;
   gap: var(--space-3);
+  height: 100vh;
   min-height: 100vh;
   padding: var(--space-4);
   border-right: 1px solid var(--color-sidebar-rule);
@@ -189,6 +199,32 @@ button {
   gap: var(--space-2);
   padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--color-sidebar-rule);
+}
+
+.canvas-sidebar-content {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: var(--space-1);
+}
+
+.sidebar-section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.sidebar-section-header {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sidebar-meta);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .canvas-create-button,
@@ -260,6 +296,11 @@ button {
   color: var(--color-ink);
 }
 
+.canvas-secondary-button:disabled {
+  opacity: 0.46;
+  cursor: default;
+}
+
 .canvas-create-button:focus-visible,
 .canvas-secondary-button:focus-visible,
 .canvas-list-button:focus-visible,
@@ -277,8 +318,242 @@ button {
   padding: 0;
   list-style: none;
   min-height: 0;
+  max-height: 40vh;
   overflow-y: auto;
   padding-right: var(--space-1);
+}
+
+.workspace-browser {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  max-height: 42vh;
+  border: 1px solid var(--color-sidebar-rule);
+  border-radius: var(--radius-sm);
+  background: rgba(9, 12, 18, 0.56);
+  overflow: hidden;
+}
+
+.workspace-browser-summary,
+.workspace-browser-empty,
+.workspace-browser-error,
+.workspace-browser-truncated {
+  padding: var(--space-3);
+}
+
+.workspace-browser-summary {
+  display: grid;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--color-sidebar-rule);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.workspace-browser-name {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-browser-path,
+.workspace-browser-meta,
+.workspace-browser-truncated {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sidebar-meta);
+  letter-spacing: 0.08em;
+}
+
+.workspace-browser-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.workspace-browser-meta,
+.workspace-browser-truncated {
+  text-transform: uppercase;
+}
+
+.workspace-browser-empty,
+.workspace-browser-error {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.workspace-browser-error {
+  color: var(--color-sidebar-delete);
+}
+
+.workspace-browser-list {
+  display: grid;
+  align-content: start;
+  gap: 0.125rem;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  list-style: none;
+}
+
+.workspace-browser-row {
+  min-width: 0;
+}
+
+.workspace-browser-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 var(--space-2);
+  padding-left: calc(var(--space-2) + (var(--workspace-entry-depth, 0) * 0.85rem));
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-browser-entry.is-directory {
+  background: rgba(84, 118, 255, 0.08);
+  border-color: rgba(116, 150, 255, 0.12);
+}
+
+.workspace-browser-entry:hover,
+.workspace-browser-entry.is-selected {
+  background: rgba(116, 150, 255, 0.13);
+  border-color: rgba(116, 150, 255, 0.24);
+}
+
+.workspace-browser-entry-kind {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.workspace-browser-entry.is-directory .workspace-browser-entry-kind {
+  color: rgba(191, 219, 254, 0.9);
+}
+
+.workspace-browser-entry-label {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 0.83rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-inspector {
+  min-width: 0;
+  max-width: 100%;
+  border-left: 1px solid var(--color-sidebar-rule);
+  background:
+    linear-gradient(180deg, rgba(10, 12, 17, 0.98), rgba(8, 10, 14, 0.98)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 26%);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(0.75rem);
+  transition:
+    opacity var(--transition-base),
+    transform 220ms ease,
+    border-color var(--transition-base);
+}
+
+.app-shell.has-file-inspector .file-inspector {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.file-inspector-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-sidebar-rule);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.file-inspector-heading {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.file-inspector-title {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 1rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-inspector-path,
+.file-inspector-type {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sidebar-meta);
+  letter-spacing: 0.08em;
+}
+
+.file-inspector-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.file-inspector-type {
+  text-transform: uppercase;
+}
+
+.file-inspector-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.file-inspector-button {
+  min-width: 4.5rem;
+}
+
+.file-inspector-body {
+  height: calc(100vh - 5.75rem);
+  min-height: 0;
+  padding: var(--space-4);
+  overflow: auto;
+}
+
+.file-inspector-content {
+  margin: 0;
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-inspector-empty,
+.file-inspector-error {
+  color: var(--color-muted);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.file-inspector-error {
+  color: var(--color-sidebar-delete);
 }
 
 .canvas-list-item {
@@ -1122,9 +1397,24 @@ button {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
+  .app-shell.has-file-inspector {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) minmax(14rem, 35vh);
+  }
+
   .canvas-sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--color-sidebar-rule);
+  }
+
+  .file-inspector {
+    border-left: 0;
+    border-top: 1px solid var(--color-sidebar-rule);
+  }
+
+  .file-inspector-body {
+    height: auto;
+    max-height: calc(35vh - 5rem);
   }
 
   .sidebar-toggle-button {
@@ -1134,6 +1424,10 @@ button {
 
   .app-shell.is-sidebar-collapsed {
     grid-template-rows: 0 minmax(0, 1fr);
+  }
+
+  .app-shell.is-sidebar-collapsed.has-file-inspector {
+    grid-template-rows: 0 minmax(0, 1fr) minmax(14rem, 35vh);
   }
 
   .canvas-list {

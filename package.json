@@ -6,6 +6,7 @@
   "main": "main.js",
   "scripts": {
     "postinstall": "python3 -c \"from pathlib import Path; [p.exists() and p.chmod(p.stat().st_mode | 0o111) for p in [Path('node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'), Path('node_modules/node-pty/prebuilds/darwin-x64/spawn-helper')]]\"",
+    "test": "node --test test/*.test.js",
     "build": "node --check main.js && node --check preload.js && node --check renderer.js",
     "dev": "npm run build && electron ."
   },

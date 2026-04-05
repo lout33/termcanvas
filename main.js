@@ -3,8 +3,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const pty = require("node-pty");
+const { createDirectorySnapshot } = require("./directory_snapshot");
+const { readWorkspaceFilePreview } = require("./workspace_file_preview");
 
 const terminalSessions = new Map();
+const workspaceDirectories = new Map();
+const workspaceWatchers = new Map();
+const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 
 function resolveShell() {
   return process.env.SHELL || "/bin/zsh";
@@ -28,22 +33,128 @@ function resolveInitialWorkingDirectory() {
   return os.homedir();
 }
 
-function resolveTerminalWorkingDirectory(requestedCwd) {
-  if (typeof requestedCwd !== "string" || requestedCwd.trim().length === 0) {
-    return resolveInitialWorkingDirectory();
+function resolveExistingDirectoryPath(requestedPath) {
+  if (typeof requestedPath !== "string" || requestedPath.trim().length === 0) {
+    return null;
   }
 
-  const normalizedPath = path.resolve(requestedCwd);
+  const normalizedPath = path.resolve(requestedPath);
 
   try {
     if (fs.existsSync(normalizedPath) && fs.statSync(normalizedPath).isDirectory()) {
       return normalizedPath;
     }
   } catch {
-    return resolveInitialWorkingDirectory();
+    return null;
   }
 
-  return resolveInitialWorkingDirectory();
+  return null;
+}
+
+function resolveTerminalWorkingDirectory(requestedCwd) {
+  return resolveExistingDirectoryPath(requestedCwd) ?? resolveInitialWorkingDirectory();
+}
+
+function getOwnerWorkspaceDirectory(ownerWebContentsId) {
+  return workspaceDirectories.get(ownerWebContentsId) ?? null;
+}
+
+function destroyWorkspaceWatcher(ownerWebContentsId) {
+  const workspaceWatcher = workspaceWatchers.get(ownerWebContentsId);
+
+  if (workspaceWatcher === undefined) {
+    return;
+  }
+
+  if (workspaceWatcher.refreshTimeout !== 0) {
+    clearTimeout(workspaceWatcher.refreshTimeout);
+  }
+
+  workspaceWatcher.watcher?.close();
+  workspaceWatchers.delete(ownerWebContentsId);
+}
+
+function pushWorkspaceSnapshotToOwner(ownerWebContentsId) {
+  const workspaceDirectory = getOwnerWorkspaceDirectory(ownerWebContentsId);
+  const resolvedDirectoryPath = resolveExistingDirectoryPath(workspaceDirectory);
+
+  if (resolvedDirectoryPath === null) {
+    setOwnerWorkspaceDirectory(ownerWebContentsId, null);
+    sendToOwner(ownerWebContentsId, "workspace-directory:data", null);
+    return;
+  }
+
+  try {
+    sendToOwner(ownerWebContentsId, "workspace-directory:data", createDirectorySnapshot(resolvedDirectoryPath));
+  } catch {
+    setOwnerWorkspaceDirectory(ownerWebContentsId, null);
+    sendToOwner(ownerWebContentsId, "workspace-directory:data", null);
+  }
+}
+
+function scheduleWorkspaceSnapshotPush(ownerWebContentsId) {
+  const workspaceWatcher = workspaceWatchers.get(ownerWebContentsId);
+
+  if (workspaceWatcher === undefined) {
+    return;
+  }
+
+  if (workspaceWatcher.refreshTimeout !== 0) {
+    clearTimeout(workspaceWatcher.refreshTimeout);
+  }
+
+  workspaceWatcher.refreshTimeout = setTimeout(() => {
+    workspaceWatcher.refreshTimeout = 0;
+    pushWorkspaceSnapshotToOwner(ownerWebContentsId);
+  }, WORKSPACE_WATCH_DEBOUNCE_MS);
+}
+
+function watchWorkspaceDirectory(ownerWebContentsId, directoryPath) {
+  destroyWorkspaceWatcher(ownerWebContentsId);
+
+  try {
+    const watcher = fs.watch(directoryPath, { recursive: true }, () => {
+      scheduleWorkspaceSnapshotPush(ownerWebContentsId);
+    });
+
+    watcher.on("error", () => {
+      scheduleWorkspaceSnapshotPush(ownerWebContentsId);
+    });
+
+    workspaceWatchers.set(ownerWebContentsId, {
+      watcher,
+      refreshTimeout: 0
+    });
+  } catch {
+    workspaceWatchers.delete(ownerWebContentsId);
+  }
+}
+
+function setOwnerWorkspaceDirectory(ownerWebContentsId, directoryPath) {
+  if (typeof directoryPath === "string" && directoryPath.length > 0) {
+    workspaceDirectories.set(ownerWebContentsId, directoryPath);
+    return;
+  }
+
+  workspaceDirectories.delete(ownerWebContentsId);
+  destroyWorkspaceWatcher(ownerWebContentsId);
+}
+
+function resolveDialogDefaultDirectory(ownerWebContentsId) {
+  return resolveExistingDirectoryPath(getOwnerWorkspaceDirectory(ownerWebContentsId)) ?? app.getPath("documents");
+}
+
+function openWorkspaceDirectoryForOwner(ownerWebContentsId, directoryPath) {
+  const resolvedDirectoryPath = resolveExistingDirectoryPath(directoryPath);
+
+  if (resolvedDirectoryPath === null) {
+    throw new Error("Selected workspace folder is unavailable.");
+  }
+
+  const snapshot = createDirectorySnapshot(resolvedDirectoryPath);
+  setOwnerWorkspaceDirectory(ownerWebContentsId, resolvedDirectoryPath);
+  watchWorkspaceDirectory(ownerWebContentsId, resolvedDirectoryPath);
+  return snapshot;
 }
 
 function escapeShellPathForSingleQuotes(targetPath) {
@@ -155,6 +266,11 @@ function destroyOwnedTerminalSessions(ownerWebContentsId) {
   });
 }
 
+function destroyOwnedWindowState(ownerWebContentsId) {
+  destroyOwnedTerminalSessions(ownerWebContentsId);
+  setOwnerWorkspaceDirectory(ownerWebContentsId, null);
+}
+
 function ensureAuthorizedSession(event, terminalId) {
   const session = getSession(terminalId);
 
@@ -208,6 +324,8 @@ function delay(milliseconds) {
 }
 
 async function runSmokeTest(window) {
+  let smokeWorkspacePath = null;
+
   try {
     const logStep = (label) => {
       console.log(`[smoke] ${label}`);
@@ -351,11 +469,116 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: fallback imported terminal did not actually start in the default working directory.");
     }
 
+    logStep("verify workspace section stays visible");
+    await window.webContents.executeJavaScript(`Array.from({ length: 18 }, () => window.__canvasLearningDebug.createCanvas())`);
+    const workspaceSidebarSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.populateWorkspaceEntries(240)");
+
+    if (
+      workspaceSidebarSnapshot.workspaceRootPath !== "/tmp/canvas-learning-workspace-debug"
+      || workspaceSidebarSnapshot.workspaceEntryPaths.length !== 240
+      || workspaceSidebarSnapshot.workspaceSectionVisible !== true
+    ) {
+      throw new Error(`Smoke test failed: workspace sidebar section was clipped after loading folder entries. Snapshot: ${JSON.stringify(workspaceSidebarSnapshot)}`);
+    }
+
+    const sidebarScrollSnapshot = await window.webContents.executeJavaScript(`(() => {
+      const sidebarContent = document.querySelector('.canvas-sidebar-content');
+
+      if (!(sidebarContent instanceof HTMLElement)) {
+        return null;
+      }
+
+      return {
+        clientHeight: sidebarContent.clientHeight,
+        scrollHeight: sidebarContent.scrollHeight,
+        overflowY: getComputedStyle(sidebarContent).overflowY
+      };
+    })()`);
+
+    if (
+      sidebarScrollSnapshot === null
+      || !["auto", "scroll"].includes(sidebarScrollSnapshot.overflowY)
+    ) {
+      throw new Error(`Smoke test failed: crowded sidebar content was not scrollable. Snapshot: ${JSON.stringify(sidebarScrollSnapshot)}`);
+    }
+
+    logStep("preview workspace markdown file");
+    smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
+    fs.mkdirSync(path.join(smokeWorkspacePath, "agent-output", "reports"), { recursive: true });
+    fs.writeFileSync(path.join(smokeWorkspacePath, "agent-output", "reports", "notes.md"), "# Smoke Report\n\nfirst pass\n", "utf8");
+    fs.writeFileSync(path.join(smokeWorkspacePath, "artifact.bin"), Buffer.from([0xde, 0xad, 0xbe, 0xef]));
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(smokeWorkspacePath)})`);
+    const workspaceOpenSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceRootPath === smokeWorkspacePath && snapshot.workspaceVisibleEntryPaths.includes("agent-output"),
+      4000
+    );
+
+    if (workspaceOpenSnapshot.workspaceRootPath !== smokeWorkspacePath) {
+      throw new Error("Smoke test failed: debug workspace path did not open in the renderer.");
+    }
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.toggleWorkspaceDirectory(${JSON.stringify("agent-output")})`);
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.toggleWorkspaceDirectory(${JSON.stringify("agent-output/reports")})`);
+    const expandedWorkspaceSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceVisibleEntryPaths.includes("agent-output/reports/notes.md"),
+      4000
+    );
+
+    if (!expandedWorkspaceSnapshot.workspaceVisibleEntryPaths.includes("agent-output/reports/notes.md")) {
+      throw new Error("Smoke test failed: nested workspace file did not become visible after expanding folders.");
+    }
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("agent-output/reports/notes.md")})`);
+    const markdownPreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.fileInspectorVisible === true && snapshot.workspacePreviewContents.includes("# Smoke Report"),
+      4000
+    );
+
+    if (
+      markdownPreviewSnapshot.workspaceSelectedFilePath !== "agent-output/reports/notes.md"
+      || markdownPreviewSnapshot.workspacePreviewContents.includes("# Smoke Report") !== true
+    ) {
+      throw new Error(`Smoke test failed: markdown preview did not open correctly. Snapshot: ${JSON.stringify(markdownPreviewSnapshot)}`);
+    }
+
+    logStep("refresh selected workspace file preview");
+    fs.writeFileSync(path.join(smokeWorkspacePath, "agent-output", "reports", "notes.md"), "# Smoke Report\n\nsecond pass\n", "utf8");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.refreshSelectedWorkspaceFilePreview()");
+    const refreshedPreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspacePreviewContents.includes("second pass"),
+      4000
+    );
+
+    if (!refreshedPreviewSnapshot.workspacePreviewContents.includes("second pass")) {
+      throw new Error("Smoke test failed: manual file preview refresh did not reload updated content.");
+    }
+
+    logStep("preview unsupported workspace file");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("artifact.bin")})`);
+    const unsupportedPreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspacePreviewKind === "unsupported",
+      4000
+    );
+
+    if (unsupportedPreviewSnapshot.workspacePreviewKind !== "unsupported") {
+      throw new Error("Smoke test failed: unsupported workspace file did not produce the expected fallback preview state.");
+    }
+
     console.log("Smoke test passed.");
     app.quit();
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     app.exit(1);
+  } finally {
+    if (typeof smokeWorkspacePath === "string") {
+      fs.rmSync(smokeWorkspacePath, { recursive: true, force: true });
+    }
   }
 }
 
@@ -378,8 +601,81 @@ app.on("window-all-closed", () => {
 
 app.on("web-contents-created", (_event, contents) => {
   contents.on("destroyed", () => {
-    destroyOwnedTerminalSessions(contents.id);
+    destroyOwnedWindowState(contents.id);
   });
+});
+
+ipcMain.handle("workspace-directory:open", async (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+
+  if (ownerWindow === null) {
+    throw new Error("Unable to resolve owner window.");
+  }
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(ownerWindow, {
+    title: "Open workspace folder",
+    defaultPath: resolveDialogDefaultDirectory(event.sender.id),
+    properties: ["openDirectory"]
+  });
+
+  const selectedPath = filePaths[0];
+
+  if (canceled || typeof selectedPath !== "string") {
+    return { canceled: true };
+  }
+
+  const snapshot = openWorkspaceDirectoryForOwner(event.sender.id, selectedPath);
+
+  return {
+    canceled: false,
+    snapshot
+  };
+});
+
+ipcMain.handle("workspace-directory:debug-open", (event, payload) => {
+  if (process.env.CANVAS_SMOKE_TEST !== "1") {
+    throw new Error("Workspace debug open is only available during smoke tests.");
+  }
+
+  return openWorkspaceDirectoryForOwner(
+    event.sender.id,
+    typeof payload?.directoryPath === "string" ? payload.directoryPath : ""
+  );
+});
+
+ipcMain.handle("workspace-directory:refresh", (event) => {
+  const workspaceDirectory = getOwnerWorkspaceDirectory(event.sender.id);
+
+  if (workspaceDirectory === null) {
+    return null;
+  }
+
+  const resolvedDirectoryPath = resolveExistingDirectoryPath(workspaceDirectory);
+
+  if (resolvedDirectoryPath === null) {
+    setOwnerWorkspaceDirectory(event.sender.id, null);
+    throw new Error("Workspace folder is unavailable.");
+  }
+
+  try {
+    return createDirectorySnapshot(resolvedDirectoryPath);
+  } catch {
+    setOwnerWorkspaceDirectory(event.sender.id, null);
+    throw new Error("Workspace folder is unavailable.");
+  }
+});
+
+ipcMain.handle("workspace-file:read", (event, payload) => {
+  const workspaceDirectory = getOwnerWorkspaceDirectory(event.sender.id);
+
+  if (workspaceDirectory === null) {
+    throw new Error("Open a workspace folder before previewing files.");
+  }
+
+  return readWorkspaceFilePreview(
+    workspaceDirectory,
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
+  );
 });
 
 ipcMain.handle("terminal:create", (event, payload) => {
@@ -530,7 +826,7 @@ ipcMain.handle("canvas:save-file", async (event, payload) => {
 
   const { canceled, filePath } = await dialog.showSaveDialog(ownerWindow, {
     title: "Export canvas JSON",
-    defaultPath: path.join(app.getPath("documents"), `${suggestedName}.json`),
+    defaultPath: path.join(resolveDialogDefaultDirectory(event.sender.id), `${suggestedName}.json`),
     filters: [{ name: "Canvas JSON", extensions: ["json"] }]
   });
 
@@ -551,6 +847,7 @@ ipcMain.handle("canvas:open-file", async (event) => {
 
   const { canceled, filePaths } = await dialog.showOpenDialog(ownerWindow, {
     title: "Import canvas JSON",
+    defaultPath: resolveDialogDefaultDirectory(event.sender.id),
     properties: ["openFile"],
     filters: [{ name: "Canvas JSON", extensions: ["json"] }]
   });

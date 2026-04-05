@@ -5,6 +5,10 @@ contextBridge.exposeInMainWorld(
   Object.freeze({
     appName: "Canvas Learning",
     isSmokeTest: process.env.CANVAS_SMOKE_TEST === "1",
+    openWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:open"),
+    refreshWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:refresh"),
+    debugOpenWorkspaceDirectory: (directoryPath) => ipcRenderer.invoke("workspace-directory:debug-open", { directoryPath }),
+    readWorkspaceFile: (relativePath) => ipcRenderer.invoke("workspace-file:read", { relativePath }),
     createTerminal: (payload) => ipcRenderer.invoke("terminal:create", payload),
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),
@@ -26,6 +30,14 @@ contextBridge.exposeInMainWorld(
 
       return () => {
         ipcRenderer.removeListener("terminal:exit", listener);
+      };
+    },
+    onWorkspaceDirectoryData: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("workspace-directory:data", listener);
+
+      return () => {
+        ipcRenderer.removeListener("workspace-directory:data", listener);
       };
     }
   })
