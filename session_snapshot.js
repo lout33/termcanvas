@@ -8,6 +8,14 @@ function normalizeString(value) {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function normalizeSessionKey(value) {
+  const normalizedValue = normalizeString(value);
+
+  return normalizedValue !== null && /^[A-Za-z0-9_-]+$/u.test(normalizedValue)
+    ? normalizedValue
+    : null;
+}
+
 function normalizeNumber(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -86,6 +94,7 @@ function normalizeWorkspaceSnapshot(workspace) {
 
 function normalizeTerminalNodeSnapshot(nodeSnapshot) {
   return {
+    sessionKey: normalizeSessionKey(nodeSnapshot?.sessionKey),
     x: normalizeNumber(nodeSnapshot?.x, 0),
     y: normalizeNumber(nodeSnapshot?.y, 0),
     width: normalizeNumber(nodeSnapshot?.width, 544),

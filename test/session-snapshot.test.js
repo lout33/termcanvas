@@ -98,6 +98,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     viewportOffset: { x: 120, y: -40 },
     viewportScale: 1.25,
     terminalNodes: [{
+      sessionKey: null,
       x: 10,
       y: 20,
       width: 600,
@@ -112,6 +113,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     }]
   });
   assert.deepEqual(snapshot.canvases[1].terminalNodes[0], {
+    sessionKey: null,
     x: 0,
     y: 0,
     width: 544,
@@ -124,4 +126,19 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     exitCode: null,
     exitSignal: null
   });
+});
+
+test("normalizeAppSessionSnapshot keeps only safe terminal session keys", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    canvases: [{
+      id: "canvas-1",
+      terminalNodes: [
+        { sessionKey: "terminal_session-1" },
+        { sessionKey: "../../bad" }
+      ]
+    }]
+  });
+
+  assert.equal(snapshot.canvases[0].terminalNodes[0].sessionKey, "terminal_session-1");
+  assert.equal(snapshot.canvases[0].terminalNodes[1].sessionKey, null);
 });

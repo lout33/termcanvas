@@ -20,7 +20,10 @@ contextBridge.exposeInMainWorld(
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),
     resizeTerminal: (terminalId, cols, rows) => ipcRenderer.invoke("terminal:resize", { terminalId, cols, rows }),
-    destroyTerminal: (terminalId) => ipcRenderer.invoke("terminal:destroy", { terminalId }),
+    destroyTerminal: (terminalId, options = {}) => ipcRenderer.invoke("terminal:destroy", {
+      terminalId,
+      preserveSession: options?.preserveSession === true
+    }),
     saveCanvasFile: (payload) => ipcRenderer.invoke("canvas:save-file", payload),
     openCanvasFile: () => ipcRenderer.invoke("canvas:open-file"),
     onTerminalData: (callback) => {

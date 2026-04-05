@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, webContents } = require("electron");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
@@ -23,6 +24,8 @@ const workspaceRegistries = new Map();
 const workspaceWatchers = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
+const TMUX_SESSION_PREFIX = "canvas-learning";
+let cachedTmuxBinary = undefined;
 
 function resolveShell() {
   return process.env.SHELL || "/bin/zsh";
@@ -66,6 +69,110 @@ function resolveExistingDirectoryPath(requestedPath) {
 
 function resolveTerminalWorkingDirectory(requestedCwd) {
   return resolveExistingDirectoryPath(requestedCwd) ?? resolveInitialWorkingDirectory();
+}
+
+function getTerminalEnvironment() {
+  const environment = {
+    ...process.env,
+    TERM: "xterm-256color"
+  };
+
+  delete environment.TMUX;
+  return environment;
+}
+
+function normalizeTerminalSessionKey(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]+$/u.test(value)
+    ? value
+    : null;
+}
+
+function getTmuxBinary() {
+  if (cachedTmuxBinary !== undefined) {
+    return cachedTmuxBinary;
+  }
+
+  const tmuxCheck = spawnSync("tmux", ["-V"], {
+    encoding: "utf8",
+    env: getTerminalEnvironment()
+  });
+
+  cachedTmuxBinary = tmuxCheck.status === 0 ? "tmux" : null;
+  return cachedTmuxBinary;
+}
+
+function getTmuxSessionName(sessionKey) {
+  return `${TMUX_SESSION_PREFIX}-${sessionKey}`;
+}
+
+function runTmuxCommand(args) {
+  const tmuxBinary = getTmuxBinary();
+
+  if (tmuxBinary === null) {
+    return null;
+  }
+
+  return spawnSync(tmuxBinary, args, {
+    encoding: "utf8",
+    env: getTerminalEnvironment()
+  });
+}
+
+function isTmuxSessionMissing(result) {
+  return typeof result?.stderr === "string" && /can't find session/u.test(result.stderr);
+}
+
+function hasTmuxSession(sessionName) {
+  const result = runTmuxCommand(["has-session", "-t", sessionName]);
+  return result !== null && result.status === 0;
+}
+
+function ensureTmuxCommandSucceeded(result, actionLabel) {
+  if (result === null || result.status !== 0) {
+    const details = typeof result?.stderr === "string" && result.stderr.trim().length > 0
+      ? result.stderr.trim()
+      : `tmux failed while trying to ${actionLabel}.`;
+    throw new Error(details);
+  }
+}
+
+function configureTmuxSession(sessionName) {
+  [["status", "off"], ["destroy-unattached", "off"]].forEach(([optionName, optionValue]) => {
+    ensureTmuxCommandSucceeded(
+      runTmuxCommand(["set-option", "-t", sessionName, optionName, optionValue]),
+      `configure tmux session ${sessionName}`
+    );
+  });
+}
+
+function createTmuxSession(sessionName, cwd) {
+  ensureTmuxCommandSucceeded(
+    runTmuxCommand(["new-session", "-d", "-s", sessionName, "-c", cwd]),
+    `create tmux session ${sessionName}`
+  );
+  configureTmuxSession(sessionName);
+}
+
+function destroyTmuxSession(sessionName) {
+  const result = runTmuxCommand(["kill-session", "-t", sessionName]);
+
+  if (result !== null && result.status !== 0 && !isTmuxSessionMissing(result)) {
+    throw new Error(result.stderr?.trim() || `Failed to close tmux session ${sessionName}.`);
+  }
+}
+
+function resolveTmuxSessionWorkingDirectory(sessionName) {
+  const result = runTmuxCommand(["display-message", "-p", "-t", sessionName, "#{pane_current_path}"]);
+
+  if (result === null || result.status !== 0) {
+    return null;
+  }
+
+  return resolveExistingDirectoryPath(result.stdout?.trim() ?? "");
+}
+
+function shouldPreserveTerminalSessionsOnWindowClose() {
+  return process.env.CANVAS_SMOKE_TEST !== "1";
 }
 
 function isAppSessionPersistenceEnabled() {
@@ -464,28 +571,40 @@ function sendToOwner(ownerWebContentsId, channel, payload) {
   }
 }
 
-function destroyTerminalSession(terminalId) {
+function destroyTerminalSession(terminalId, options = {}) {
   const session = getSession(terminalId);
+  const preserveSession = options.preserveSession === true;
 
   if (session === undefined || session.isDisposing) {
     return;
   }
 
   session.isDisposing = true;
+
+  if (!preserveSession && session.backend === "tmux" && typeof session.tmuxSessionName === "string") {
+    try {
+      destroyTmuxSession(session.tmuxSessionName);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+    }
+  }
+
   session.pty.kill();
   terminalSessions.delete(terminalId);
 }
 
-function destroyOwnedTerminalSessions(ownerWebContentsId) {
+function destroyOwnedTerminalSessions(ownerWebContentsId, options = {}) {
   terminalSessions.forEach((session, terminalId) => {
     if (session.ownerWebContentsId === ownerWebContentsId) {
-      destroyTerminalSession(terminalId);
+      destroyTerminalSession(terminalId, options);
     }
   });
 }
 
 function destroyOwnedWindowState(ownerWebContentsId) {
-  destroyOwnedTerminalSessions(ownerWebContentsId);
+  destroyOwnedTerminalSessions(ownerWebContentsId, {
+    preserveSession: shouldPreserveTerminalSessionsOnWindowClose()
+  });
   destroyOwnedWorkspaceWatchers(ownerWebContentsId);
   workspaceRegistries.delete(ownerWebContentsId);
 }
@@ -502,6 +621,56 @@ function ensureAuthorizedSession(event, terminalId) {
   }
 
   return session;
+}
+
+function createTmuxClientSession(options) {
+  const tmuxBinary = getTmuxBinary();
+
+  if (tmuxBinary === null) {
+    return null;
+  }
+
+  const tmuxSessionName = getTmuxSessionName(options.sessionKey);
+  const sessionAlreadyExists = hasTmuxSession(tmuxSessionName);
+
+  if (!sessionAlreadyExists) {
+    createTmuxSession(tmuxSessionName, options.cwd);
+  }
+
+  try {
+    const terminalPty = pty.spawn(tmuxBinary, ["attach-session", "-t", tmuxSessionName], {
+      name: "xterm-256color",
+      cols: options.cols,
+      rows: options.rows,
+      cwd: options.cwd,
+      env: getTerminalEnvironment()
+    });
+    const resolvedCwd = resolveTmuxSessionWorkingDirectory(tmuxSessionName) ?? options.cwd;
+
+    return {
+      session: {
+        ownerWebContentsId: options.ownerWebContentsId,
+        pty: terminalPty,
+        shellName: options.shellName,
+        cwd: resolvedCwd,
+        isDisposing: false,
+        backend: "tmux",
+        sessionKey: options.sessionKey,
+        tmuxSessionName
+      },
+      cwd: resolvedCwd
+    };
+  } catch (error) {
+    if (!sessionAlreadyExists) {
+      try {
+        destroyTmuxSession(tmuxSessionName);
+      } catch {
+        // Best effort cleanup when attach fails after creating the tmux session.
+      }
+    }
+
+    throw error;
+  }
 }
 
 function createMainWindow() {
@@ -1140,30 +1309,39 @@ ipcMain.handle("terminal:create", (event, payload) => {
   const shell = resolveShell();
   const shellName = path.basename(shell);
   const terminalCwd = resolveTerminalWorkingDirectory(cwd);
+  const sessionKey = normalizeTerminalSessionKey(payload?.sessionKey) ?? terminalId;
   const shouldEnforceRequestedCwd = typeof cwd === "string" && cwd.trim().length > 0;
 
-  const terminalPty = pty.spawn(shell, [], {
+  const tmuxSession = createTmuxClientSession({
+    ownerWebContentsId: event.sender.id,
+    cols: safeCols,
+    rows: safeRows,
+    cwd: terminalCwd,
+    shellName,
+    sessionKey
+  });
+  const terminalPty = tmuxSession?.session?.pty ?? pty.spawn(shell, [], {
     name: "xterm-256color",
     cols: safeCols,
     rows: safeRows,
     cwd: terminalCwd,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color"
-    }
+    env: getTerminalEnvironment()
   });
 
-  const session = {
+  const session = tmuxSession?.session ?? {
     ownerWebContentsId: event.sender.id,
     pty: terminalPty,
     shellName,
     cwd: terminalCwd,
-    isDisposing: false
+    isDisposing: false,
+    backend: "pty",
+    sessionKey,
+    tmuxSessionName: null
   };
 
   terminalSessions.set(terminalId, session);
 
-  if (shouldEnforceRequestedCwd) {
+  if (shouldEnforceRequestedCwd && session.backend !== "tmux") {
     terminalPty.write(`cd -- '${escapeShellPathForSingleQuotes(terminalCwd)}'\r`);
   }
 
@@ -1175,18 +1353,21 @@ ipcMain.handle("terminal:create", (event, payload) => {
   });
 
   terminalPty.onExit(({ exitCode, signal }) => {
-    sendToOwner(session.ownerWebContentsId, "terminal:exit", {
-      terminalId,
-      exitCode,
-      signal
-    });
+    if (!session.isDisposing) {
+      sendToOwner(session.ownerWebContentsId, "terminal:exit", {
+        terminalId,
+        exitCode,
+        signal
+      });
+    }
+
     terminalSessions.delete(terminalId);
   });
 
   return {
     terminalId,
     shellName,
-    cwd: terminalCwd,
+    cwd: session.cwd,
     cols: safeCols,
     rows: safeRows
   };
@@ -1255,7 +1436,9 @@ ipcMain.handle("terminal:destroy", (event, payload) => {
     throw new Error("Terminal session is not owned by this window.");
   }
 
-  destroyTerminalSession(payload.terminalId);
+  destroyTerminalSession(payload.terminalId, {
+    preserveSession: payload?.preserveSession === true
+  });
 });
 
 ipcMain.handle("canvas:save-file", async (event, payload) => {

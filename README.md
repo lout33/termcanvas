@@ -2,38 +2,57 @@
 
 Canvas Learning is a minimal Electron app for spatial terminal workflows.
 
-Instead of text notes, the canvas opens real shell terminals as world-space nodes. You can pan across the canvas, double-click empty space to create a terminal node, and interact with each shell directly inside the board.
+Instead of text notes, the canvas opens real shell terminals as world-space nodes. You can pan and zoom the board, open multiple canvases, browse workspace files, and reopen the app into the same working session.
 
 ## What it does
 
-- Multi-canvas sidebar with create, switch, delete, and inline canvas rename
-- Infinite-style canvas with drag-to-pan navigation and modifier-wheel zoom on the background
+- Multi-canvas workspace with create, switch, rename, delete, and reorder
+- Infinite-style canvas with drag-to-pan navigation and modifier-wheel zoom
 - Double-click empty space to create a terminal node
-- Real interactive shell sessions backed by the local machine
-- One shell session per node
-- Inline terminal node renaming, resize, and canvas-level maximize/restore
-- Clear exited-state recovery with reopen-in-place for a fresh shell
-- Export the active canvas to a JSON file
-- Import a canvas JSON file as a new canvas
-- Persist each terminal node's tracked working directory in canvas JSON
+- Real interactive shell terminals rendered with `xterm.js`
+- Resize, rename, maximize, restore, and close terminal nodes
+- Overlay left drawer for canvases and imported workspace folders
+- Multiple imported workspace folders with reorder and active-folder switching
+- Workspace file browser and file preview inspector
+- App-session restore across relaunches
+- tmux-backed live terminal reattach on reopen when `tmux` is available
+- Canvas JSON export/import for the active canvas
 - Clean Electron security boundary: Node stays out of the renderer
 
-## What it does not do yet
+## Session persistence
 
-- Full app persistence or automatic session restore across launches
-- Node connections, minimap, or collaboration
-- Multi-window shared terminal sessions
+The app now persists both UI state and terminal identity.
 
-Imported canvas files restore terminal layout, node UI metadata, and each terminal node's tracked working directory. Imported nodes still start fresh shell processes, so shell history and long-running processes are not restored.
+On a normal app run:
+
+- canvases, node layout, viewport, workspaces, and preview state are saved automatically
+- each terminal node saves a stable session identity
+- if `tmux` is available, closing the app detaches from the live shell instead of killing it
+- reopening the app reattaches the node to the same running shell session
+
+Important behavior:
+
+- closing a terminal node with `×` destroys that terminal for real
+- closing the app/window preserves live tmux-backed terminals for relaunch
+- if `tmux` is unavailable, the app falls back to plain PTY shells and still restores layout/state, but not the exact live shell process
 
 ## Working directory behavior
 
-- New terminals start in the app's default terminal directory.
-- Exported canvases store each terminal node's tracked working directory.
-- Imported canvases reopen each terminal in that saved directory when it still exists.
-- If the saved directory no longer exists, the app falls back to the default terminal directory.
+- new terminals start in the active workspace folder when one is selected
+- otherwise they start in the app default terminal directory
+- the renderer tracks straightforward `cd` usage and keeps each node's cwd updated
+- exported canvases store each terminal node's tracked working directory
+- restored terminals reopen or reattach using that saved directory when possible
+- if the saved directory no longer exists, the app falls back to the default terminal directory
 
-Current limitation: for MVP simplicity, cwd tracking follows straightforward `cd` usage instead of trying to perfectly reconstruct every possible shell-specific directory change pattern.
+Current limitation: cwd tracking still follows straightforward `cd` usage rather than trying to perfectly reconstruct every shell-specific directory change pattern.
+
+## What it does not do yet
+
+- node connections, minimap, or collaboration
+- polished multi-window shared-terminal UX
+- advanced tmux/session diagnostics in the UI
+- guaranteed session continuity if tmux sessions are manually killed outside the app
 
 ## Run it
 
@@ -42,23 +61,26 @@ npm install
 npm run dev
 ```
 
+`tmux` is recommended for true terminal persistence across app relaunches.
+
 ## Build check
 
 ```bash
 npm run build
 ```
 
-This build step is a fast syntax check for the main, preload, and renderer scripts.
+This build step is a fast syntax check for `main.js`, `preload.js`, and `renderer.js`.
 
 ## Fast smoke test
 
-The project includes a short MVP smoke path that checks the core runtime only:
+The project includes a focused Electron smoke path that checks the core runtime:
 
 - app launches
 - terminal node creation works
 - terminal output flows back into the node
 - canvases stay isolated
 - exported/imported terminals preserve tracked working directories
+- workspace preview and list behaviors still work
 
 Run it with:
 
@@ -66,7 +88,7 @@ Run it with:
 CANVAS_SMOKE_TEST=1 npm run dev
 ```
 
-This smoke suite is intentionally small and should finish quickly.
+Smoke mode intentionally disables persisted relaunch behavior so tests do not leave tmux sessions or app-session files behind.
 
 ## How it works
 
@@ -76,50 +98,50 @@ The app is split into three layers:
 
 File: `main.js`
 
-- Creates the BrowserWindow
-- Owns all shell-backed PTY sessions through `node-pty`
-- Validates terminal ownership by Electron window
-- Relays terminal output and exit events back to the renderer
-- Cleans up terminal sessions when a window closes
+- creates the `BrowserWindow`
+- owns all terminal session state
+- spawns PTY clients through `node-pty`
+- attaches PTY clients to tmux-backed sessions when possible
+- falls back to raw shell PTYs when tmux is unavailable
+- validates terminal ownership by Electron window
+- handles workspace registry, file preview reads, and import/export dialogs
+- persists and restores the app-session snapshot under Electron `userData`
 
 ### 2. Electron preload bridge
 
 File: `preload.js`
 
-- Exposes a tiny, focused API into `window.noteCanvas`
-- Keeps `contextIsolation: true`
-- Prevents the renderer from getting direct Node or raw IPC access
-
-Current exposed API:
-
-- `createTerminal(payload)`
-- `resolveTrackedTerminalCwds(terminalIds)`
-- `writeTerminal(terminalId, data)`
-- `resizeTerminal(terminalId, cols, rows)`
-- `destroyTerminal(terminalId)`
-- `saveCanvasFile(payload)`
-- `openCanvasFile()`
-- `onTerminalData(callback)`
-- `onTerminalExit(callback)`
+- exposes a small, focused API on `window.noteCanvas`
+- keeps `contextIsolation: true`
+- prevents the renderer from getting direct Node or raw IPC access
 
 ### 3. Renderer canvas
 
 Files: `index.html`, `styles.css`, `renderer.js`
 
-- Maintains infinite-canvas viewport state
-- Stores terminal nodes in world coordinates
-- Serializes the active canvas to a versioned JSON shape
-- Restores imported canvas files as new canvases with fresh shell sessions
-- Renders one `xterm.js` instance per node
-- Converts scale-aware viewport movement into screen-space positioning
-- Prevents canvas panning when the pointer is inside a terminal node
+- maintains viewport state and world-space node positions
+- stores canvases, terminal nodes, drawer state, and preview state
+- mounts one `xterm.js` instance per live node
+- serializes and hydrates app-session state
+- serializes canvas exports and restores imported canvases as new nodes
+- treats terminal nodes as UI plus layout state, not process owners
+
+## Terminal identity model
+
+There are two important ids in the system:
+
+- `terminalId`: the current live renderer-to-main attachment
+- `sessionKey`: the stable terminal identity saved with the node
+
+The stable `sessionKey` is what allows a terminal node to reattach to the same tmux-backed shell after the app reopens.
 
 ## Dependencies
 
 - `electron` for the desktop shell
-- `node-pty` for local shell processes
+- `node-pty` for PTY clients
+- `tmux` for persistent terminal reattach across relaunches
 - `@xterm/xterm` for terminal rendering
-- `@xterm/addon-fit` for sizing the terminal to its node container
+- `@xterm/addon-fit` for sizing terminals to node containers
 
 ## Default shell behavior
 
@@ -128,14 +150,20 @@ On macOS, the app uses:
 1. `process.env.SHELL`
 2. fallback: `/bin/zsh`
 
+## Keyboard shortcuts
+
+- `Cmd+B`: toggle the left drawer
+- `Cmd+L`: close the file preview inspector
+- `Esc`: close the current preview or exit maximize mode
+
 ## Next logical steps
 
 If you keep growing this app, the clean next steps are:
 
-1. node persistence
-2. node resizing
-3. reconnectable sessions
-4. canvas zoom
-5. terminal session restore
+1. stronger relaunch-specific tests for persistent tmux sessions
+2. better stale-session recovery UI when a tmux session is missing
+3. multi-window shared-terminal behavior
+4. richer workspace actions
+5. session cleanup and diagnostics tools
 
 If you add those, read `AGENTS.md` first so you keep the process boundaries intact.

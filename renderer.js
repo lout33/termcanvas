@@ -428,12 +428,13 @@ async function releaseTerminalSession(nodeRecord, options = {}) {
   nodeRecord.syncSize = () => {};
 
   if (shouldDestroySession && typeof terminalId === "string") {
-    await window.noteCanvas.destroyTerminal(terminalId);
+    await window.noteCanvas.destroyTerminal(terminalId, { preserveSession });
   }
 
   if (typeof terminalId === "string") {
     terminalNodeMap.delete(terminalId);
   }
+  const preserveSession = options.preserveSession === true;
 
   nodeRecord.terminalId = null;
   nodeRecord.terminal?.dispose();
@@ -479,7 +480,8 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       terminalId,
       cols: initialCols,
       rows: initialRows,
-      cwd: nodeRecord.cwd
+      cwd: nodeRecord.cwd,
+      sessionKey: nodeRecord.sessionKey
     });
 
     if (nodeRecord.isRemoved) {
@@ -2114,6 +2116,7 @@ function serializeWorkspaceSession() {
     expandedDirectoriesByRootPath: workspaceState.importedFolders.flatMap((folderRecord) => {
       const directoryPaths = [...getExpandedDirectoriesForFolder(folderRecord.id)];
 
+      sessionKey: nodeRecord.sessionKey,
       return directoryPaths.length === 0
         ? []
         : [{
@@ -2246,6 +2249,7 @@ async function restoreCanvasSession(sessionSnapshot) {
         });
       } catch (error) {
         console.error(error);
+          sessionKey: nodeSnapshot.sessionKey,
       }
     }
   }
@@ -2938,6 +2942,9 @@ async function createTerminalNode(options) {
     if (event.key === "Escape") {
       event.preventDefault();
       cancelNodeTitleEditing(nodeRecord);
+    sessionKey: typeof options.sessionKey === "string" && options.sessionKey.trim().length > 0
+      ? options.sessionKey
+      : crypto.randomUUID(),
       elements.titleInput.blur();
     }
   });
@@ -3259,7 +3266,12 @@ window.addEventListener("beforeunload", () => {
   removeWorkspaceDirectoryDataListener();
   terminalNodeMap.forEach((nodeRecord) => {
     nodeRecord.resizeObserver?.disconnect();
-    void window.noteCanvas.destroyTerminal(nodeRecord.terminalId);
+
+    if (typeof nodeRecord.terminalId === "string") {
+      void window.noteCanvas.destroyTerminal(nodeRecord.terminalId, {
+        preserveSession: window.noteCanvas.isSmokeTest !== true
+      });
+    }
   });
 });
 
