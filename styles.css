@@ -361,7 +361,7 @@ button {
   align-content: start;
   gap: var(--space-3);
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
   overflow-x: hidden;
   padding-right: var(--space-1);
 }
@@ -389,6 +389,10 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+}
+
+.sidebar-switcher-header-row {
+  align-items: flex-start;
 }
 
 .sidebar-section-header {
@@ -437,6 +441,7 @@ button {
 
 .canvas-create-button,
 .canvas-secondary-button,
+.canvas-switcher-trigger,
 .canvas-list-button,
 .canvas-list-editor,
 .canvas-list-action,
@@ -511,11 +516,124 @@ button {
 
 .canvas-create-button:focus-visible,
 .canvas-secondary-button:focus-visible,
+.canvas-switcher-trigger:focus-visible,
 .canvas-list-button:focus-visible,
 .canvas-list-action:focus-visible,
 .canvas-list-delete:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
+}
+
+.sidebar-switcher-section {
+  gap: var(--space-3);
+  overflow: visible;
+}
+
+.canvas-switcher-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  min-height: 4.5rem;
+  padding: var(--space-3);
+  border-color: var(--color-sidebar-rule);
+  border-radius: calc(var(--radius-md) + 0.125rem);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
+    rgba(8, 11, 16, 0.62);
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-switcher-trigger:hover,
+.canvas-switcher-trigger.is-open {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(11, 15, 22, 0.74);
+  border-color: var(--color-sidebar-accent-strong);
+}
+
+.canvas-switcher-trigger-copy {
+  display: grid;
+  gap: 0.24rem;
+  min-width: 0;
+}
+
+.canvas-switcher-trigger-label,
+.canvas-switcher-trigger-meta,
+.canvas-switcher-trigger-path {
+  min-width: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+}
+
+.canvas-switcher-trigger-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.canvas-switcher-trigger-name {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--color-ink);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-switcher-trigger-meta {
+  font-size: var(--text-sidebar-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.canvas-switcher-trigger-path {
+  overflow: hidden;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.canvas-switcher-trigger-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--color-muted);
+  transition: transform var(--transition-base), color var(--transition-base);
+}
+
+.canvas-switcher-trigger.is-open .canvas-switcher-trigger-icon {
+  color: var(--color-ink);
+  transform: rotate(180deg);
+}
+
+.canvas-switcher-menu {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-sidebar-rule);
+  border-radius: calc(var(--radius-md) + 0.125rem);
+  background:
+    linear-gradient(180deg, rgba(13, 17, 24, 0.98), rgba(9, 11, 16, 0.98)),
+    rgba(8, 11, 16, 0.94);
+  box-shadow: 0 1.25rem 2.5rem rgba(0, 0, 0, 0.34);
+}
+
+.canvas-switcher-menu-list {
+  max-height: min(16rem, 34vh);
 }
 
 .canvas-list {
@@ -531,82 +649,19 @@ button {
   padding-right: var(--space-1);
 }
 
-#canvas-list {
-  max-height: min(9rem, 18vh);
-}
-
 #workspace-browser-section {
   min-height: 0;
-}
-
-.workspace-folder-list {
-  min-height: 0;
-  max-height: none;
-}
-
-.workspace-section-stack {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--space-3);
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-subsection {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
-  border: 1px solid var(--color-sidebar-rule);
-  border-radius: var(--radius-sm);
-  background: rgba(9, 12, 18, 0.32);
-  overflow: hidden;
-}
-
-.workspace-folders-panel {
-  min-height: min(7rem, 14vh);
-  max-height: min(10rem, 22vh);
-}
-
-.workspace-navigator-panel {
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.workspace-subsection-header {
-  padding: 0.55rem var(--space-3);
-  border-bottom: 1px solid var(--color-sidebar-rule);
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 0.64rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.workspace-folders-panel .workspace-folder-list {
-  max-height: none;
-  padding: var(--space-2);
-}
-
-.workspace-folder-list .canvas-list-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  letter-spacing: 0.04em;
-  text-transform: none;
 }
 
 .workspace-browser {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: min(30rem, 62vh);
+  min-height: min(34rem, 68vh);
   height: 100%;
   max-height: none;
-  border: 0;
-  border-radius: 0;
-  background: rgba(9, 12, 18, 0.22);
+  border: 1px solid var(--color-sidebar-rule);
+  border-radius: calc(var(--radius-md) + 0.125rem);
+  background: rgba(9, 12, 18, 0.32);
   overflow: hidden;
 }
 

@@ -9,50 +9,19 @@ test("normalizeAppSessionSnapshot returns a safe empty session for invalid input
   assert.equal(snapshot.version, APP_SESSION_VERSION);
   assert.equal(snapshot.ui.isSidebarCollapsed, true);
   assert.equal(snapshot.ui.hasDismissedBoardIntro, false);
-  assert.deepEqual(snapshot.workspace, {
-    importedRootPaths: [],
-    activeRootPath: null,
-    expandedDirectoriesByRootPath: [],
-    preview: null
-  });
   assert.deepEqual(snapshot.canvases, []);
   assert.equal(snapshot.activeCanvasId, null);
 });
 
-test("normalizeAppSessionSnapshot keeps valid workspace session details and drops invalid entries", () => {
+test("normalizeAppSessionSnapshot keeps null canvas workspaces", () => {
   const snapshot = normalizeAppSessionSnapshot({
-    workspace: {
-      importedRootPaths: ["/tmp/a", "", "/tmp/b", "/tmp/a"],
-      activeRootPath: "/tmp/b",
-      expandedDirectoriesByRootPath: [
-        {
-          rootPath: "/tmp/a",
-          directoryPaths: ["src", "src", "", "src/components"]
-        },
-        {
-          rootPath: "/tmp/missing",
-          directoryPaths: ["ghost"]
-        }
-      ],
-      preview: {
-        rootPath: "/tmp/b",
-        relativePath: "README.md"
-      }
-    }
+    canvases: [{
+      id: "canvas-1",
+      workspace: null
+    }]
   });
 
-  assert.deepEqual(snapshot.workspace, {
-    importedRootPaths: ["/tmp/a", "/tmp/b"],
-    activeRootPath: "/tmp/b",
-    expandedDirectoriesByRootPath: [{
-      rootPath: "/tmp/a",
-      directoryPaths: ["src", "src/components"]
-    }],
-    preview: {
-      rootPath: "/tmp/b",
-      relativePath: "README.md"
-    }
-  });
+  assert.equal(snapshot.canvases[0].workspace, null);
 });
 
 test("normalizeAppSessionSnapshot normalizes canvases and active canvas selection", () => {
@@ -64,6 +33,12 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
         name: "First",
         viewportOffset: { x: 120, y: -40 },
         viewportScale: 1.25,
+        workspace: {
+          rootPath: "/tmp/project",
+          rootName: "project",
+          expandedDirectoryPaths: ["src", "src", "", "src/components"],
+          previewRelativePath: "README.md"
+        },
         terminalNodes: [{
           x: 10,
           y: 20,
@@ -97,6 +72,12 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     name: "First",
     viewportOffset: { x: 120, y: -40 },
     viewportScale: 1.25,
+    workspace: {
+      rootPath: "/tmp/project",
+      rootName: "project",
+      expandedDirectoryPaths: ["src", "src/components"],
+      previewRelativePath: "README.md"
+    },
     terminalNodes: [{
       sessionKey: null,
       x: 10,
@@ -112,6 +93,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
       exitSignal: "SIGTERM"
     }]
   });
+  assert.equal(snapshot.canvases[1].workspace, null);
   assert.deepEqual(snapshot.canvases[1].terminalNodes[0], {
     sessionKey: null,
     x: 0,
@@ -141,4 +123,60 @@ test("normalizeAppSessionSnapshot keeps only safe terminal session keys", () => 
 
   assert.equal(snapshot.canvases[0].terminalNodes[0].sessionKey, "terminal_session-1");
   assert.equal(snapshot.canvases[0].terminalNodes[1].sessionKey, null);
+});
+
+test("normalizeAppSessionSnapshot migrates legacy top-level workspace onto the active canvas only", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    activeCanvasId: "canvas-2",
+    workspace: {
+      importedRootPaths: ["/tmp/a", "/tmp/b", "/tmp/b"],
+      activeRootPath: "/tmp/b",
+      expandedDirectoriesByRootPath: [
+        {
+          rootPath: "/tmp/a",
+          directoryPaths: ["ignored"]
+        },
+        {
+          rootPath: "/tmp/b",
+          directoryPaths: ["src", "", "src", "src/components"]
+        }
+      ],
+      preview: {
+        rootPath: "/tmp/b",
+        relativePath: "README.md"
+      }
+    },
+    canvases: [
+      {
+        id: "canvas-1",
+        workspace: {
+          rootPath: "/existing",
+          rootName: "existing",
+          expandedDirectoryPaths: ["keep-me"],
+          previewRelativePath: "notes.md"
+        }
+      },
+      {
+        id: "canvas-2"
+      },
+      {
+        id: "canvas-3"
+      }
+    ]
+  });
+
+  assert.deepEqual(snapshot.canvases[0].workspace, {
+    rootPath: "/existing",
+    rootName: "existing",
+    expandedDirectoryPaths: ["keep-me"],
+    previewRelativePath: "notes.md"
+  });
+  assert.deepEqual(snapshot.canvases[1].workspace, {
+    rootPath: "/tmp/b",
+    rootName: "b",
+    expandedDirectoryPaths: ["src", "src/components"],
+    previewRelativePath: "README.md"
+  });
+  assert.equal(snapshot.canvases[2].workspace, null);
+  assert.equal(Object.hasOwn(snapshot, "workspace"), false);
 });

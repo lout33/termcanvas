@@ -429,6 +429,27 @@ function resetWorkspaceSessionForOwner(ownerWebContentsId) {
   workspaceRegistries.delete(ownerWebContentsId);
 }
 
+function chooseCanvasWorkspaceForOwner(ownerWebContentsId, directoryPath) {
+  const resolvedDirectoryPath = resolveExistingDirectoryPath(directoryPath);
+
+  if (resolvedDirectoryPath === null) {
+    throw new Error("Selected workspace folder is unavailable.");
+  }
+
+  const canonicalDirectoryPath = fs.realpathSync(resolvedDirectoryPath);
+  const workspaceRegistry = createWorkspaceRegistry();
+  const snapshot = {
+    ...createDirectorySnapshot(canonicalDirectoryPath),
+    lastError: ""
+  };
+  const importResult = importWorkspaceFolder(workspaceRegistry, snapshot);
+
+  destroyOwnedWorkspaceWatchers(ownerWebContentsId);
+  workspaceRegistries.set(ownerWebContentsId, workspaceRegistry);
+  watchWorkspaceDirectory(ownerWebContentsId, importResult.folderId, canonicalDirectoryPath);
+  return serializeWorkspaceRegistry(workspaceRegistry);
+}
+
 function restoreWorkspaceSessionForOwner(ownerWebContentsId, snapshot) {
   resetWorkspaceSessionForOwner(ownerWebContentsId);
 
@@ -719,6 +740,14 @@ async function runSmokeTest(window) {
       console.log(`[smoke] ${label}`);
     };
 
+    const getCanvasWorkspaceOwnership = (snapshot, canvasName) => {
+      if (!Array.isArray(snapshot?.canvasWorkspaceOwnerships)) {
+        return null;
+      }
+
+      return snapshot.canvasWorkspaceOwnerships.find((entry) => entry.canvasName === canvasName) ?? null;
+    };
+
     const waitForSnapshot = async (readerScript, predicate, timeout = 5000, interval = 100) => {
       const startTime = Date.now();
 
@@ -738,7 +767,39 @@ async function runSmokeTest(window) {
     logStep("create first terminal");
     await delay(250);
 
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.createTerminalAt(840, 360)");
+    const createTerminalResult = await window.webContents.executeJavaScript(`(async () => {
+      try {
+        const deadline = Date.now() + 5000;
+
+        while (typeof window.__canvasLearningDebug?.createTerminalAt !== "function" && Date.now() < deadline) {
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+        }
+
+        if (typeof window.__canvasLearningDebug?.createTerminalAt !== "function") {
+          throw new Error(
+            "window.__canvasLearningDebug.createTerminalAt is unavailable. noteCanvas="
+            + typeof window.noteCanvas
+            + ", isSmokeTest="
+            + String(window.noteCanvas?.isSmokeTest)
+            + ", bootError="
+            + String(window.__canvasLearningBootError)
+          );
+        }
+
+        await window.__canvasLearningDebug.createTerminalAt(840, 360);
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? (error.stack || error.message) : String(error)
+        };
+      }
+    })()`);
+
+    if (createTerminalResult?.ok !== true) {
+      throw new Error(`Smoke test failed: renderer could not create the first terminal. Details: ${createTerminalResult?.message ?? "unknown error"}`);
+    }
+
     const created = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
       (snapshot) => snapshot.hasNodes === true,
@@ -890,6 +951,9 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: crowded sidebar content was not scrollable. Snapshot: ${JSON.stringify(sidebarScrollSnapshot)}`);
     }
 
+    const workspaceOwnerCanvasIndex = workspaceSidebarSnapshot.canvasCount - 1;
+    const workspaceOwnerCanvasName = workspaceSidebarSnapshot.activeCanvasName;
+
     logStep("preview workspace markdown file");
     const smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
     smokeWorkspacePaths.push(smokeWorkspacePath);
@@ -977,7 +1041,43 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: unsupported workspace file did not produce the expected fallback preview state.");
     }
 
-    logStep("import second workspace folder");
+    logStep("restore markdown preview before canvas ownership checks");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("agent-output/reports/notes.md")})`);
+    const restoredMarkdownPreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceSelectedFilePath === "agent-output/reports/notes.md" && snapshot.workspacePreviewContents.includes("second pass"),
+      4000
+    );
+
+    if (
+      restoredMarkdownPreviewSnapshot.workspaceSelectedFilePath !== "agent-output/reports/notes.md"
+      || !restoredMarkdownPreviewSnapshot.workspacePreviewContents.includes("second pass")
+    ) {
+      throw new Error(`Smoke test failed: markdown preview was not restored before canvas ownership checks. Snapshot: ${JSON.stringify(restoredMarkdownPreviewSnapshot)}`);
+    }
+
+    logStep("fresh new canvas starts with null workspace");
+    const freshCanvasSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.createCanvas()");
+    const freshCanvasName = freshCanvasSnapshot.activeCanvasName;
+    const freshCanvasOwnership = getCanvasWorkspaceOwnership(freshCanvasSnapshot, freshCanvasName);
+
+    if (
+      freshCanvasSnapshot.workspaceRootPath !== null
+      || freshCanvasSnapshot.workspaceSelectedFilePath !== null
+      || freshCanvasSnapshot.fileInspectorVisible !== false
+      || freshCanvasOwnership?.workspaceRootPath !== null
+      || freshCanvasOwnership?.workspacePreviewRelativePath !== null
+    ) {
+      throw new Error(`Smoke test failed: fresh canvas inherited workspace state instead of starting empty. Snapshot: ${JSON.stringify(freshCanvasSnapshot)}`);
+    }
+
+    const freshCanvasDefaultCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
+
+    if (freshCanvasDefaultCwd !== null) {
+      throw new Error(`Smoke test failed: fresh canvas default cwd should be null. Value: ${JSON.stringify(freshCanvasDefaultCwd)}`);
+    }
+
+    logStep("bind second canvas to a different workspace");
     const secondWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
     smokeWorkspacePaths.push(secondWorkspacePath);
     const canonicalSecondWorkspacePath = fs.realpathSync(secondWorkspacePath);
@@ -985,114 +1085,102 @@ async function runSmokeTest(window) {
     fs.writeFileSync(path.join(secondWorkspacePath, "secondary", "beta.txt"), "second workspace\n", "utf8");
 
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(secondWorkspacePath)})`);
-    const multiWorkspaceSnapshot = await waitForSnapshot(
+    const secondCanvasWorkspaceSnapshot = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspaceImportedFolderPaths.includes(canonicalSmokeWorkspacePath) && snapshot.workspaceImportedFolderPaths.includes(canonicalSecondWorkspacePath),
+      (snapshot) => snapshot.workspaceRootPath === canonicalSecondWorkspacePath,
       4000
     );
+    const firstCanvasOwnershipOnSecondCanvas = getCanvasWorkspaceOwnership(secondCanvasWorkspaceSnapshot, workspaceOwnerCanvasName);
+    const secondCanvasOwnership = getCanvasWorkspaceOwnership(secondCanvasWorkspaceSnapshot, freshCanvasName);
 
     if (
-      multiWorkspaceSnapshot.workspaceImportedFolderPaths.length !== 2
-      || multiWorkspaceSnapshot.workspaceRootPath !== canonicalSecondWorkspacePath
-      || multiWorkspaceSnapshot.workspaceSelectedFilePath !== null
-      || multiWorkspaceSnapshot.fileInspectorVisible !== false
+      secondCanvasWorkspaceSnapshot.workspaceRootPath !== canonicalSecondWorkspacePath
+      || secondCanvasWorkspaceSnapshot.workspaceSelectedFilePath !== null
+      || secondCanvasWorkspaceSnapshot.fileInspectorVisible !== false
+      || firstCanvasOwnershipOnSecondCanvas?.workspaceRootPath !== canonicalSmokeWorkspacePath
+      || firstCanvasOwnershipOnSecondCanvas?.workspacePreviewRelativePath !== "agent-output/reports/notes.md"
+      || secondCanvasOwnership?.workspaceRootPath !== canonicalSecondWorkspacePath
+      || secondCanvasOwnership?.workspacePreviewRelativePath !== null
     ) {
-      throw new Error(`Smoke test failed: importing a second workspace folder did not produce the expected active-folder state. Snapshot: ${JSON.stringify(multiWorkspaceSnapshot)}`);
+      throw new Error(`Smoke test failed: binding a second canvas to its own workspace did not preserve per-canvas ownership. Snapshot: ${JSON.stringify(secondCanvasWorkspaceSnapshot)}`);
     }
 
-    const firstWorkspaceFolderId = multiWorkspaceSnapshot.workspaceImportedFolders.find((folder) => folder.rootPath === canonicalSmokeWorkspacePath)?.id ?? null;
-    const secondWorkspaceFolderId = multiWorkspaceSnapshot.workspaceImportedFolders.find((folder) => folder.rootPath === canonicalSecondWorkspacePath)?.id ?? null;
+    const secondCanvasDefaultCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
 
-    if (firstWorkspaceFolderId === null || secondWorkspaceFolderId === null) {
-      throw new Error(`Smoke test failed: imported workspace folder ids were unavailable. Snapshot: ${JSON.stringify(multiWorkspaceSnapshot)}`);
+    if (secondCanvasDefaultCwd !== canonicalSecondWorkspacePath) {
+      throw new Error(`Smoke test failed: second canvas workspace did not drive the default terminal cwd. Value: ${JSON.stringify(secondCanvasDefaultCwd)}`);
     }
 
-    logStep("reorder workspace folders");
-    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.reorderWorkspaceFolder(${JSON.stringify(secondWorkspaceFolderId)}, 0)`);
-    const reorderedWorkspaceSnapshot = await waitForSnapshot(
+    logStep("switch canvases restores the original preview and workspace");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.switchCanvas(${JSON.stringify(workspaceOwnerCanvasIndex)})`);
+    const restoredOwnerCanvasSnapshot = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspaceImportedFolderPaths[0] === canonicalSecondWorkspacePath,
+      (snapshot) => snapshot.workspaceRootPath === canonicalSmokeWorkspacePath && snapshot.workspaceSelectedFilePath === "agent-output/reports/notes.md" && snapshot.workspacePreviewContents.includes("second pass"),
       4000
     );
+    const restoredOwnerCanvasOwnership = getCanvasWorkspaceOwnership(restoredOwnerCanvasSnapshot, workspaceOwnerCanvasName);
 
     if (
-      reorderedWorkspaceSnapshot.workspaceImportedFolderPaths[0] !== canonicalSecondWorkspacePath
-      || reorderedWorkspaceSnapshot.workspaceActiveFolderId !== secondWorkspaceFolderId
+      restoredOwnerCanvasSnapshot.workspaceRootPath !== canonicalSmokeWorkspacePath
+      || restoredOwnerCanvasSnapshot.workspaceSelectedFilePath !== "agent-output/reports/notes.md"
+      || !restoredOwnerCanvasSnapshot.workspacePreviewContents.includes("second pass")
+      || restoredOwnerCanvasOwnership?.workspaceRootPath !== canonicalSmokeWorkspacePath
+      || restoredOwnerCanvasOwnership?.workspacePreviewRelativePath !== "agent-output/reports/notes.md"
     ) {
-      throw new Error(`Smoke test failed: reordering workspace folders did not preserve the requested order. Snapshot: ${JSON.stringify(reorderedWorkspaceSnapshot)}`);
+      throw new Error(`Smoke test failed: returning to the original canvas did not restore its workspace preview. Snapshot: ${JSON.stringify(restoredOwnerCanvasSnapshot)}`);
     }
 
-    logStep("switch active workspace folder");
-    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.activateWorkspaceFolder(${JSON.stringify(firstWorkspaceFolderId)})`);
-    const switchedWorkspaceSnapshot = await waitForSnapshot(
+    const firstCanvasDefaultCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
+
+    if (firstCanvasDefaultCwd !== canonicalSmokeWorkspacePath) {
+      throw new Error(`Smoke test failed: original canvas workspace did not drive the default terminal cwd. Value: ${JSON.stringify(firstCanvasDefaultCwd)}`);
+    }
+
+    logStep("switching canvases clears preview on the other workspace");
+    const freshCanvasIndex = restoredOwnerCanvasSnapshot.canvasNames.indexOf(freshCanvasName);
+
+    if (freshCanvasIndex < 0) {
+      throw new Error(`Smoke test failed: second canvas index was unavailable during restore checks. Snapshot: ${JSON.stringify(restoredOwnerCanvasSnapshot)}`);
+    }
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.switchCanvas(${JSON.stringify(freshCanvasIndex)})`);
+    const switchedSecondCanvasSnapshot = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspaceRootPath === canonicalSmokeWorkspacePath && snapshot.workspaceVisibleEntryPaths.includes("agent-output"),
+      (snapshot) => snapshot.workspaceRootPath === canonicalSecondWorkspacePath && snapshot.workspaceSelectedFilePath === null && snapshot.fileInspectorVisible === false,
       4000
     );
+    const switchedSecondCanvasOwnership = getCanvasWorkspaceOwnership(switchedSecondCanvasSnapshot, freshCanvasName);
 
     if (
-      switchedWorkspaceSnapshot.workspaceRootPath !== canonicalSmokeWorkspacePath
-      || switchedWorkspaceSnapshot.workspaceVisibleEntryPaths.includes("secondary")
+      switchedSecondCanvasSnapshot.workspaceRootPath !== canonicalSecondWorkspacePath
+      || switchedSecondCanvasSnapshot.workspaceSelectedFilePath !== null
+      || switchedSecondCanvasSnapshot.fileInspectorVisible !== false
+      || switchedSecondCanvasOwnership?.workspaceRootPath !== canonicalSecondWorkspacePath
     ) {
-      throw new Error(`Smoke test failed: switching the active workspace folder did not swap the visible tree. Snapshot: ${JSON.stringify(switchedWorkspaceSnapshot)}`);
+      throw new Error(`Smoke test failed: switching to the second canvas did not clear the first canvas preview. Snapshot: ${JSON.stringify(switchedSecondCanvasSnapshot)}`);
     }
 
-    logStep("new terminal follows active workspace folder");
-    const defaultWorkspaceCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
-
-    if (defaultWorkspaceCwd !== canonicalSmokeWorkspacePath) {
-      throw new Error(`Smoke test failed: active workspace folder did not drive the default terminal cwd. Value: ${JSON.stringify(defaultWorkspaceCwd)}`);
-    }
-
-    logStep("remove active workspace folder");
-    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.removeWorkspaceFolder(${JSON.stringify(firstWorkspaceFolderId)})`);
-    const removedWorkspaceSnapshot = await waitForSnapshot(
-      "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspaceRootPath === canonicalSecondWorkspacePath && snapshot.workspaceImportedFolderPaths.length === 1,
-      4000
-    );
+    logStep("imported canvas starts with null workspace");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.switchCanvas(${JSON.stringify(workspaceOwnerCanvasIndex)})`);
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.exportActiveCanvasData()");
+    const importedWorkspaceCanvasResult = await window.webContents.executeJavaScript("window.__canvasLearningDebug.importLastExportedCanvasData()");
+    const importedCanvasName = importedWorkspaceCanvasResult.snapshot.activeCanvasName;
+    const importedCanvasOwnership = getCanvasWorkspaceOwnership(importedWorkspaceCanvasResult.snapshot, importedCanvasName);
 
     if (
-      removedWorkspaceSnapshot.workspaceRootPath !== canonicalSecondWorkspacePath
-      || removedWorkspaceSnapshot.workspaceImportedFolderPaths.includes(canonicalSmokeWorkspacePath)
+      importedWorkspaceCanvasResult.snapshot.workspaceRootPath !== null
+      || importedWorkspaceCanvasResult.snapshot.workspaceSelectedFilePath !== null
+      || importedWorkspaceCanvasResult.snapshot.fileInspectorVisible !== false
+      || importedCanvasOwnership?.workspaceRootPath !== null
+      || importedCanvasOwnership?.workspacePreviewRelativePath !== null
     ) {
-      throw new Error(`Smoke test failed: removing the active workspace folder did not fall back cleanly. Snapshot: ${JSON.stringify(removedWorkspaceSnapshot)}`);
+      throw new Error(`Smoke test failed: imported canvas auto-bound a workspace instead of starting empty. Snapshot: ${JSON.stringify(importedWorkspaceCanvasResult.snapshot)}`);
     }
 
-    logStep("duplicate workspace import re-selects existing folder");
-    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(secondWorkspacePath)})`);
-    const deduplicatedWorkspaceSnapshot = await waitForSnapshot(
-      "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspaceImportedFolderPaths.filter((folderPath) => folderPath === canonicalSecondWorkspacePath).length === 1,
-      4000
-    );
+    const importedCanvasDefaultCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
 
-    if (
-      deduplicatedWorkspaceSnapshot.workspaceImportedFolderPaths.length !== 1
-      || deduplicatedWorkspaceSnapshot.workspaceActiveFolderId !== secondWorkspaceFolderId
-    ) {
-      throw new Error(`Smoke test failed: importing a duplicate workspace folder created an unexpected list state. Snapshot: ${JSON.stringify(deduplicatedWorkspaceSnapshot)}`);
-    }
-
-    logStep("reorder canvases");
-    const activeCanvasIndex = deduplicatedWorkspaceSnapshot.canvasNames.indexOf(deduplicatedWorkspaceSnapshot.activeCanvasName);
-
-    if (activeCanvasIndex < 0) {
-      throw new Error(`Smoke test failed: active canvas was unavailable before reorder. Snapshot: ${JSON.stringify(deduplicatedWorkspaceSnapshot)}`);
-    }
-
-    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.reorderCanvas(${activeCanvasIndex}, 0)`);
-    const reorderedCanvasSnapshot = await waitForSnapshot(
-      "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.canvasNames[0] === deduplicatedWorkspaceSnapshot.activeCanvasName && snapshot.activeCanvasName === deduplicatedWorkspaceSnapshot.activeCanvasName,
-      4000
-    );
-
-    if (
-      reorderedCanvasSnapshot.canvasNames[0] !== deduplicatedWorkspaceSnapshot.activeCanvasName
-      || reorderedCanvasSnapshot.activeCanvasName !== deduplicatedWorkspaceSnapshot.activeCanvasName
-    ) {
-      throw new Error(`Smoke test failed: reordering canvases did not preserve the requested order. Snapshot: ${JSON.stringify(reorderedCanvasSnapshot)}`);
+    if (importedCanvasDefaultCwd !== null) {
+      throw new Error(`Smoke test failed: imported canvas default cwd should be null. Value: ${JSON.stringify(importedCanvasDefaultCwd)}`);
     }
 
     console.log("Smoke test passed.");
@@ -1177,6 +1265,31 @@ ipcMain.handle("workspace-directory:open", async (event) => {
   };
 });
 
+ipcMain.handle("workspace-directory:choose-canvas", async (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+
+  if (ownerWindow === null) {
+    throw new Error("Unable to resolve owner window.");
+  }
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(ownerWindow, {
+    title: "Choose workspace for canvas",
+    defaultPath: resolveDialogDefaultDirectory(event.sender.id),
+    properties: ["openDirectory"]
+  });
+
+  const selectedPath = filePaths[0];
+
+  if (canceled || typeof selectedPath !== "string") {
+    return { canceled: true };
+  }
+
+  return {
+    canceled: false,
+    state: chooseCanvasWorkspaceForOwner(event.sender.id, selectedPath)
+  };
+});
+
 ipcMain.handle("workspace-directory:state", (event) => {
   const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
 
@@ -1190,7 +1303,7 @@ ipcMain.handle("workspace-directory:debug-open", (event, payload) => {
     throw new Error("Workspace debug open is only available during smoke tests.");
   }
 
-  return openWorkspaceDirectoryForOwner(
+  return chooseCanvasWorkspaceForOwner(
     event.sender.id,
     typeof payload?.directoryPath === "string" ? payload.directoryPath : ""
   );

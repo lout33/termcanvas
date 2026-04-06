@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld(
     restoreWorkspaceSession: (payload) => ipcRenderer.invoke("workspace-session:restore", payload),
     getWorkspaceDirectoryState: () => ipcRenderer.invoke("workspace-directory:state"),
     openWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:open"),
+    chooseCanvasWorkspace: () => ipcRenderer.invoke("workspace-directory:choose-canvas"),
     refreshWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:refresh"),
     activateWorkspaceFolder: (folderId) => ipcRenderer.invoke("workspace-folder:activate", { folderId }),
     reorderWorkspaceFolder: (folderId, targetIndex) => ipcRenderer.invoke("workspace-folder:reorder", { folderId, targetIndex }),

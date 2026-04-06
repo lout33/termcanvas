@@ -1,3 +1,5 @@
+const path = require("node:path");
+
 const APP_SESSION_VERSION = 1;
 
 function normalizeBoolean(value) {
@@ -92,6 +94,57 @@ function normalizeWorkspaceSnapshot(workspace) {
   };
 }
 
+function normalizeCanvasWorkspaceSnapshot(workspace) {
+  const rootPath = normalizeString(workspace?.rootPath);
+
+  if (rootPath === null) {
+    return null;
+  }
+
+  const expandedDirectoryPaths = [];
+  const seenDirectoryPaths = new Set();
+
+  if (Array.isArray(workspace?.expandedDirectoryPaths)) {
+    workspace.expandedDirectoryPaths.forEach((directoryPath) => {
+      const normalizedDirectoryPath = normalizeString(directoryPath);
+
+      if (normalizedDirectoryPath !== null && !seenDirectoryPaths.has(normalizedDirectoryPath)) {
+        seenDirectoryPaths.add(normalizedDirectoryPath);
+        expandedDirectoryPaths.push(normalizedDirectoryPath);
+      }
+    });
+  }
+
+  return {
+    rootPath,
+    rootName: normalizeString(workspace?.rootName) ?? (path.basename(rootPath) || rootPath),
+    expandedDirectoryPaths,
+    previewRelativePath: normalizeString(workspace?.previewRelativePath)
+  };
+}
+
+function migrateLegacyWorkspaceToCanvas(workspace) {
+  const normalizedWorkspace = normalizeWorkspaceSnapshot(workspace);
+  const rootPath = normalizedWorkspace.activeRootPath;
+
+  if (rootPath === null) {
+    return null;
+  }
+
+  const expandedDirectoryPaths = normalizedWorkspace.expandedDirectoriesByRootPath.find(
+    (entry) => entry.rootPath === rootPath
+  )?.directoryPaths ?? [];
+
+  return {
+    rootPath,
+    rootName: path.basename(rootPath) || rootPath,
+    expandedDirectoryPaths,
+    previewRelativePath: normalizedWorkspace.preview?.rootPath === rootPath
+      ? normalizedWorkspace.preview.relativePath
+      : null
+  };
+}
+
 function normalizeTerminalNodeSnapshot(nodeSnapshot) {
   return {
     sessionKey: normalizeSessionKey(nodeSnapshot?.sessionKey),
@@ -133,6 +186,7 @@ function normalizeCanvasSnapshots(canvases) {
         y: normalizeNumber(canvasSnapshot?.viewportOffset?.y, 0)
       },
       viewportScale: normalizeNumber(canvasSnapshot?.viewportScale, 1),
+      workspace: normalizeCanvasWorkspaceSnapshot(canvasSnapshot?.workspace),
       terminalNodes: Array.isArray(canvasSnapshot?.terminalNodes)
         ? canvasSnapshot.terminalNodes.map(normalizeTerminalNodeSnapshot)
         : []
@@ -151,6 +205,15 @@ function normalizeAppSessionSnapshot(snapshot) {
       ? normalizedCanvasId
       : (canvases[0]?.id ?? null);
   })();
+  const migratedWorkspace = migrateLegacyWorkspaceToCanvas(snapshot?.workspace);
+
+  if (migratedWorkspace !== null) {
+    const activeCanvas = canvases.find((canvasSnapshot) => canvasSnapshot.id === activeCanvasId);
+
+    if (activeCanvas !== undefined && activeCanvas.workspace === null) {
+      activeCanvas.workspace = migratedWorkspace;
+    }
+  }
 
   return {
     version: APP_SESSION_VERSION,
@@ -158,7 +221,6 @@ function normalizeAppSessionSnapshot(snapshot) {
       isSidebarCollapsed: snapshot?.ui?.isSidebarCollapsed !== false,
       hasDismissedBoardIntro: normalizeBoolean(snapshot?.ui?.hasDismissedBoardIntro)
     },
-    workspace: normalizeWorkspaceSnapshot(snapshot?.workspace),
     canvases,
     activeCanvasId
   };

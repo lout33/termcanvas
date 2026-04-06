@@ -1,16 +1,39 @@
+const {
+  normalizeCanvasWorkspaceRecord,
+  syncCanvasWorkspaceFromLiveState,
+  toggleCanvasWorkspaceExpandedDirectory,
+  deriveCanvasWorkspaceAfterRestore,
+  shouldApplyCanvasWorkspaceRestoreResult,
+  getCanvasWorkspaceExpandedDirectories,
+  getCanvasWorkspacePreviewRelativePath,
+  getCanvasWorkspaceRootPath
+} = window.noteCanvasRendererWorkspace;
+const { deriveCanvasSwitcherViewModel } = window.noteCanvasRendererCanvasSwitcher;
+
+if (window.noteCanvas?.isSmokeTest) {
+  window.__canvasLearningBootError = null;
+  window.addEventListener("error", (event) => {
+    const error = event.error;
+    window.__canvasLearningBootError = error instanceof Error
+      ? (error.stack || error.message)
+      : String(event.message || "Unknown renderer boot error.");
+  });
+}
+
 const appShell = document.querySelector(".app-shell");
 const board = document.getElementById("board");
 const nodesLayer = document.getElementById("nodes-layer");
 const emptyState = document.getElementById("empty-state");
 const boardZoomIndicator = document.getElementById("board-zoom-indicator");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
-const canvasList = document.getElementById("canvas-list");
+const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
+const canvasSwitcherButton = document.getElementById("canvas-switcher-button");
+const canvasSwitcherMenu = document.getElementById("canvas-switcher-menu");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
-const workspaceFolderList = document.getElementById("workspace-folder-list");
 const workspaceBrowser = document.getElementById("workspace-browser");
 const fileInspector = document.getElementById("file-inspector");
 const fileInspectorResizeHandle = document.getElementById("file-inspector-resize-handle");
@@ -59,10 +82,11 @@ let terminalSizeSyncFrame = 0;
 let zoomIndicatorTimeout = 0;
 const pendingTerminalSizeNodes = new Set();
 let pendingCanvasListFocus = null;
+let isCanvasSwitcherMenuOpen = false;
 let lastExportedCanvasDebugPayload = null;
 let workspacePreviewRequestId = 0;
 let workspaceStateHydrationToken = 0;
-const expandedWorkspaceDirectoriesByFolderId = new Map();
+let activeCanvasWorkspaceRestoreToken = 0;
 let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
 
@@ -163,7 +187,7 @@ const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalI
   }
 
   setNodeExitedState(nodeRecord, exitCode, signal);
-  renderCanvasList();
+  renderCanvasSwitcher();
 });
 
 const removeTerminalCwdChangeListener = window.noteCanvas.onTerminalCwdChange(({ terminalId, cwd }) => {
@@ -434,6 +458,7 @@ function setNodeLiveState(nodeRecord, shellName) {
 
 async function releaseTerminalSession(nodeRecord, options = {}) {
   const shouldDestroySession = options.shouldDestroySession !== false;
+  const preserveSession = options.preserveSession === true;
   const terminalId = nodeRecord.terminalId;
 
   nodeRecord.disposeInput();
@@ -449,7 +474,6 @@ async function releaseTerminalSession(nodeRecord, options = {}) {
   if (typeof terminalId === "string") {
     terminalNodeMap.delete(terminalId);
   }
-  const preserveSession = options.preserveSession === true;
 
   nodeRecord.terminalId = null;
   nodeRecord.terminal?.dispose();
@@ -595,7 +619,7 @@ function beginCanvasRename(canvasId) {
   }
 
   if (activeCanvasRenameId === canvasId) {
-    const activeRenameInput = canvasList?.querySelector(`[data-canvas-id="${canvasId}"][data-canvas-part="rename-input"]`);
+    const activeRenameInput = canvasSwitcherMenu?.querySelector(`[data-canvas-id="${canvasId}"][data-canvas-part="rename-input"]`);
 
     if (activeRenameInput instanceof HTMLInputElement) {
       activeRenameInput.focus();
@@ -605,7 +629,7 @@ function beginCanvasRename(canvasId) {
   }
 
   if (activeCanvasRenameId !== null && activeCanvasRenameId !== canvasId) {
-    const activeRenameInput = canvasList?.querySelector(`[data-canvas-id="${activeCanvasRenameId}"][data-canvas-part="rename-input"]`);
+    const activeRenameInput = canvasSwitcherMenu?.querySelector(`[data-canvas-id="${activeCanvasRenameId}"][data-canvas-part="rename-input"]`);
 
     if (activeRenameInput instanceof HTMLInputElement) {
       commitCanvasRename(activeCanvasRenameId, activeRenameInput.value);
@@ -615,12 +639,13 @@ function beginCanvasRename(canvasId) {
   }
 
   activeCanvasRenameId = canvasId;
+  isCanvasSwitcherMenuOpen = true;
   pendingCanvasListFocus = {
     canvasId,
     part: "rename-input",
     selectText: true
   };
-  renderCanvasList();
+  renderCanvasSwitcher();
 }
 
 function commitCanvasRename(canvasId, rawName, options = {}) {
@@ -641,7 +666,7 @@ function commitCanvasRename(canvasId, rawName, options = {}) {
     };
   }
 
-  renderCanvasList();
+  renderCanvasSwitcher();
   scheduleAppSessionSave();
 }
 
@@ -657,18 +682,18 @@ function cancelCanvasRename(canvasId, options = {}) {
     };
   }
 
-  renderCanvasList();
+  renderCanvasSwitcher();
 }
 
 function focusPendingCanvasListControl() {
-  if (!(canvasList instanceof HTMLElement) || pendingCanvasListFocus === null) {
+  if (!(canvasSwitcherMenu instanceof HTMLElement) || pendingCanvasListFocus === null) {
     return;
   }
 
   const { canvasId, part, selectText } = pendingCanvasListFocus;
   pendingCanvasListFocus = null;
   const selector = `[data-canvas-id="${canvasId}"][data-canvas-part="${part}"]`;
-  const target = canvasList.querySelector(selector);
+  const target = canvasSwitcherMenu.querySelector(selector);
 
   if (!(target instanceof HTMLElement)) {
     return;
@@ -805,7 +830,7 @@ function reorderCanvasById(canvasId, targetIndex) {
 
   const reorderedCanvases = moveArrayItemLocal(canvases, sourceIndex, targetIndex);
   canvases.splice(0, canvases.length, ...reorderedCanvases);
-  renderCanvasList();
+  renderCanvasSwitcher();
   scheduleAppSessionSave();
 }
 
@@ -953,6 +978,16 @@ function persistAppSession() {
   }
 }
 
+function captureActiveCanvasWorkspaceSnapshot() {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return null;
+  }
+
+  return syncCanvasWorkspaceFromLiveState(activeCanvas, serializeCanvasWorkspaceSession());
+}
+
 function scheduleAppSessionSave() {
   if (isSessionHydrating) {
     return;
@@ -980,12 +1015,52 @@ function flushAppSessionSave() {
 function setSidebarCollapsed(nextValue) {
   isSidebarCollapsed = nextValue;
   appShell?.classList.toggle("is-sidebar-collapsed", isSidebarCollapsed);
+
+  if (isSidebarCollapsed) {
+    closeCanvasSwitcherMenu();
+  }
+
   updateSidebarToggleButton();
   scheduleAppSessionSave();
 }
 
 function toggleSidebar() {
   setSidebarCollapsed(!isSidebarCollapsed);
+}
+
+function setCanvasSwitcherMenuOpen(nextValue, options = {}) {
+  isCanvasSwitcherMenuOpen = nextValue === true;
+  const shouldShowMenu = isCanvasSwitcherMenuOpen || activeCanvasRenameId !== null;
+
+  if (canvasSwitcherButton instanceof HTMLButtonElement) {
+    canvasSwitcherButton.setAttribute("aria-expanded", String(shouldShowMenu));
+    canvasSwitcherButton.classList.toggle("is-open", shouldShowMenu);
+  }
+
+  if (canvasSwitcherMenu instanceof HTMLElement) {
+    canvasSwitcherMenu.hidden = !shouldShowMenu;
+  }
+
+  if (options.restoreFocus === true) {
+    canvasSwitcherButton?.focus();
+  }
+}
+
+function closeCanvasSwitcherMenu(options = {}) {
+  setCanvasSwitcherMenuOpen(false, options);
+}
+
+function toggleCanvasSwitcherMenu() {
+  setCanvasSwitcherMenuOpen(!isCanvasSwitcherMenuOpen);
+}
+
+function getCanvasSwitcherViewModel() {
+  return deriveCanvasSwitcherViewModel({
+    canvases,
+    activeCanvasId,
+    activeCanvasRenameId,
+    isExpanded: isCanvasSwitcherMenuOpen
+  });
 }
 
 function openWorkspaceDrawer() {
@@ -1059,6 +1134,7 @@ function createCanvasRecord(options = {}) {
       y: safeViewportY
     },
     viewportScale,
+    workspace: normalizeCanvasWorkspaceRecord(options.workspace),
     highestNodeLayer: 2,
     nodes: []
   };
@@ -1244,11 +1320,17 @@ function renderCanvas(options = {}) {
   }
 }
 
-function createCanvasListItem(canvasRecord) {
+function createCanvasSwitcherMenuItem(itemView) {
+  const canvasRecord = getCanvasById(itemView.id);
+
+  if (canvasRecord === null) {
+    return document.createElement("li");
+  }
+
   const item = document.createElement("li");
   item.className = "canvas-list-item";
-  item.classList.toggle("is-active", canvasRecord.id === activeCanvasId);
-  const isRenaming = canvasRecord.id === activeCanvasRenameId;
+  item.classList.toggle("is-active", itemView.isActive);
+  const isRenaming = itemView.isRenaming;
   const canvasIndex = canvases.findIndex((candidate) => candidate.id === canvasRecord.id);
   let reorderHandle = null;
 
@@ -1270,7 +1352,7 @@ function createCanvasListItem(canvasRecord) {
 
     const meta = document.createElement("span");
     meta.className = "canvas-list-meta";
-    meta.textContent = `${canvasRecord.nodes.length} ${canvasRecord.nodes.length === 1 ? "terminal" : "terminals"}`;
+    meta.textContent = itemView.terminalSummary;
 
     nameInput.addEventListener("blur", () => {
       window.setTimeout(() => {
@@ -1313,7 +1395,7 @@ function createCanvasListItem(canvasRecord) {
     switchButton.dataset.canvasId = canvasRecord.id;
     switchButton.dataset.canvasPart = "switch";
 
-    if (canvasRecord.id === activeCanvasId) {
+    if (itemView.isActive) {
       switchButton.classList.add("is-active");
       switchButton.setAttribute("aria-current", "true");
     }
@@ -1324,7 +1406,7 @@ function createCanvasListItem(canvasRecord) {
 
     const meta = document.createElement("span");
     meta.className = "canvas-list-meta";
-    meta.textContent = `${canvasRecord.nodes.length} ${canvasRecord.nodes.length === 1 ? "terminal" : "terminals"}`;
+    meta.textContent = itemView.terminalSummary;
 
     switchButton.append(name, meta);
     switchButton.addEventListener("click", () => {
@@ -1359,7 +1441,7 @@ function createCanvasListItem(canvasRecord) {
     actions.append(renameButton);
   }
 
-  if (canvases.length > 1) {
+  if (itemView.canDelete) {
     const deleteButton = document.createElement("button");
     deleteButton.className = "canvas-list-delete";
     deleteButton.type = "button";
@@ -1391,14 +1473,58 @@ function createCanvasListItem(canvasRecord) {
   return item;
 }
 
-function renderCanvasList() {
-  const fragment = document.createDocumentFragment();
+function renderCanvasSwitcher() {
+  if (!(canvasSwitcherButton instanceof HTMLButtonElement) || !(canvasSwitcherMenu instanceof HTMLElement)) {
+    return;
+  }
 
-  canvases.forEach((canvasRecord) => {
-    fragment.append(createCanvasListItem(canvasRecord));
+  const viewModel = getCanvasSwitcherViewModel();
+  const triggerView = viewModel.trigger;
+
+  const triggerCopy = document.createElement("span");
+  triggerCopy.className = "canvas-switcher-trigger-copy";
+
+  const triggerLabel = document.createElement("span");
+  triggerLabel.className = "canvas-switcher-trigger-label";
+  triggerLabel.textContent = "Canvas";
+
+  const triggerName = document.createElement("span");
+  triggerName.className = "canvas-switcher-trigger-name";
+  triggerName.textContent = triggerView?.name ?? "Canvas";
+
+  const triggerMeta = document.createElement("span");
+  triggerMeta.className = "canvas-switcher-trigger-meta";
+  triggerMeta.textContent = triggerView === null
+    ? "No canvas selected"
+    : triggerView.meta;
+
+  const triggerPath = document.createElement("span");
+  triggerPath.className = "canvas-switcher-trigger-path";
+  triggerPath.textContent = triggerView?.path ?? "Choose a workspace for this canvas.";
+  triggerPath.title = triggerPath.textContent;
+
+  triggerCopy.append(triggerLabel, triggerName, triggerMeta, triggerPath);
+
+  const triggerIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  triggerIcon.setAttribute("class", "canvas-switcher-trigger-icon");
+  triggerIcon.setAttribute("viewBox", "0 0 16 16");
+  triggerIcon.setAttribute("aria-hidden", "true");
+  const triggerIconPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  triggerIconPath.setAttribute("d", "m4.25 6.25 3.75 3.75 3.75-3.75");
+  triggerIcon.append(triggerIconPath);
+  canvasSwitcherButton.replaceChildren(triggerCopy, triggerIcon);
+
+  const menuList = document.createElement("ul");
+  menuList.className = "canvas-switcher-menu-list canvas-list";
+  menuList.id = "canvas-switcher-list";
+  menuList.setAttribute("aria-label", viewModel.list.label);
+
+  viewModel.list.items.forEach((itemView) => {
+    menuList.append(createCanvasSwitcherMenuItem(itemView));
   });
 
-  canvasList.replaceChildren(fragment);
+  canvasSwitcherMenu.replaceChildren(menuList);
+  setCanvasSwitcherMenuOpen(isCanvasSwitcherMenuOpen);
   focusPendingCanvasListControl();
 }
 
@@ -1498,23 +1624,31 @@ function getWorkspaceFilePaths(folderRecord) {
 }
 
 function getExpandedDirectoriesForFolder(folderId) {
-  const normalizedFolderId = typeof folderId === "string" ? folderId : "";
+  const folderRecord = getWorkspaceFolderById(folderId);
+  const activeCanvas = getActiveCanvas();
 
-  if (!expandedWorkspaceDirectoriesByFolderId.has(normalizedFolderId)) {
-    expandedWorkspaceDirectoriesByFolderId.set(normalizedFolderId, new Set());
+  if (folderRecord === null || activeCanvas === null || getCanvasWorkspaceRootPath(activeCanvas) !== folderRecord.rootPath) {
+    return new Set();
   }
 
-  return expandedWorkspaceDirectoriesByFolderId.get(normalizedFolderId);
+  return new Set(getCanvasWorkspaceExpandedDirectories(activeCanvas));
 }
 
-function clearWorkspacePreview() {
+function clearWorkspacePreview(options = {}) {
   workspacePreviewRequestId += 1;
   workspacePreviewState.folderId = null;
   workspacePreviewState.relativePath = null;
   workspacePreviewState.status = "empty";
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
-  scheduleAppSessionSave();
+
+  if (options.skipCanvasWorkspaceSync !== true) {
+    captureActiveCanvasWorkspaceSnapshot();
+  }
+
+  if (options.skipSessionSave !== true) {
+    scheduleAppSessionSave();
+  }
 }
 
 function closeWorkspacePreview() {
@@ -1547,6 +1681,7 @@ function buildWorkspaceTreeRows(folderRecord) {
 
   const childrenByParentPath = new Map();
   const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
+  const selectedPreviewRelativePath = getCanvasWorkspacePreviewRelativePath(getActiveCanvas());
 
   folderRecord.entries.forEach((entry) => {
     const parentPath = getWorkspaceEntryParentPath(entry.relativePath);
@@ -1572,7 +1707,7 @@ function buildWorkspaceTreeRows(folderRecord) {
         ...entry,
         depth,
         isExpanded,
-        isSelected: workspacePreviewState.folderId === folderRecord.id && workspacePreviewState.relativePath === entry.relativePath
+        isSelected: entry.kind === "file" && selectedPreviewRelativePath === entry.relativePath
       });
 
       if (isExpanded) {
@@ -1583,77 +1718,6 @@ function buildWorkspaceTreeRows(folderRecord) {
 
   appendRows("", 0);
   return rows;
-}
-
-function createWorkspaceFolderListItem(folderRecord) {
-  const item = document.createElement("li");
-  item.className = "canvas-list-item";
-  item.classList.toggle("is-active", folderRecord.id === workspaceState.activeFolderId);
-  const folderIndex = workspaceState.importedFolders.findIndex((candidate) => candidate.id === folderRecord.id);
-
-  const switchButton = document.createElement("button");
-  switchButton.className = "canvas-list-button";
-  switchButton.type = "button";
-  switchButton.setAttribute("aria-label", `Open workspace ${folderRecord.rootName}`);
-  switchButton.dataset.workspaceFolderId = folderRecord.id;
-
-  if (folderRecord.id === workspaceState.activeFolderId) {
-    switchButton.classList.add("is-active");
-    switchButton.setAttribute("aria-current", "true");
-  }
-
-  const name = document.createElement("span");
-  name.className = "canvas-list-name";
-  name.textContent = folderRecord.rootName;
-
-  const meta = document.createElement("span");
-  meta.className = "canvas-list-meta";
-  meta.textContent = folderRecord.lastError.length > 0 ? folderRecord.lastError : folderRecord.rootPath;
-
-  switchButton.append(name, meta);
-  switchButton.addEventListener("click", () => {
-    void activateWorkspaceFolderById(folderRecord.id).catch((error) => {
-      console.error(error);
-    });
-  });
-
-  const actions = document.createElement("div");
-  actions.className = "canvas-list-actions";
-
-  const deleteButton = document.createElement("button");
-  deleteButton.className = "canvas-list-delete";
-  deleteButton.type = "button";
-  deleteButton.setAttribute("aria-label", `Remove workspace ${folderRecord.rootName}`);
-  deleteButton.textContent = "×";
-  deleteButton.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void removeWorkspaceFolderById(folderRecord.id).catch((error) => {
-      console.error(error);
-    });
-  });
-  actions.append(deleteButton);
-
-  item.append(switchButton, actions);
-  attachReorderableListItem(item, switchButton, {
-    kind: "workspace-folder",
-    itemId: folderRecord.id,
-    index: folderIndex,
-    onMove: reorderWorkspaceFolderById
-  });
-  return item;
-}
-
-function renderWorkspaceFolderList() {
-  if (!(workspaceFolderList instanceof HTMLElement)) {
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
-  workspaceState.importedFolders.forEach((folderRecord) => {
-    fragment.append(createWorkspaceFolderListItem(folderRecord));
-  });
-  workspaceFolderList.replaceChildren(fragment);
 }
 
 function renderFileInspector() {
@@ -1766,6 +1830,7 @@ async function loadWorkspaceFilePreview(relativePath) {
   workspacePreviewState.status = "loading";
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
+  captureActiveCanvasWorkspaceSnapshot();
   renderWorkspaceBrowser();
   renderFileInspector();
   scheduleAppSessionSave();
@@ -1785,6 +1850,7 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.data = preview;
     workspacePreviewState.status = "ready";
     workspacePreviewState.errorMessage = "";
+    captureActiveCanvasWorkspaceSnapshot();
     renderWorkspaceBrowser();
     renderFileInspector();
     scheduleAppSessionSave();
@@ -1802,6 +1868,7 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.status = "error";
     workspacePreviewState.data = null;
     workspacePreviewState.errorMessage = error instanceof Error ? error.message : String(error);
+    captureActiveCanvasWorkspaceSnapshot();
     renderWorkspaceBrowser();
     renderFileInspector();
     scheduleAppSessionSave();
@@ -1829,24 +1896,26 @@ async function refreshSelectedWorkspaceFilePreview() {
 
 function toggleWorkspaceDirectory(relativePath) {
   const activeFolder = getActiveWorkspaceFolder();
+  const activeCanvas = getActiveCanvas();
 
-  if (activeFolder === null) {
+  if (activeFolder === null || activeCanvas === null) {
     return;
   }
 
-  const expandedDirectories = getExpandedDirectoriesForFolder(activeFolder.id);
+  toggleCanvasWorkspaceExpandedDirectory(activeCanvas, relativePath);
 
-  if (expandedDirectories.has(relativePath)) {
-    expandedDirectories.delete(relativePath);
-  } else {
-    expandedDirectories.add(relativePath);
-  }
-
+  captureActiveCanvasWorkspaceSnapshot();
   renderWorkspaceBrowser();
   scheduleAppSessionSave();
 }
 
 function updateWorkspaceControls() {
+  if (openWorkspaceButton instanceof HTMLButtonElement) {
+    const actionLabel = hasWorkspaceDirectory() ? "Replace workspace" : "Choose workspace";
+    openWorkspaceButton.setAttribute("aria-label", actionLabel);
+    openWorkspaceButton.title = actionLabel;
+  }
+
   if (refreshWorkspaceButton instanceof HTMLButtonElement) {
     refreshWorkspaceButton.disabled = !hasWorkspaceDirectory() || workspaceState.isRefreshing;
     refreshWorkspaceButton.classList.toggle("is-loading", workspaceState.isRefreshing);
@@ -1980,16 +2049,17 @@ function renderWorkspaceBrowser() {
   } else {
     const empty = document.createElement("div");
     empty.className = "workspace-browser-empty";
-    empty.textContent = "Open a workspace to browse files here and make new terminals start there.";
+    empty.textContent = "Choose a workspace for this canvas to browse files here and make new terminals start there.";
     fragment.append(empty);
   }
 
   workspaceBrowser.replaceChildren(fragment);
 }
 
-function applyWorkspaceState(nextState) {
+function applyWorkspaceState(nextState, options = {}) {
   workspaceStateHydrationToken += 1;
   const previousActiveFolderId = workspaceState.activeFolderId;
+  const activeCanvas = getActiveCanvas();
   workspaceState.importedFolders = normalizeWorkspaceFolders(nextState?.importedFolders);
   workspaceState.activeFolderId = typeof nextState?.activeFolderId === "string" ? nextState.activeFolderId : null;
 
@@ -1997,27 +2067,31 @@ function applyWorkspaceState(nextState) {
     workspaceState.activeFolderId = workspaceState.importedFolders[0]?.id ?? null;
   }
 
-  const validFolderIds = new Set(workspaceState.importedFolders.map((folder) => folder.id));
+  if (activeCanvas !== null) {
+    const activeRootPath = getCanvasWorkspaceRootPath(activeCanvas);
+    const activeFolder = workspaceState.importedFolders.find((folderRecord) => folderRecord.rootPath === activeRootPath) ?? null;
 
-  [...expandedWorkspaceDirectoriesByFolderId.keys()].forEach((folderId) => {
-    if (!validFolderIds.has(folderId)) {
-      expandedWorkspaceDirectoriesByFolderId.delete(folderId);
+    if (activeFolder !== null) {
+      const validDirectoryPaths = getWorkspaceDirectoryPaths(activeFolder);
+      const expandedDirectoryPaths = getCanvasWorkspaceExpandedDirectories(activeCanvas).filter((directoryPath) => {
+        return validDirectoryPaths.has(directoryPath);
+      });
+
+      syncCanvasWorkspaceFromLiveState(activeCanvas, {
+        ...activeCanvas.workspace,
+        rootPath: activeFolder.rootPath,
+        rootName: activeFolder.rootName,
+        expandedDirectoryPaths,
+        previewRelativePath: getCanvasWorkspacePreviewRelativePath(activeCanvas)
+      });
     }
-  });
-
-  workspaceState.importedFolders.forEach((folderRecord) => {
-    const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
-    const validDirectoryPaths = getWorkspaceDirectoryPaths(folderRecord);
-
-    [...expandedDirectories].forEach((directoryPath) => {
-      if (!validDirectoryPaths.has(directoryPath)) {
-        expandedDirectories.delete(directoryPath);
-      }
-    });
-  });
+  }
 
   if (previousActiveFolderId !== workspaceState.activeFolderId) {
-    clearWorkspacePreview();
+    clearWorkspacePreview({
+      skipCanvasWorkspaceSync: options.skipCanvasWorkspaceSync,
+      skipSessionSave: options.skipCanvasWorkspaceSync
+    });
   }
 
   const previewFolder = workspacePreviewState.folderId === null ? null : getWorkspaceFolderById(workspacePreviewState.folderId);
@@ -2026,12 +2100,19 @@ function applyWorkspaceState(nextState) {
     previewFolder === null
     || !getWorkspaceFilePaths(previewFolder).has(workspacePreviewState.relativePath)
   ) {
-    clearWorkspacePreview();
+    clearWorkspacePreview({
+      skipCanvasWorkspaceSync: options.skipCanvasWorkspaceSync,
+      skipSessionSave: options.skipCanvasWorkspaceSync
+    });
   }
 
-  renderWorkspaceFolderList();
   renderWorkspaceBrowser();
   renderFileInspector();
+
+  if (options.skipCanvasWorkspaceSync !== true) {
+    captureActiveCanvasWorkspaceSnapshot();
+  }
+
   scheduleAppSessionSave();
 }
 
@@ -2064,8 +2145,8 @@ async function refreshWorkspaceDirectory(options = {}) {
   }
 }
 
-async function openWorkspaceDirectory() {
-  const opened = await window.noteCanvas.openWorkspaceDirectory();
+async function chooseCanvasWorkspace() {
+  const opened = await window.noteCanvas.chooseCanvasWorkspace();
 
   if (opened?.canceled) {
     return null;
@@ -2100,7 +2181,7 @@ async function removeWorkspaceFolderById(folderId) {
 }
 
 function getDefaultTerminalWorkingDirectory() {
-  return getActiveWorkspaceFolder()?.rootPath ?? null;
+  return getCanvasWorkspaceRootPath(getActiveCanvas());
 }
 
 function sanitizeCanvasExportName(canvasName) {
@@ -2148,8 +2229,10 @@ function serializeCanvasSessionRecord(canvasRecord) {
     name: exportedCanvas.name,
     viewportOffset: exportedCanvas.viewportOffset,
     viewportScale: exportedCanvas.viewportScale,
+    workspace: canvasRecord.workspace ?? null,
     terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
       ...exportedCanvas.terminalNodes[index],
+      sessionKey: nodeRecord.sessionKey,
       isExited: nodeRecord.isExited,
       exitCode: nodeRecord.exitCode,
       exitSignal: nodeRecord.exitSignal
@@ -2157,35 +2240,49 @@ function serializeCanvasSessionRecord(canvasRecord) {
   };
 }
 
-function serializeWorkspaceSession() {
+function serializeCanvasWorkspaceSession() {
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (activeFolder === null) {
+    return null;
+  }
+
   return {
-    importedRootPaths: workspaceState.importedFolders.map((folderRecord) => folderRecord.rootPath),
-    activeRootPath: getActiveWorkspaceFolder()?.rootPath ?? null,
-    expandedDirectoriesByRootPath: workspaceState.importedFolders.flatMap((folderRecord) => {
-      const directoryPaths = [...getExpandedDirectoriesForFolder(folderRecord.id)];
+    rootPath: activeFolder.rootPath,
+    rootName: activeFolder.rootName,
+    expandedDirectoryPaths: getCanvasWorkspaceExpandedDirectories(getActiveCanvas()),
+    previewRelativePath: isWorkspacePreviewOpen() && workspacePreviewState.folderId === activeFolder.id
+      ? workspacePreviewState.relativePath
+      : null
+  };
+}
 
-      sessionKey: nodeRecord.sessionKey,
-      return directoryPaths.length === 0
-        ? []
-        : [{
-            rootPath: folderRecord.rootPath,
-            directoryPaths
-          }];
-    }),
-    preview: (() => {
-      if (!isWorkspacePreviewOpen()) {
-        return null;
-      }
+function getWorkspaceRestorePayloadFromCanvasSnapshot(workspaceSnapshot) {
+  if (workspaceSnapshot === null || typeof workspaceSnapshot?.rootPath !== "string") {
+    return {
+      importedRootPaths: [],
+      activeRootPath: null,
+      expandedDirectoriesByRootPath: [],
+      preview: null
+    };
+  }
 
-      const previewFolder = getWorkspaceFolderById(workspacePreviewState.folderId);
-
-      return previewFolder === null
-        ? null
-        : {
-            rootPath: previewFolder.rootPath,
-            relativePath: workspacePreviewState.relativePath
-          };
-    })()
+  return {
+    importedRootPaths: [workspaceSnapshot.rootPath],
+    activeRootPath: workspaceSnapshot.rootPath,
+    expandedDirectoriesByRootPath: Array.isArray(workspaceSnapshot.expandedDirectoryPaths)
+      && workspaceSnapshot.expandedDirectoryPaths.length > 0
+      ? [{
+          rootPath: workspaceSnapshot.rootPath,
+          directoryPaths: workspaceSnapshot.expandedDirectoryPaths
+        }]
+      : [],
+    preview: typeof workspaceSnapshot.previewRelativePath === "string" && workspaceSnapshot.previewRelativePath.length > 0
+      ? {
+          rootPath: workspaceSnapshot.rootPath,
+          relativePath: workspaceSnapshot.previewRelativePath
+        }
+      : null
   };
 }
 
@@ -2196,40 +2293,67 @@ function serializeAppSession() {
       isSidebarCollapsed,
       hasDismissedBoardIntro
     },
-    workspace: serializeWorkspaceSession(),
     canvases: canvases.map(serializeCanvasSessionRecord),
     activeCanvasId
   };
 }
 
 function restoreExpandedWorkspaceDirectories(workspaceSnapshot) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return;
+  }
+
   const expandedDirectoriesByRootPath = new Map(
     Array.isArray(workspaceSnapshot?.expandedDirectoriesByRootPath)
       ? workspaceSnapshot.expandedDirectoriesByRootPath.map((entry) => [entry.rootPath, entry.directoryPaths])
       : []
   );
 
-  workspaceState.importedFolders.forEach((folderRecord) => {
-    const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
-    const validDirectoryPaths = getWorkspaceDirectoryPaths(folderRecord);
-    expandedDirectories.clear();
+  const activeFolder = getActiveWorkspaceFolder();
 
-    (expandedDirectoriesByRootPath.get(folderRecord.rootPath) ?? []).forEach((directoryPath) => {
-      if (validDirectoryPaths.has(directoryPath)) {
-        expandedDirectories.add(directoryPath);
-      }
-    });
+  if (activeFolder === null) {
+    syncCanvasWorkspaceFromLiveState(activeCanvas, null);
+    return;
+  }
+
+  const validDirectoryPaths = getWorkspaceDirectoryPaths(activeFolder);
+  const expandedDirectoryPaths = (expandedDirectoriesByRootPath.get(activeFolder.rootPath) ?? []).filter((directoryPath) => {
+    return validDirectoryPaths.has(directoryPath);
+  });
+
+  syncCanvasWorkspaceFromLiveState(activeCanvas, {
+    ...activeCanvas.workspace,
+    rootPath: activeFolder.rootPath,
+    rootName: activeFolder.rootName,
+    expandedDirectoryPaths,
+    previewRelativePath: getCanvasWorkspacePreviewRelativePath(activeCanvas)
   });
 }
 
 function expandWorkspacePreviewAncestors(folderRecord, relativePath) {
   let parentPath = getWorkspaceEntryParentPath(relativePath);
-  const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return;
+  }
+
+  const expandedDirectories = new Set(getCanvasWorkspaceExpandedDirectories(activeCanvas));
 
   while (parentPath.length > 0) {
     expandedDirectories.add(parentPath);
     parentPath = getWorkspaceEntryParentPath(parentPath);
   }
+
+  syncCanvasWorkspaceFromLiveState(activeCanvas, {
+    ...activeCanvas.workspace,
+    rootPath: folderRecord.rootPath,
+    rootName: folderRecord.rootName,
+    expandedDirectoryPaths: [...expandedDirectories],
+    previewRelativePath: getCanvasWorkspacePreviewRelativePath(activeCanvas)
+  });
 }
 
 async function restoreWorkspacePreview(workspaceSnapshot) {
@@ -2254,6 +2378,35 @@ async function restoreWorkspacePreview(workspaceSnapshot) {
   await loadWorkspaceFilePreview(preview.relativePath);
 }
 
+async function restoreCanvasWorkspace(canvasRecord) {
+  const restoreToken = ++activeCanvasWorkspaceRestoreToken;
+  const workspaceSnapshot = getWorkspaceRestorePayloadFromCanvasSnapshot(canvasRecord?.workspace ?? null);
+  const nextWorkspaceState = await window.noteCanvas.restoreWorkspaceSession(workspaceSnapshot);
+
+  if (!shouldApplyCanvasWorkspaceRestoreResult({
+    restoreToken,
+    activeRestoreToken: activeCanvasWorkspaceRestoreToken,
+    activeCanvasId: getActiveCanvas()?.id ?? null,
+    targetCanvasId: canvasRecord?.id ?? null
+  })) {
+    return;
+  }
+
+  applyWorkspaceState(nextWorkspaceState, { skipCanvasWorkspaceSync: true });
+  syncCanvasWorkspaceFromLiveState(canvasRecord, deriveCanvasWorkspaceAfterRestore(canvasRecord, nextWorkspaceState));
+  renderWorkspaceBrowser();
+
+  if (canvasRecord.workspace?.previewRelativePath) {
+    await loadWorkspaceFilePreview(canvasRecord.workspace.previewRelativePath);
+  } else {
+    clearWorkspacePreview({ skipCanvasWorkspaceSync: true });
+    renderWorkspaceBrowser();
+    renderFileInspector();
+  }
+
+  scheduleAppSessionSave();
+}
+
 async function restoreCanvasSession(sessionSnapshot) {
   const persistedCanvases = Array.isArray(sessionSnapshot?.canvases) ? sessionSnapshot.canvases : [];
 
@@ -2266,7 +2419,8 @@ async function restoreCanvasSession(sessionSnapshot) {
       id: canvasSnapshot.id,
       name: canvasSnapshot.name,
       viewportOffset: canvasSnapshot.viewportOffset,
-      viewportScale: canvasSnapshot.viewportScale
+      viewportScale: canvasSnapshot.viewportScale,
+      workspace: canvasSnapshot.workspace ?? null
     });
   });
 
@@ -2293,11 +2447,11 @@ async function restoreCanvasSession(sessionSnapshot) {
           isExited: nodeSnapshot.isExited,
           exitCode: nodeSnapshot.exitCode,
           exitSignal: nodeSnapshot.exitSignal,
+          sessionKey: nodeSnapshot.sessionKey,
           shouldFocus: false
         });
       } catch (error) {
         console.error(error);
-          sessionKey: nodeSnapshot.sessionKey,
       }
     }
   }
@@ -2315,29 +2469,28 @@ async function initializeApp() {
   try {
     setSidebarCollapsed(true);
     setBoardIntroDismissed(false);
-    renderWorkspaceFolderList();
+    renderCanvasSwitcher();
     renderWorkspaceBrowser();
     renderFileInspector();
 
     const sessionSnapshot = await window.noteCanvas.loadAppSession();
-    const workspaceSnapshot = sessionSnapshot?.workspace ?? null;
-    const nextWorkspaceState = Array.isArray(workspaceSnapshot?.importedRootPaths) && workspaceSnapshot.importedRootPaths.length > 0
-      ? await window.noteCanvas.restoreWorkspaceSession(workspaceSnapshot)
-      : await window.noteCanvas.getWorkspaceDirectoryState();
-
-    applyWorkspaceState(nextWorkspaceState);
 
     if (sessionSnapshot !== null) {
       setSidebarCollapsed(sessionSnapshot.ui.isSidebarCollapsed);
       setBoardIntroDismissed(sessionSnapshot.ui.hasDismissedBoardIntro);
-      restoreExpandedWorkspaceDirectories(workspaceSnapshot);
-      renderWorkspaceBrowser();
       await restoreCanvasSession(sessionSnapshot);
-      await restoreWorkspacePreview(workspaceSnapshot);
     }
 
     if (canvases.length === 0) {
       createCanvas();
+    }
+
+    const activeCanvas = getActiveCanvas();
+
+    if (activeCanvas !== null) {
+      await restoreCanvasWorkspace(activeCanvas);
+    } else {
+      applyWorkspaceState(await window.noteCanvas.getWorkspaceDirectoryState());
     }
   } catch (error) {
     console.error(error);
@@ -2474,7 +2627,7 @@ async function importCanvasFromData(importedCanvas) {
 
     const fallbackCanvas = getCanvasById(previousActiveCanvasId) ?? canvases[0] ?? null;
     activeCanvasId = fallbackCanvas?.id ?? null;
-    renderCanvasList();
+    renderCanvasSwitcher();
     renderCanvas({ syncTerminalSizes: true });
     throw error;
   }
@@ -2660,6 +2813,12 @@ function setActiveCanvas(canvasId) {
   }
 
   if (activeCanvasId !== canvasId) {
+    const previousCanvas = getActiveCanvas();
+
+    if (!isSessionHydrating && previousCanvas !== null) {
+      previousCanvas.workspace = serializeCanvasWorkspaceSession();
+    }
+
     resetPointerInteractions();
 
     if (activeCanvasRenameId !== null) {
@@ -2673,10 +2832,21 @@ function setActiveCanvas(canvasId) {
 
     setActiveNode(null);
     activeCanvasId = canvasId;
+
+    if (!isSessionHydrating) {
+      if (nextCanvas.workspace === null) {
+        applyWorkspaceState({ importedFolders: [], activeFolderId: null }, { skipCanvasWorkspaceSync: true });
+      }
+
+      void restoreCanvasWorkspace(nextCanvas);
+    }
+
+    closeCanvasSwitcherMenu();
+
     scheduleAppSessionSave();
   }
 
-  renderCanvasList();
+  renderCanvasSwitcher();
   renderCanvas({ syncTerminalSizes: true });
 }
 
@@ -2728,7 +2898,7 @@ async function deleteCanvas(canvasId) {
     activeCanvasId = fallbackCanvas?.id ?? null;
   }
 
-  renderCanvasList();
+  renderCanvasSwitcher();
   renderCanvas({ syncTerminalSizes: true });
 
   await Promise.all(nodesToRemove.map((nodeRecord) => destroyTerminalNode(nodeRecord)));
@@ -2975,6 +3145,9 @@ async function createTerminalNode(options) {
   const nodeRecord = {
     id: terminalCount,
     terminalId: null,
+    sessionKey: typeof options.sessionKey === "string" && options.sessionKey.trim().length > 0
+      ? options.sessionKey
+      : crypto.randomUUID(),
     canvas: activeCanvas,
     x: options.x,
     y: options.y,
@@ -3079,9 +3252,6 @@ async function createTerminalNode(options) {
     if (event.key === "Escape") {
       event.preventDefault();
       cancelNodeTitleEditing(nodeRecord);
-    sessionKey: typeof options.sessionKey === "string" && options.sessionKey.trim().length > 0
-      ? options.sessionKey
-      : crypto.randomUUID(),
       elements.titleInput.blur();
     }
   });
@@ -3113,7 +3283,7 @@ async function createTerminalNode(options) {
   });
 
   activeCanvas.nodes.push(nodeRecord);
-  renderCanvasList();
+  renderCanvasSwitcher();
 
   if (activeCanvas.id === activeCanvasId) {
     nodesLayer.append(elements.node);
@@ -3179,7 +3349,7 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
   if (nodeRecord.canvas.id === activeCanvasId) {
     updateEmptyState();
     applyCanvasFocusMode();
-    renderCanvasList();
+    renderCanvasSwitcher();
   }
 
   scheduleAppSessionSave();
@@ -3338,6 +3508,18 @@ function handleWindowPointerCancel(event) {
   }
 }
 
+function handleWindowClick(event) {
+  if (!isCanvasSwitcherMenuOpen || !(canvasSwitcherSection instanceof HTMLElement)) {
+    return;
+  }
+
+  if (canvasSwitcherSection.contains(event.target)) {
+    return;
+  }
+
+  closeCanvasSwitcherMenu();
+}
+
 function handleWindowKeyDown(event) {
   if (event.defaultPrevented || event.repeat) {
     return;
@@ -3351,6 +3533,12 @@ function handleWindowKeyDown(event) {
   }
 
   if (event.key === "Escape") {
+    if (isCanvasSwitcherMenuOpen) {
+      event.preventDefault();
+      closeCanvasSwitcherMenu({ restoreFocus: true });
+      return;
+    }
+
     if (isWorkspacePreviewOpen()) {
       event.preventDefault();
       closeWorkspacePreview();
@@ -3413,6 +3601,7 @@ window.addEventListener("beforeunload", () => {
   }
 
   window.removeEventListener("keydown", handleWindowKeyDown);
+  window.removeEventListener("click", handleWindowClick);
   window.removeEventListener("pointermove", handleWindowPointerMove);
   window.removeEventListener("pointerup", handleWindowPointerUp);
   window.removeEventListener("pointercancel", handleWindowPointerCancel);
@@ -3437,6 +3626,12 @@ if (window.noteCanvas.isSmokeTest) {
 
     const activeCanvas = getActiveCanvas();
     const activeNodes = activeCanvas?.nodes ?? [];
+    const canvasWorkspaceOwnerships = canvases.map((canvasRecord) => ({
+      canvasId: canvasRecord.id,
+      canvasName: canvasRecord.name,
+      workspaceRootPath: getCanvasWorkspaceRootPath(canvasRecord),
+      workspacePreviewRelativePath: getCanvasWorkspacePreviewRelativePath(canvasRecord)
+    }));
     const boardRect = board.getBoundingClientRect();
     const sidebarRect = appShell?.querySelector(".canvas-sidebar")?.getBoundingClientRect();
     const workspaceSection = workspaceBrowser?.closest(".sidebar-section");
@@ -3460,6 +3655,7 @@ if (window.noteCanvas.isSmokeTest) {
         canvasCount: canvases.length,
         canvasNames: canvases.map((canvasRecord) => canvasRecord.name),
         canvasNodeCounts: canvases.map((canvasRecord) => canvasRecord.nodes.length),
+        canvasWorkspaceOwnerships,
         activeCanvasName: activeCanvas?.name ?? null,
         activeCanvasRenameId,
         activeNodeCount: activeNodes.length,
@@ -3615,6 +3811,7 @@ if (window.noteCanvas.isSmokeTest) {
         workspaceImportedFolderPaths: snapshot.workspaceImportedFolderPaths,
         workspaceImportedFolders: snapshot.workspaceImportedFolders,
         workspaceActiveFolderId: snapshot.workspaceActiveFolderId,
+        canvasWorkspaceOwnerships: snapshot.canvasWorkspaceOwnerships,
         workspaceVisibleEntryPaths: snapshot.workspaceVisibleEntryPaths,
         workspaceSelectedFilePath: snapshot.workspaceSelectedFilePath,
         workspacePreviewStatus: snapshot.workspacePreviewStatus,
@@ -3661,7 +3858,7 @@ if (window.noteCanvas.isSmokeTest) {
       beginCanvasRename(canvasRecord.id);
       await waitForAnimationFrame();
 
-      const renameInput = canvasList.querySelector(`[data-canvas-id="${canvasRecord.id}"][data-canvas-part="rename-input"]`);
+      const renameInput = canvasSwitcherMenu.querySelector(`[data-canvas-id="${canvasRecord.id}"][data-canvas-part="rename-input"]`);
 
       if (renameInput instanceof HTMLInputElement) {
         renameInput.value = title;
@@ -3686,7 +3883,7 @@ if (window.noteCanvas.isSmokeTest) {
       beginCanvasRename(fromCanvas.id);
       await waitForAnimationFrame();
 
-      const fromInput = canvasList.querySelector(`[data-canvas-id="${fromCanvas.id}"][data-canvas-part="rename-input"]`);
+      const fromInput = canvasSwitcherMenu.querySelector(`[data-canvas-id="${fromCanvas.id}"][data-canvas-part="rename-input"]`);
 
       if (fromInput instanceof HTMLInputElement) {
         fromInput.value = draftName;
@@ -3695,7 +3892,7 @@ if (window.noteCanvas.isSmokeTest) {
       beginCanvasRename(toCanvas.id);
       await waitForAnimationFrame();
 
-      const toInput = canvasList.querySelector(`[data-canvas-id="${toCanvas.id}"][data-canvas-part="rename-input"]`);
+      const toInput = canvasSwitcherMenu.querySelector(`[data-canvas-id="${toCanvas.id}"][data-canvas-part="rename-input"]`);
 
       if (toInput instanceof HTMLInputElement) {
         toInput.value = nextDraftName;
@@ -3964,8 +4161,13 @@ importCanvasButton?.addEventListener("click", () => {
   });
 });
 
+canvasSwitcherButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  toggleCanvasSwitcherMenu();
+});
+
 openWorkspaceButton?.addEventListener("click", () => {
-  void openWorkspaceDirectory().catch((error) => {
+  void chooseCanvasWorkspace().catch((error) => {
     console.error(error);
   });
 });
@@ -4008,6 +4210,7 @@ board.addEventListener("pointerup", handleBoardPointerUp);
 board.addEventListener("pointercancel", handleBoardPointerCancel);
 board.addEventListener("wheel", handleBoardWheel, { passive: false });
 board.addEventListener("dblclick", handleBoardDoubleClick);
+window.addEventListener("click", handleWindowClick);
 window.addEventListener("pointermove", handleWindowPointerMove);
 window.addEventListener("pointerup", handleWindowPointerUp);
 window.addEventListener("pointercancel", handleWindowPointerCancel);

@@ -19,9 +19,20 @@
 
         <div class="canvas-sidebar-panel">
           <div class="canvas-sidebar-content">
-            <section class="sidebar-section sidebar-primary-section" id="canvas-list-section" aria-label="Canvas list section">
-              <div class="sidebar-section-header-row">
-                <div class="sidebar-section-header">Canvases</div>
+            <section class="sidebar-section sidebar-primary-section sidebar-switcher-section" id="canvas-switcher-section" aria-label="Canvas switcher section">
+              <div class="sidebar-section-header-row sidebar-switcher-header-row">
+                <button class="canvas-switcher-trigger" id="canvas-switcher-button" type="button" aria-label="Switch canvases" aria-expanded="false" aria-controls="canvas-switcher-list">
+                  <span class="canvas-switcher-trigger-copy">
+                    <span class="canvas-switcher-trigger-label">Canvas</span>
+                    <span class="canvas-switcher-trigger-name" id="canvas-switcher-name">Canvas</span>
+                    <span class="canvas-switcher-trigger-meta" id="canvas-switcher-meta">No workspace linked</span>
+                    <span class="canvas-switcher-trigger-path" id="canvas-switcher-path">Choose a workspace for this canvas.</span>
+                  </span>
+
+                  <svg class="canvas-switcher-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m4.25 6.25 3.75 3.75 3.75-3.75"></path>
+                  </svg>
+                </button>
 
                 <div class="sidebar-section-actions" aria-label="Canvas actions">
                   <button class="canvas-list-action sidebar-section-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">
@@ -49,7 +60,7 @@
                 </div>
               </div>
 
-              <ul class="canvas-list" id="canvas-list" aria-label="Available canvases"></ul>
+              <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden></div>
             </section>
 
             <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
@@ -73,17 +84,7 @@
                 </div>
               </div>
 
-              <div class="workspace-section-stack">
-                <section class="workspace-subsection workspace-folders-panel" aria-label="Workspace folders list">
-                  <div class="workspace-subsection-header">Folders</div>
-                  <ul class="canvas-list workspace-folder-list" id="workspace-folder-list" aria-label="Imported folders"></ul>
-                </section>
-
-                <section class="workspace-subsection workspace-navigator-panel" aria-label="Folder navigator">
-                  <div class="workspace-subsection-header">Navigator</div>
-                  <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
-                </section>
-              </div>
+              <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
             </section>
           </div>
         </div>
@@ -122,6 +123,8 @@
 
     <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="./node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="./renderer_workspace.js"></script>
+    <script src="./renderer_canvas_switcher.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>
