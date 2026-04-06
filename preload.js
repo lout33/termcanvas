@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld(
     removeWorkspaceFolder: (folderId) => ipcRenderer.invoke("workspace-folder:remove", { folderId }),
     debugOpenWorkspaceDirectory: (directoryPath) => ipcRenderer.invoke("workspace-directory:debug-open", { directoryPath }),
     readWorkspaceFile: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:read", { folderId, relativePath }),
+    openWorkspaceFileExternally: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:open-external", { folderId, relativePath }),
+    revealWorkspaceFile: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:reveal", { folderId, relativePath }),
     createTerminal: (payload) => ipcRenderer.invoke("terminal:create", payload),
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),

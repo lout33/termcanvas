@@ -9,6 +9,10 @@ const {
   getCanvasWorkspaceRootPath
 } = window.noteCanvasRendererWorkspace;
 const { deriveCanvasSwitcherViewModel } = window.noteCanvasRendererCanvasSwitcher;
+const {
+  deriveWorkspacePreviewViewModel,
+  shouldApplyWorkspacePreviewActionError
+} = window.noteCanvasRendererWorkspacePreview;
 
 if (window.noteCanvas?.isSmokeTest) {
   window.__canvasLearningBootError = null;
@@ -85,6 +89,7 @@ let pendingCanvasListFocus = null;
 let isCanvasSwitcherMenuOpen = false;
 let lastExportedCanvasDebugPayload = null;
 let workspacePreviewRequestId = 0;
+let workspacePreviewObjectUrl = null;
 let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
 let appSessionSaveTimeout = 0;
@@ -95,26 +100,14 @@ const workspacePreviewState = {
   relativePath: null,
   status: "empty",
   data: null,
-  errorMessage: ""
+  errorMessage: "",
+  actionErrorMessage: ""
 };
 
 const workspaceState = {
   importedFolders: [],
   activeFolderId: null,
   isRefreshing: false
-};
-
-const WORKSPACE_PREVIEW_KIND_LABELS = {
-  json: "JSON",
-  markdown: "Markdown",
-  text: "Text",
-  javascript: "JS",
-  typescript: "TS",
-  python: "PY",
-  shell: "Shell",
-  html: "HTML",
-  css: "CSS",
-  yaml: "YAML"
 };
 
 const panState = {
@@ -1636,11 +1629,13 @@ function getExpandedDirectoriesForFolder(folderId) {
 
 function clearWorkspacePreview(options = {}) {
   workspacePreviewRequestId += 1;
+  clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = null;
   workspacePreviewState.relativePath = null;
   workspacePreviewState.status = "empty";
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
+  workspacePreviewState.actionErrorMessage = "";
 
   if (options.skipCanvasWorkspaceSync !== true) {
     captureActiveCanvasWorkspaceSnapshot();
@@ -1663,11 +1658,59 @@ function isWorkspacePreviewOpen() {
     && workspacePreviewState.relativePath.length > 0;
 }
 
-function getWorkspacePreviewTypeLabel() {
-  const language = workspacePreviewState.data?.language;
-  return typeof language === "string" && language.length > 0
-    ? (WORKSPACE_PREVIEW_KIND_LABELS[language] ?? language.toUpperCase())
-    : "File";
+function clearWorkspacePreviewObjectUrl() {
+  if (typeof workspacePreviewObjectUrl === "string" && workspacePreviewObjectUrl.length > 0) {
+    URL.revokeObjectURL(workspacePreviewObjectUrl);
+  }
+
+  workspacePreviewObjectUrl = null;
+}
+
+function decodeBase64ToBytes(base64Value) {
+  const binaryString = window.atob(base64Value);
+  const bytes = new Uint8Array(binaryString.length);
+
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function getWorkspacePreviewObjectUrl(viewModel) {
+  if ((viewModel.mode !== "image" && viewModel.mode !== "pdf") || viewModel.binaryContentsBase64.length === 0) {
+    clearWorkspacePreviewObjectUrl();
+    return null;
+  }
+
+  if (workspacePreviewObjectUrl !== null) {
+    return workspacePreviewObjectUrl;
+  }
+
+  const bytes = decodeBase64ToBytes(viewModel.binaryContentsBase64);
+  const blob = new Blob([bytes], {
+    type: viewModel.mimeType || (viewModel.mode === "pdf" ? "application/pdf" : "application/octet-stream")
+  });
+  workspacePreviewObjectUrl = URL.createObjectURL(blob);
+  return workspacePreviewObjectUrl;
+}
+
+function setWorkspacePreviewActionErrorMessage(message) {
+  workspacePreviewState.actionErrorMessage = typeof message === "string" ? message : "";
+  renderFileInspector();
+}
+
+function setScopedWorkspacePreviewActionErrorMessage({ folderId, relativePath, message }) {
+  if (!shouldApplyWorkspacePreviewActionError({
+    currentFolderId: workspacePreviewState.folderId,
+    currentRelativePath: workspacePreviewState.relativePath,
+    targetFolderId: folderId,
+    targetRelativePath: relativePath
+  })) {
+    return;
+  }
+
+  setWorkspacePreviewActionErrorMessage(message);
 }
 
 function syncAppShellWorkspaceState() {
@@ -1732,6 +1775,8 @@ function renderFileInspector() {
     return;
   }
 
+  const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
+
   const fragment = document.createDocumentFragment();
   const header = document.createElement("div");
   header.className = "file-inspector-header";
@@ -1741,7 +1786,7 @@ function renderFileInspector() {
 
   const title = document.createElement("div");
   title.className = "file-inspector-title";
-  title.textContent = workspacePreviewState.data?.fileName ?? getWorkspaceEntryName(workspacePreviewState.relativePath);
+  title.textContent = previewViewModel.fileName || getWorkspaceEntryName(workspacePreviewState.relativePath);
 
   const pathMeta = document.createElement("div");
   pathMeta.className = "file-inspector-path";
@@ -1750,7 +1795,7 @@ function renderFileInspector() {
 
   const typeBadge = document.createElement("div");
   typeBadge.className = "file-inspector-type";
-  typeBadge.textContent = getWorkspacePreviewTypeLabel();
+  typeBadge.textContent = previewViewModel.typeLabel;
 
   heading.append(title, pathMeta, typeBadge);
 
@@ -1784,30 +1829,100 @@ function renderFileInspector() {
   const body = document.createElement("div");
   body.className = "file-inspector-body";
 
-  if (workspacePreviewState.status === "loading") {
+  if (previewViewModel.mode === "loading") {
     const loading = document.createElement("div");
     loading.className = "file-inspector-empty";
-    loading.textContent = "Loading file preview...";
+    loading.textContent = previewViewModel.message;
     body.append(loading);
-  } else if (workspacePreviewState.status === "error") {
+  } else if (previewViewModel.mode === "error") {
     const error = document.createElement("div");
     error.className = "file-inspector-error";
-    error.textContent = workspacePreviewState.errorMessage;
+    error.textContent = previewViewModel.message;
     body.append(error);
-  } else if (workspacePreviewState.data?.kind === "unsupported") {
-    const unsupported = document.createElement("div");
-    unsupported.className = "file-inspector-empty";
-    unsupported.textContent = "Preview not available for this file type.";
-    body.append(unsupported);
-  } else if (workspacePreviewState.data?.kind === "too-large") {
-    const tooLarge = document.createElement("div");
-    tooLarge.className = "file-inspector-empty";
-    tooLarge.textContent = "This file is too large to preview here.";
-    body.append(tooLarge);
+  } else if (previewViewModel.mode === "fallback") {
+    const fallback = document.createElement("div");
+    fallback.className = "file-inspector-fallback";
+
+    const fallbackMessage = document.createElement("div");
+    fallbackMessage.className = "file-inspector-empty";
+    fallbackMessage.textContent = previewViewModel.message;
+    fallback.append(fallbackMessage);
+
+    if (previewViewModel.actionErrorMessage.length > 0) {
+      const actionError = document.createElement("div");
+      actionError.className = "file-inspector-error";
+      actionError.textContent = previewViewModel.actionErrorMessage;
+      fallback.append(actionError);
+    }
+
+    if (previewViewModel.actions.canOpenExternally || previewViewModel.actions.canRevealInFinder) {
+      const fallbackActions = document.createElement("div");
+      fallbackActions.className = "file-inspector-fallback-actions";
+
+      if (previewViewModel.actions.canOpenExternally) {
+        const openButton = document.createElement("button");
+        openButton.className = "canvas-secondary-button file-inspector-button";
+        openButton.type = "button";
+        openButton.textContent = "Open externally";
+        openButton.addEventListener("click", () => {
+          const actionFolderId = workspacePreviewState.folderId;
+          const actionRelativePath = workspacePreviewState.relativePath;
+          setWorkspacePreviewActionErrorMessage("");
+          void window.noteCanvas.openWorkspaceFileExternally(actionFolderId, actionRelativePath).catch((error) => {
+            setScopedWorkspacePreviewActionErrorMessage({
+              folderId: actionFolderId,
+              relativePath: actionRelativePath,
+              message: error instanceof Error ? error.message : String(error)
+            });
+          });
+        });
+        fallbackActions.append(openButton);
+      }
+
+      if (previewViewModel.actions.canRevealInFinder) {
+        const revealButton = document.createElement("button");
+        revealButton.className = "canvas-secondary-button file-inspector-button";
+        revealButton.type = "button";
+        revealButton.textContent = "Reveal in Finder";
+        revealButton.addEventListener("click", () => {
+          const actionFolderId = workspacePreviewState.folderId;
+          const actionRelativePath = workspacePreviewState.relativePath;
+          setWorkspacePreviewActionErrorMessage("");
+          void window.noteCanvas.revealWorkspaceFile(actionFolderId, actionRelativePath).catch((error) => {
+            setScopedWorkspacePreviewActionErrorMessage({
+              folderId: actionFolderId,
+              relativePath: actionRelativePath,
+              message: error instanceof Error ? error.message : String(error)
+            });
+          });
+        });
+        fallbackActions.append(revealButton);
+      }
+
+      fallback.append(fallbackActions);
+    }
+
+    body.append(fallback);
+  } else if (previewViewModel.mode === "image") {
+    const image = document.createElement("img");
+    image.className = "file-inspector-image";
+    image.alt = previewViewModel.fileName;
+    image.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
+    body.append(image);
+  } else if (previewViewModel.mode === "pdf") {
+    const frame = document.createElement("iframe");
+    frame.className = "file-inspector-pdf-frame";
+    frame.dataset.previewLoaded = "false";
+    frame.addEventListener("load", () => {
+      frame.dataset.previewLoaded = "true";
+    }, { once: true });
+    frame.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
+    frame.title = `${previewViewModel.fileName} preview`;
+    body.append(frame);
   } else {
     const pre = document.createElement("pre");
     pre.className = "file-inspector-content";
-    pre.textContent = workspacePreviewState.data?.contents ?? "";
+    pre.textContent = previewViewModel.textContents;
     body.append(pre);
   }
 
@@ -1825,11 +1940,13 @@ async function loadWorkspaceFilePreview(relativePath) {
   const requestId = ++workspacePreviewRequestId;
   const previewFolderId = activeFolder.id;
   const previewRootPath = activeFolder.rootPath;
+  clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = previewFolderId;
   workspacePreviewState.relativePath = relativePath;
   workspacePreviewState.status = "loading";
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
+  workspacePreviewState.actionErrorMessage = "";
   captureActiveCanvasWorkspaceSnapshot();
   renderWorkspaceBrowser();
   renderFileInspector();
@@ -1850,6 +1967,7 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.data = preview;
     workspacePreviewState.status = "ready";
     workspacePreviewState.errorMessage = "";
+    workspacePreviewState.actionErrorMessage = "";
     captureActiveCanvasWorkspaceSnapshot();
     renderWorkspaceBrowser();
     renderFileInspector();
@@ -1866,8 +1984,10 @@ async function loadWorkspaceFilePreview(relativePath) {
     }
 
     workspacePreviewState.status = "error";
+    clearWorkspacePreviewObjectUrl();
     workspacePreviewState.data = null;
     workspacePreviewState.errorMessage = error instanceof Error ? error.message : String(error);
+    workspacePreviewState.actionErrorMessage = "";
     captureActiveCanvasWorkspaceSnapshot();
     renderWorkspaceBrowser();
     renderFileInspector();
@@ -1963,6 +2083,9 @@ function renderWorkspaceBrowser() {
   }
 
   updateWorkspaceControls();
+  const existingEntryList = workspaceBrowser.querySelector(".workspace-browser-list");
+  const preservedScrollTop = existingEntryList instanceof HTMLElement ? existingEntryList.scrollTop : 0;
+  const preservedRootPath = existingEntryList instanceof HTMLElement ? existingEntryList.dataset.workspaceRootPath ?? null : null;
   const fragment = document.createDocumentFragment();
   const activeFolder = getActiveWorkspaceFolder();
 
@@ -1994,6 +2117,7 @@ function renderWorkspaceBrowser() {
     } else if (activeFolder.entries.length > 0) {
       const entryList = document.createElement("ul");
       entryList.className = "workspace-browser-list";
+      entryList.dataset.workspaceRootPath = activeFolder.rootPath;
 
       buildWorkspaceTreeRows(activeFolder).forEach((entry) => {
         const item = document.createElement("li");
@@ -2054,6 +2178,16 @@ function renderWorkspaceBrowser() {
   }
 
   workspaceBrowser.replaceChildren(fragment);
+
+  const nextEntryList = workspaceBrowser.querySelector(".workspace-browser-list");
+
+  if (
+    nextEntryList instanceof HTMLElement
+    && preservedRootPath === (activeFolder?.rootPath ?? null)
+    && preservedScrollTop > 0
+  ) {
+    nextEntryList.scrollTop = preservedScrollTop;
+  }
 }
 
 function applyWorkspaceState(nextState, options = {}) {
@@ -3626,6 +3760,9 @@ if (window.noteCanvas.isSmokeTest) {
 
     const activeCanvas = getActiveCanvas();
     const activeNodes = activeCanvas?.nodes ?? [];
+    const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
+    const previewImage = fileInspector?.querySelector(".file-inspector-image");
+    const previewPdfFrame = fileInspector?.querySelector(".file-inspector-pdf-frame");
     const canvasWorkspaceOwnerships = canvases.map((canvasRecord) => ({
       canvasId: canvasRecord.id,
       canvasName: canvasRecord.name,
@@ -3697,7 +3834,16 @@ if (window.noteCanvas.isSmokeTest) {
         workspaceSelectedFilePath: workspacePreviewState.relativePath,
         workspacePreviewStatus: workspacePreviewState.status,
         workspacePreviewKind: workspacePreviewState.data?.kind ?? null,
+        workspacePreviewMode: previewViewModel.mode,
         workspacePreviewContents: workspacePreviewState.data?.contents ?? "",
+        workspacePreviewHasImage: previewImage instanceof HTMLImageElement,
+        workspacePreviewImageLoaded: previewImage instanceof HTMLImageElement && previewImage.complete && previewImage.naturalWidth > 0,
+        workspacePreviewHasPdfFrame: previewPdfFrame instanceof HTMLIFrameElement,
+        workspacePreviewPdfBlobUrl: previewPdfFrame instanceof HTMLIFrameElement ? previewPdfFrame.src : "",
+        workspacePreviewPdfLoaded: previewPdfFrame instanceof HTMLIFrameElement && previewPdfFrame.dataset.previewLoaded === "true",
+        workspacePreviewCanOpenExternally: fileInspector?.querySelector(".file-inspector-fallback-actions button:nth-child(1)")?.textContent === "Open externally"
+          || [...(fileInspector?.querySelectorAll(".file-inspector-fallback-actions .file-inspector-button") ?? [])].some((button) => button.textContent === "Open externally"),
+        workspacePreviewCanRevealInFinder: [...(fileInspector?.querySelectorAll(".file-inspector-fallback-actions .file-inspector-button") ?? [])].some((button) => button.textContent === "Reveal in Finder"),
         fileInspectorVisible: appShell?.classList.contains("has-file-inspector") === true,
         workspaceSectionVisible: Boolean(
           sidebarRect
@@ -3816,7 +3962,15 @@ if (window.noteCanvas.isSmokeTest) {
         workspaceSelectedFilePath: snapshot.workspaceSelectedFilePath,
         workspacePreviewStatus: snapshot.workspacePreviewStatus,
         workspacePreviewKind: snapshot.workspacePreviewKind,
+        workspacePreviewMode: snapshot.workspacePreviewMode,
         workspacePreviewContents: snapshot.workspacePreviewContents,
+        workspacePreviewHasImage: snapshot.workspacePreviewHasImage,
+        workspacePreviewImageLoaded: snapshot.workspacePreviewImageLoaded,
+        workspacePreviewHasPdfFrame: snapshot.workspacePreviewHasPdfFrame,
+        workspacePreviewPdfBlobUrl: snapshot.workspacePreviewPdfBlobUrl,
+        workspacePreviewPdfLoaded: snapshot.workspacePreviewPdfLoaded,
+        workspacePreviewCanOpenExternally: snapshot.workspacePreviewCanOpenExternally,
+        workspacePreviewCanRevealInFinder: snapshot.workspacePreviewCanRevealInFinder,
         fileInspectorVisible: snapshot.fileInspectorVisible,
         fullscreenExitVisible: snapshot.fullscreenExitVisible
       };

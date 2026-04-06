@@ -5,8 +5,10 @@ const os = require("node:os");
 const path = require("node:path");
 const Module = require("node:module");
 
-function loadMainWithMocks({ smokeTest = false, showOpenDialog }) {
+function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult = "" }) {
   const handlers = new Map();
+  const openPathCalls = [];
+  const showItemInFolderCalls = [];
   const electronStub = {
     app: {
       whenReady: () => new Promise(() => {}),
@@ -20,6 +22,17 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog }) {
     },
     dialog: {
       showOpenDialog
+    },
+    shell: {
+      openPath: async (targetPath) => {
+        openPathCalls.push(targetPath);
+        return typeof openPathResult === "function"
+          ? openPathResult(targetPath)
+          : openPathResult;
+      },
+      showItemInFolder: (targetPath) => {
+        showItemInFolderCalls.push(targetPath);
+      }
     },
     ipcMain: {
       handle: (channel, handler) => {
@@ -71,7 +84,7 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog }) {
     }
   }
 
-  return { handlers, mainPath };
+  return { handlers, mainPath, openPathCalls, showItemInFolderCalls };
 }
 
 test("workspace-directory:choose-canvas replaces the owner's existing workspace registry", async () => {
@@ -165,6 +178,223 @@ test("workspace-directory:choose-canvas preserves the current workspace when the
   );
 
   restoreHandler({ sender: { id: 23 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("workspace-file:open-external opens a file inside the owner workspace and rejects cross-owner access", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const ownerWorkspacePath = path.join(tempRoot, "owner-workspace");
+  const otherWorkspacePath = path.join(tempRoot, "other-workspace");
+  const ownerFilePath = path.join(ownerWorkspacePath, "docs", "notes.md");
+  const otherFilePath = path.join(otherWorkspacePath, "private.txt");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(path.dirname(ownerFilePath), { recursive: true });
+  fs.mkdirSync(otherWorkspacePath, { recursive: true });
+  fs.writeFileSync(ownerFilePath, "owner notes\n", "utf8");
+  fs.writeFileSync(otherFilePath, "private\n", "utf8");
+
+  const { handlers, mainPath, openPathCalls } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const openExternalHandler = handlers.get("workspace-file:open-external");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  assert.equal(typeof openExternalHandler, "function");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 41 } }, { directoryPath: ownerWorkspacePath });
+  await debugOpenHandler({ sender: { id: 42 } }, { directoryPath: otherWorkspacePath });
+
+  const ownerFolderId = stateHandler({ sender: { id: 41 } }).importedFolders[0].id;
+
+  await openExternalHandler(
+    { sender: { id: 41 } },
+    { folderId: ownerFolderId, relativePath: "docs/notes.md" }
+  );
+
+  assert.deepEqual(openPathCalls, [fs.realpathSync(ownerFilePath)]);
+
+  await assert.rejects(
+    () => openExternalHandler(
+      { sender: { id: 43 } },
+      { folderId: ownerFolderId, relativePath: "docs/notes.md" }
+    ),
+    /Open a workspace folder before opening files externally\./u
+  );
+
+  restoreHandler({ sender: { id: 41 } }, { importedRootPaths: [], activeRootPath: null });
+  restoreHandler({ sender: { id: 42 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("workspace-file:reveal shows a file in its folder and rejects paths outside the workspace root", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const revealFilePath = path.join(workspacePath, "reports", "result.txt");
+  const outsideFilePath = path.join(tempRoot, "escape.txt");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(path.dirname(revealFilePath), { recursive: true });
+  fs.writeFileSync(revealFilePath, "result\n", "utf8");
+  fs.writeFileSync(outsideFilePath, "escape\n", "utf8");
+
+  const { handlers, mainPath, showItemInFolderCalls } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const revealHandler = handlers.get("workspace-file:reveal");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  assert.equal(typeof revealHandler, "function");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 51 } }, { directoryPath: workspacePath });
+
+  const folderId = stateHandler({ sender: { id: 51 } }).importedFolders[0].id;
+
+  await revealHandler(
+    { sender: { id: 51 } },
+    { folderId, relativePath: "reports/result.txt" }
+  );
+
+  assert.deepEqual(showItemInFolderCalls, [fs.realpathSync(revealFilePath)]);
+
+  assert.throws(
+    () => revealHandler(
+      { sender: { id: 51 } },
+      { folderId, relativePath: "../escape.txt" }
+    ),
+    /Workspace file preview must stay inside the workspace root\./u
+  );
+
+  restoreHandler({ sender: { id: 51 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("workspace-file:reveal stays scoped to the caller's workspace registry", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const ownerWorkspacePath = path.join(tempRoot, "owner-workspace");
+  const otherWorkspacePath = path.join(tempRoot, "other-workspace");
+  const ownerFilePath = path.join(ownerWorkspacePath, "reports", "result.txt");
+  const otherFilePath = path.join(otherWorkspacePath, "reports", "result.txt");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(path.dirname(ownerFilePath), { recursive: true });
+  fs.mkdirSync(path.dirname(otherFilePath), { recursive: true });
+  fs.writeFileSync(ownerFilePath, "owner result\n", "utf8");
+  fs.writeFileSync(otherFilePath, "other result\n", "utf8");
+
+  const { handlers, mainPath, showItemInFolderCalls } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const revealHandler = handlers.get("workspace-file:reveal");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 61 } }, { directoryPath: ownerWorkspacePath });
+  await debugOpenHandler({ sender: { id: 62 } }, { directoryPath: otherWorkspacePath });
+
+  const ownerFolderId = stateHandler({ sender: { id: 61 } }).importedFolders[0].id;
+  const otherFolderId = stateHandler({ sender: { id: 62 } }).importedFolders[0].id;
+
+  await revealHandler(
+    { sender: { id: 61 } },
+    { folderId: ownerFolderId, relativePath: "reports/result.txt" }
+  );
+
+  await revealHandler(
+    { sender: { id: 62 } },
+    { folderId: otherFolderId, relativePath: "reports/result.txt" }
+  );
+
+  assert.deepEqual(showItemInFolderCalls, [
+    fs.realpathSync(ownerFilePath),
+    fs.realpathSync(otherFilePath)
+  ]);
+
+  restoreHandler({ sender: { id: 61 } }, { importedRootPaths: [], activeRootPath: null });
+  restoreHandler({ sender: { id: 62 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("workspace-file:open-external surfaces shell.openPath errors", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const filePath = path.join(workspacePath, "docs", "notes.md");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, "notes\n", "utf8");
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    openPathResult: "Launch Services failed"
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const openExternalHandler = handlers.get("workspace-file:open-external");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 71 } }, { directoryPath: workspacePath });
+
+  const folderId = stateHandler({ sender: { id: 71 } }).importedFolders[0].id;
+
+  await assert.rejects(
+    () => openExternalHandler(
+      { sender: { id: 71 } },
+      { folderId, relativePath: "docs/notes.md" }
+    ),
+    /Launch Services failed/u
+  );
+
+  restoreHandler({ sender: { id: 71 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, webContents } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, webContents } = require("electron");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -16,7 +16,7 @@ const {
   setWorkspaceFolderError,
   updateWorkspaceFolderSnapshot
 } = require("./workspace_registry");
-const { readWorkspaceFilePreview } = require("./workspace_file_preview");
+const { readWorkspaceFilePreview, resolveWorkspaceFilePath } = require("./workspace_file_preview");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessions = new Map();
@@ -240,6 +240,22 @@ function getActiveWorkspaceFolderForOwner(ownerWebContentsId) {
   }
 
   return getWorkspaceFolder(workspaceRegistry, workspaceRegistry.activeFolderId);
+}
+
+function getOwnedWorkspaceFileTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
+
+  if (workspaceRegistry === null) {
+    throw new Error(missingFolderMessage);
+  }
+
+  const workspaceFolder = getWorkspaceFolder(workspaceRegistry, folderId);
+
+  if (workspaceFolder === null) {
+    throw new Error(missingFolderMessage);
+  }
+
+  return resolveWorkspaceFilePath(workspaceFolder.rootPath, relativePath);
 }
 
 function getOwnerWorkspaceWatchers(ownerWebContentsId) {
@@ -960,7 +976,23 @@ async function runSmokeTest(window) {
     const canonicalSmokeWorkspacePath = fs.realpathSync(smokeWorkspacePath);
     fs.mkdirSync(path.join(smokeWorkspacePath, "agent-output", "reports"), { recursive: true });
     fs.writeFileSync(path.join(smokeWorkspacePath, "agent-output", "reports", "notes.md"), "# Smoke Report\n\nfirst pass\n", "utf8");
+    fs.writeFileSync(
+      path.join(smokeWorkspacePath, "diagram.png"),
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0xoAAAAASUVORK5CYII=", "base64")
+    );
+    fs.writeFileSync(
+      path.join(smokeWorkspacePath, "spec.pdf"),
+      Buffer.from("%PDF-1.1\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", "utf8")
+    );
     fs.writeFileSync(path.join(smokeWorkspacePath, "artifact.bin"), Buffer.from([0xde, 0xad, 0xbe, 0xef]));
+
+    for (let entryIndex = 0; entryIndex < 48; entryIndex += 1) {
+      fs.writeFileSync(
+        path.join(smokeWorkspacePath, `log-${String(entryIndex).padStart(2, "0")}.txt`),
+        `workspace log ${entryIndex}\n`,
+        "utf8"
+      );
+    }
 
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.openWorkspaceDirectoryForPath(${JSON.stringify(smokeWorkspacePath)})`);
     const workspaceOpenSnapshot = await waitForSnapshot(
@@ -983,6 +1015,82 @@ async function runSmokeTest(window) {
 
     if (!expandedWorkspaceSnapshot.workspaceVisibleEntryPaths.includes("agent-output/reports/notes.md")) {
       throw new Error("Smoke test failed: nested workspace file did not become visible after expanding folders.");
+    }
+
+    logStep("preserve workspace browser scroll after file selection");
+    const workspaceBrowserScrollBeforePreview = await window.webContents.executeJavaScript(`(() => {
+      const list = document.querySelector('.workspace-browser-list');
+
+      if (!(list instanceof HTMLElement)) {
+        return null;
+      }
+
+      list.scrollTop = 160;
+
+      return {
+        scrollTop: list.scrollTop,
+        scrollHeight: list.scrollHeight,
+        clientHeight: list.clientHeight
+      };
+    })()`);
+
+    if (
+      workspaceBrowserScrollBeforePreview === null
+      || workspaceBrowserScrollBeforePreview.scrollHeight <= workspaceBrowserScrollBeforePreview.clientHeight
+      || workspaceBrowserScrollBeforePreview.scrollTop < 100
+    ) {
+      throw new Error(`Smoke test failed: workspace browser did not become scrollable for the scroll-preservation assertion. Snapshot: ${JSON.stringify(workspaceBrowserScrollBeforePreview)}`);
+    }
+
+    logStep("preview workspace image file");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("diagram.png")})`);
+    const imagePreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceSelectedFilePath === "diagram.png" && snapshot.workspacePreviewKind === "image" && snapshot.workspacePreviewMode === "image" && snapshot.workspacePreviewImageLoaded === true,
+      4000
+    );
+
+    if (
+      imagePreviewSnapshot.workspaceSelectedFilePath !== "diagram.png"
+      || imagePreviewSnapshot.workspacePreviewKind !== "image"
+      || imagePreviewSnapshot.workspacePreviewMode !== "image"
+      || imagePreviewSnapshot.workspacePreviewHasImage !== true
+      || imagePreviewSnapshot.workspacePreviewImageLoaded !== true
+    ) {
+      throw new Error(`Smoke test failed: image file did not open as an internal preview. Snapshot: ${JSON.stringify(imagePreviewSnapshot)}`);
+    }
+
+    const workspaceBrowserScrollAfterPreview = await window.webContents.executeJavaScript(`(() => {
+      const list = document.querySelector('.workspace-browser-list');
+
+      if (!(list instanceof HTMLElement)) {
+        return null;
+      }
+
+      return list.scrollTop;
+    })()`);
+
+    if (typeof workspaceBrowserScrollAfterPreview !== "number" || workspaceBrowserScrollAfterPreview < 100) {
+      throw new Error(`Smoke test failed: workspace browser scroll reset after selecting a file. Value: ${JSON.stringify(workspaceBrowserScrollAfterPreview)}`);
+    }
+
+    logStep("preview workspace pdf file");
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("spec.pdf")})`);
+    const pdfPreviewSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.workspaceSelectedFilePath === "spec.pdf" && snapshot.workspacePreviewKind === "pdf" && snapshot.workspacePreviewMode === "pdf" && snapshot.workspacePreviewPdfBlobUrl !== "" && snapshot.workspacePreviewPdfLoaded === true,
+      4000
+    );
+
+    if (
+      pdfPreviewSnapshot.workspaceSelectedFilePath !== "spec.pdf"
+      || pdfPreviewSnapshot.workspacePreviewKind !== "pdf"
+      || pdfPreviewSnapshot.workspacePreviewMode !== "pdf"
+      || pdfPreviewSnapshot.workspacePreviewHasPdfFrame !== true
+      || pdfPreviewSnapshot.workspacePreviewPdfBlobUrl === ""
+      || pdfPreviewSnapshot.workspacePreviewPdfLoaded !== true
+    ) {
+      throw new Error(`Smoke test failed: PDF file did not open as an internal preview. Snapshot: ${JSON.stringify(pdfPreviewSnapshot)}`);
     }
 
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("agent-output/reports/notes.md")})`);
@@ -1033,12 +1141,17 @@ async function runSmokeTest(window) {
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.selectWorkspaceFile(${JSON.stringify("artifact.bin")})`);
     const unsupportedPreviewSnapshot = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
-      (snapshot) => snapshot.workspacePreviewKind === "unsupported",
+      (snapshot) => snapshot.workspacePreviewKind === "binary" && snapshot.workspacePreviewMode === "fallback",
       4000
     );
 
-    if (unsupportedPreviewSnapshot.workspacePreviewKind !== "unsupported") {
-      throw new Error("Smoke test failed: unsupported workspace file did not produce the expected fallback preview state.");
+    if (
+      unsupportedPreviewSnapshot.workspacePreviewKind !== "binary"
+      || unsupportedPreviewSnapshot.workspacePreviewMode !== "fallback"
+      || unsupportedPreviewSnapshot.workspacePreviewCanOpenExternally !== true
+      || unsupportedPreviewSnapshot.workspacePreviewCanRevealInFinder !== true
+    ) {
+      throw new Error(`Smoke test failed: binary workspace file did not produce fallback actions. Snapshot: ${JSON.stringify(unsupportedPreviewSnapshot)}`);
     }
 
     logStep("restore markdown preview before canvas ownership checks");
@@ -1385,25 +1498,43 @@ ipcMain.handle("workspace-directory:refresh", (event) => {
 });
 
 ipcMain.handle("workspace-file:read", (event, payload) => {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
-
-  if (workspaceRegistry === null) {
-    throw new Error("Open a workspace folder before previewing files.");
-  }
-
-  const workspaceFolder = getWorkspaceFolder(
-    workspaceRegistry,
-    typeof payload?.folderId === "string" ? payload.folderId : ""
-  );
-
-  if (workspaceFolder === null) {
-    throw new Error("Open a workspace folder before previewing files.");
-  }
-
   return readWorkspaceFilePreview(
-    workspaceFolder.rootPath,
+    getOwnedWorkspaceFileTarget(
+      event.sender.id,
+      typeof payload?.folderId === "string" ? payload.folderId : "",
+      typeof payload?.relativePath === "string" ? payload.relativePath : "",
+      "Open a workspace folder before previewing files."
+    ).rootPath,
     typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
+});
+
+ipcMain.handle("workspace-file:open-external", async (event, payload) => {
+  const resolvedTarget = getOwnedWorkspaceFileTarget(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.relativePath === "string" ? payload.relativePath : "",
+    "Open a workspace folder before opening files externally."
+  );
+  const openError = await shell.openPath(resolvedTarget.filePath);
+
+  if (typeof openError === "string" && openError.length > 0) {
+    throw new Error(openError);
+  }
+
+  return null;
+});
+
+ipcMain.handle("workspace-file:reveal", (event, payload) => {
+  const resolvedTarget = getOwnedWorkspaceFileTarget(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.relativePath === "string" ? payload.relativePath : "",
+    "Open a workspace folder before revealing files."
+  );
+
+  shell.showItemInFolder(resolvedTarget.filePath);
+  return null;
 });
 
 ipcMain.handle("terminal:create", (event, payload) => {

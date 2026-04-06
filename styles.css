@@ -943,6 +943,17 @@ button {
   overflow: auto;
 }
 
+.file-inspector-fallback {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.file-inspector-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .file-inspector-content {
   margin: 0;
   color: var(--color-ink);
@@ -962,6 +973,24 @@ button {
 
 .file-inspector-error {
   color: var(--color-sidebar-delete);
+}
+
+.file-inspector-image,
+.file-inspector-pdf-frame {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--color-sidebar-rule);
+  border-radius: var(--radius-md);
+  background: rgba(7, 8, 10, 0.92);
+}
+
+.file-inspector-image {
+  height: auto;
+  object-fit: contain;
+}
+
+.file-inspector-pdf-frame {
+  min-height: 32rem;
 }
 
 .canvas-list-item {
