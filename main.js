@@ -22,6 +22,7 @@ const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 const terminalSessions = new Map();
 const workspaceRegistries = new Map();
 const workspaceWatchers = new Map();
+const activeTerminalShortcutStates = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
 const TMUX_SESSION_PREFIX = "canvas-learning";
@@ -780,6 +781,16 @@ function sendToOwner(ownerWebContentsId, channel, payload) {
   }
 }
 
+function isToggleActiveTerminalMaximizeShortcut(input) {
+  return process.platform === "darwin"
+    && input?.type === "keyDown"
+    && String(input?.key || "").toLowerCase() === "m"
+    && input?.meta === true
+    && input?.control !== true
+    && input?.alt !== true
+    && input?.shift !== true;
+}
+
 function destroyTerminalSession(terminalId, options = {}) {
   const session = getSession(terminalId);
   const preserveSession = options.preserveSession === true;
@@ -816,6 +827,7 @@ function destroyOwnedWindowState(ownerWebContentsId) {
   });
   destroyOwnedWorkspaceWatchers(ownerWebContentsId);
   workspaceRegistries.delete(ownerWebContentsId);
+  activeTerminalShortcutStates.delete(ownerWebContentsId);
 }
 
 function ensureAuthorizedSession(event, terminalId) {
@@ -1025,6 +1037,32 @@ async function runSmokeTest(window) {
       throw new Error("Smoke test failed: terminal output did not include expected text.");
     }
 
+    logStep("toggle selected terminal maximize with Command+M");
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "M", modifiers: ["meta"] });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "M", modifiers: ["meta"] });
+    const maximizedTerminalSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getCanvasSnapshot()",
+      (nextSnapshot) => nextSnapshot.maximizedNodeTitle === nextSnapshot.nodeTitles[0],
+      4000
+    );
+
+    if (maximizedTerminalSnapshot.maximizedNodeTitle !== maximizedTerminalSnapshot.nodeTitles[0] || window.isMinimized()) {
+      throw new Error(`Smoke test failed: Command+M did not maximize the selected terminal. Snapshot: ${JSON.stringify(maximizedTerminalSnapshot)}`);
+    }
+
+    logStep("restore selected terminal with Command+M");
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "M", modifiers: ["meta"] });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "M", modifiers: ["meta"] });
+    const restoredTerminalSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getCanvasSnapshot()",
+      (nextSnapshot) => nextSnapshot.maximizedNodeTitle === null,
+      4000
+    );
+
+    if (restoredTerminalSnapshot.maximizedNodeTitle !== null || window.isMinimized()) {
+      throw new Error(`Smoke test failed: Command+M did not restore the selected terminal. Snapshot: ${JSON.stringify(restoredTerminalSnapshot)}`);
+    }
+
     logStep("create second canvas");
     const afterCanvasCreate = await window.webContents.executeJavaScript("window.__canvasLearningDebug.createCanvas()");
 
@@ -1035,6 +1073,21 @@ async function runSmokeTest(window) {
       || afterCanvasCreate.visibleNodeCount !== 0
     ) {
       throw new Error("Smoke test failed: creating a new canvas did not activate an empty second canvas.");
+    }
+
+    logStep("ignore Command+M when no terminal is selected");
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "M", modifiers: ["meta"] });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "M", modifiers: ["meta"] });
+    await delay(150);
+    const emptyCanvasShortcutSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getCanvasSnapshot()");
+
+    if (
+      window.isMinimized()
+      || emptyCanvasShortcutSnapshot.activeCanvasName !== "Canvas 2"
+      || emptyCanvasShortcutSnapshot.activeNodeCount !== 0
+      || emptyCanvasShortcutSnapshot.maximizedNodeTitle !== null
+    ) {
+      throw new Error(`Smoke test failed: Command+M did not no-op on an empty canvas. Snapshot: ${JSON.stringify(emptyCanvasShortcutSnapshot)}`);
     }
 
     logStep("switch back first canvas");
@@ -1645,13 +1698,25 @@ app.on("window-all-closed", () => {
 });
 
 app.on("web-contents-created", (_event, contents) => {
+  contents.on("before-input-event", (event, input) => {
+    if (!isToggleActiveTerminalMaximizeShortcut(input)) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (activeTerminalShortcutStates.get(contents.id) === true) {
+      sendToOwner(contents.id, "terminal:toggle-maximize-active", null);
+    }
+  });
+
   contents.on("did-finish-load", () => {
     pushWorkspaceRegistryToOwner(contents.id);
   });
 
-contents.on("destroyed", () => {
-  destroyOwnedWindowState(contents.id);
-});
+  contents.on("destroyed", () => {
+    destroyOwnedWindowState(contents.id);
+  });
 });
 
 ipcMain.handle("app-session:load", () => {
@@ -1664,6 +1729,10 @@ ipcMain.on("app-session:save", (_event, payload) => {
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
   }
+});
+
+ipcMain.on("terminal:active-state", (event, payload) => {
+  activeTerminalShortcutStates.set(event.sender.id, payload?.hasActiveTerminal === true);
 });
 
 ipcMain.handle("workspace-session:restore", (event, payload) => {

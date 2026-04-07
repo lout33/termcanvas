@@ -5,12 +5,31 @@ const os = require("node:os");
 const path = require("node:path");
 const Module = require("node:module");
 
+function createMockContents(id, contentsEventHandlers, sentMessages) {
+  return {
+    id,
+    on: (eventName, handler) => {
+      contentsEventHandlers.set(eventName, handler);
+    },
+    once: (eventName, handler) => {
+      contentsEventHandlers.set(eventName, handler);
+    },
+    isDestroyed: () => false,
+    send: (channel, payload) => {
+      sentMessages.push({ ownerWebContentsId: id, channel, payload });
+    }
+  };
+}
+
 function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult = "", resolveWhenReady = false }) {
   const handlers = new Map();
   const openPathCalls = [];
   const openExternalCalls = [];
   const showItemInFolderCalls = [];
   const createdWindows = [];
+  const appEventHandlers = new Map();
+  const contentsEventHandlers = new Map();
+  const sentMessages = [];
 
   function createMockWindow() {
     const window = {
@@ -40,7 +59,9 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
   const electronStub = {
     app: {
       whenReady: () => resolveWhenReady ? Promise.resolve() : new Promise(() => {}),
-      on: () => {},
+      on: (eventName, handler) => {
+        appEventHandlers.set(eventName, handler);
+      },
       quit: () => {},
       exit: () => {},
       getPath: () => os.homedir()
@@ -67,13 +88,12 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
       handle: (channel, handler) => {
         handlers.set(channel, handler);
       },
-      on: () => {}
+      on: (channel, handler) => {
+        handlers.set(channel, handler);
+      }
     },
     webContents: {
-      fromId: () => ({
-        isDestroyed: () => false,
-        send: () => {}
-      })
+      fromId: (id) => createMockContents(id, contentsEventHandlers, sentMessages)
     }
   };
 
@@ -113,7 +133,17 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
     }
   }
 
-  return { handlers, mainPath, openPathCalls, openExternalCalls, showItemInFolderCalls, createdWindows };
+  return {
+    handlers,
+    mainPath,
+    openPathCalls,
+    openExternalCalls,
+    createdWindows,
+    showItemInFolderCalls,
+    appEventHandlers,
+    contentsEventHandlers,
+    sentMessages
+  };
 }
 
 test("workspace-directory:choose-canvas replaces the owner's existing workspace registry", async () => {
@@ -588,5 +618,90 @@ test("createMainWindow denies new windows and opens external links in the system
 
   assert.deepEqual(handlerResult, { action: "deny" });
   assert.deepEqual(openExternalCalls, ["https://example.com/docs"]);
+  delete require.cache[mainPath];
+});
+
+test("Cmd+M is intercepted only when the renderer reports an active terminal", async () => {
+  const {
+    handlers,
+    appEventHandlers,
+    contentsEventHandlers,
+    sentMessages,
+    mainPath
+  } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+  const contents = createMockContents(91, contentsEventHandlers, sentMessages);
+
+  appEventHandlers.get("web-contents-created")({}, contents);
+
+  const setActiveState = handlers.get("terminal:active-state");
+  const beforeInput = contentsEventHandlers.get("before-input-event");
+  const preventedEvent = {
+    preventDefaultCalled: false,
+    preventDefault() {
+      this.preventDefaultCalled = true;
+    }
+  };
+
+  assert.equal(typeof setActiveState, "function");
+  assert.equal(typeof beforeInput, "function");
+
+  setActiveState({ sender: { id: 91 } }, { hasActiveTerminal: true });
+  beforeInput(preventedEvent, {
+    type: "keyDown",
+    key: "m",
+    meta: true,
+    control: false,
+    alt: false,
+    shift: false
+  });
+
+  assert.equal(preventedEvent.preventDefaultCalled, true);
+  assert.deepEqual(sentMessages, [{
+    ownerWebContentsId: 91,
+    channel: "terminal:toggle-maximize-active",
+    payload: null
+  }]);
+
+  delete require.cache[mainPath];
+});
+
+test("Cmd+M is swallowed without forwarding when no active terminal is cached", async () => {
+  const {
+    appEventHandlers,
+    contentsEventHandlers,
+    sentMessages,
+    mainPath
+  } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+  const contents = createMockContents(92, contentsEventHandlers, sentMessages);
+
+  appEventHandlers.get("web-contents-created")({}, contents);
+
+  const beforeInput = contentsEventHandlers.get("before-input-event");
+  const passthroughEvent = {
+    preventDefaultCalled: false,
+    preventDefault() {
+      this.preventDefaultCalled = true;
+    }
+  };
+
+  assert.equal(typeof beforeInput, "function");
+
+  beforeInput(passthroughEvent, {
+    type: "keyDown",
+    key: "m",
+    meta: true,
+    control: false,
+    alt: false,
+    shift: false
+  });
+
+  assert.equal(passthroughEvent.preventDefaultCalled, true);
+  assert.deepEqual(sentMessages, []);
   delete require.cache[mainPath];
 });

@@ -238,6 +238,14 @@ const removeWorkspaceDirectoryDataListener = window.noteCanvas.onWorkspaceDirect
   applyWorkspaceState(snapshot);
 });
 
+const removeToggleActiveTerminalMaximizeListener = window.noteCanvas.onToggleActiveTerminalMaximize(() => {
+  if (activeNodeRecord === null || activeNodeRecord.isRemoved || activeNodeRecord.canvas.id !== activeCanvasId) {
+    return;
+  }
+
+  setNodeMaximized(activeNodeRecord, !activeNodeRecord.isMaximized);
+});
+
 function isElement(value) {
   return value instanceof Element;
 }
@@ -1275,11 +1283,13 @@ function setActiveNode(nodeRecord) {
   if (nodeRecord === null) {
     activeNodeRecord?.element.classList.remove("is-active");
     activeNodeRecord = null;
+    window.noteCanvas.setActiveTerminalShortcutState(false);
     return;
   }
 
   if (activeNodeRecord === nodeRecord) {
     bringNodeToFront(nodeRecord);
+    window.noteCanvas.setActiveTerminalShortcutState(true);
     return;
   }
 
@@ -1287,6 +1297,7 @@ function setActiveNode(nodeRecord) {
   activeNodeRecord = nodeRecord;
   activeNodeRecord.element.classList.add("is-active");
   bringNodeToFront(activeNodeRecord);
+  window.noteCanvas.setActiveTerminalShortcutState(true);
 }
 
 function updateEmptyState() {
@@ -4370,6 +4381,7 @@ void initializeApp().catch((error) => {
 window.addEventListener("beforeunload", () => {
   flushAppSessionSave();
   isWindowUnloading = true;
+  window.noteCanvas.setActiveTerminalShortcutState(false);
 
   if (zoomIndicatorTimeout !== 0) {
     window.clearTimeout(zoomIndicatorTimeout);
@@ -4392,6 +4404,7 @@ window.addEventListener("beforeunload", () => {
   window.removeEventListener("pointermove", handleWindowPointerMove);
   window.removeEventListener("pointerup", handleWindowPointerUp);
   window.removeEventListener("pointercancel", handleWindowPointerCancel);
+  removeToggleActiveTerminalMaximizeListener();
   removeTerminalDataListener();
   removeTerminalExitListener();
   removeTerminalCwdChangeListener();

@@ -5,6 +5,8 @@ const Module = require("node:module");
 function loadPreloadWithMocks() {
   let exposedApi = null;
   const invokeCalls = [];
+  const sendCalls = [];
+  const onCalls = [];
   const electronStub = {
     contextBridge: {
       exposeInMainWorld: (_key, value) => {
@@ -15,8 +17,13 @@ function loadPreloadWithMocks() {
       invoke: (...args) => {
         invokeCalls.push(args);
       },
-      send: () => {},
-      on: () => {},
+      send: (...args) => {
+        sendCalls.push(args);
+      },
+      on: (channel, listener) => {
+        onCalls.push([channel]);
+        return listener;
+      },
       removeListener: () => {}
     }
   };
@@ -39,7 +46,7 @@ function loadPreloadWithMocks() {
     Module._load = originalLoad;
   }
 
-  return { exposedApi, invokeCalls, preloadPath };
+  return { exposedApi, invokeCalls, sendCalls, onCalls, preloadPath };
 }
 
 test("preload exposes chooseCanvasWorkspace over the canvas IPC channel", () => {
@@ -91,5 +98,20 @@ test("preload exposes workspace create, rename, delete, and save methods", () =>
     ["workspace-entry:delete", { folderId: "folder-1", relativePath: "assets" }],
     ["workspace-file:write", { folderId: "folder-1", relativePath: "docs/final.md", textContents: "updated\n", expectedLastModifiedMs: 1234 }]
   ]);
+  delete require.cache[preloadPath];
+});
+
+test("preload exposes active terminal shortcut sync and maximize toggle listener", () => {
+  const { exposedApi, sendCalls, onCalls, preloadPath } = loadPreloadWithMocks();
+
+  assert.equal(typeof exposedApi.setActiveTerminalShortcutState, "function");
+  assert.equal(typeof exposedApi.onToggleActiveTerminalMaximize, "function");
+
+  const removeListener = exposedApi.onToggleActiveTerminalMaximize(() => {});
+  exposedApi.setActiveTerminalShortcutState(true);
+
+  assert.equal(typeof removeListener, "function");
+  assert.deepEqual(sendCalls, [["terminal:active-state", { hasActiveTerminal: true }]]);
+  assert.deepEqual(onCalls, [["terminal:toggle-maximize-active"]]);
   delete require.cache[preloadPath];
 });

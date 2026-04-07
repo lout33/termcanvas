@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld(
       folderId,
       relativePath
     }),
+    setActiveTerminalShortcutState: (hasActiveTerminal) => ipcRenderer.send("terminal:active-state", {
+      hasActiveTerminal: hasActiveTerminal === true
+    }),
     createTerminal: (payload) => ipcRenderer.invoke("terminal:create", payload),
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),
@@ -84,6 +87,14 @@ contextBridge.exposeInMainWorld(
 
       return () => {
         ipcRenderer.removeListener("workspace-directory:data", listener);
+      };
+    },
+    onToggleActiveTerminalMaximize: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on("terminal:toggle-maximize-active", listener);
+
+      return () => {
+        ipcRenderer.removeListener("terminal:toggle-maximize-active", listener);
       };
     }
   })

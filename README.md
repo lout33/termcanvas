@@ -2,16 +2,17 @@
 
 Canvas Learning is a minimal Electron app for spatial terminal workflows.
 
-Instead of text notes, the canvas opens real shell terminals as world-space nodes. You can pan and zoom the board, open multiple canvases, browse workspace files, and reopen the app into the same working session.
+Instead of text notes, the canvas opens real shell terminals as world-space nodes. You can pan and zoom the board, switch canvases from the top bar, browse workspace files from the left drawer, and reopen the app into the same working session.
 
 ## What it does
 
 - Multi-canvas workspace with create, switch, rename, delete, and reorder
+- Top-bar canvas strip for fast canvas switching with a canvas management menu
 - Infinite-style canvas with drag-to-pan navigation and modifier-wheel zoom
 - Double-click empty space to create a terminal node
 - Real interactive shell terminals rendered with `xterm.js`
 - Resize, rename, maximize, restore, and close terminal nodes
-- Overlay left drawer for canvases and imported workspace folders
+- Workspace-focused left drawer for imported workspace folders and file actions
 - Multiple imported workspace folders with reorder and active-folder switching
 - Workspace file browser and file preview inspector
 - App-session restore across relaunches
@@ -79,6 +80,8 @@ The project includes a focused Electron smoke path that checks the core runtime:
 - terminal node creation works
 - terminal output flows back into the node
 - canvases stay isolated
+- the top canvas strip stays visible while maximized terminals are shown
+- `Cmd+M` maximizes and restores the selected terminal without minimizing the window
 - exported/imported terminals preserve tracked working directories
 - workspace preview and list behaviors still work
 
@@ -153,6 +156,7 @@ On macOS, the app uses:
 ## Keyboard shortcuts
 
 - `Cmd+B`: toggle the left drawer
+- `Cmd+M`: maximize or restore the selected terminal node
 - `Cmd+L`: close the file preview inspector
 - `Esc`: close the current preview or exit maximize mode
 
