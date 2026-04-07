@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file explains the local architecture of the `canvas_learning` app so future agents can extend it safely.
+This file explains the local architecture of the `TermCanvas` app so future agents can extend it safely.
 
 ## Product intent
 
@@ -24,7 +24,7 @@ Responsibilities:
 - permanently destroy a terminal session when the user closes a node
 - own workspace folder import, refresh, watch, and preview access
 - own app-session file persistence in Electron `userData`
-- own file dialog and local file read/write for canvas JSON import/export
+- own file dialog and local file read/write for canvas JSON and app-data JSON import/export
 
 Important rule:
 
@@ -89,6 +89,8 @@ Current exposed API includes:
 
 - `loadAppSession()`
 - `saveAppSession(payload)`
+- `saveAppSessionFile(payload)`
+- `openAppSessionFile()`
 - `restoreWorkspaceSession(payload)`
 - `getWorkspaceDirectoryState()`
 - `openWorkspaceDirectory()`
@@ -150,6 +152,8 @@ Renderer node records now carry both:
 
 - `app-session:load`
 - `app-session:save`
+- `app-session:save-file`
+- `app-session:open-file`
 - `workspace-session:restore`
 - `workspace-directory:state`
 - `workspace-directory:open`

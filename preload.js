@@ -3,10 +3,12 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld(
   "noteCanvas",
   Object.freeze({
-    appName: "Canvas Learning",
+    appName: "TermCanvas",
     isSmokeTest: process.env.CANVAS_SMOKE_TEST === "1",
     loadAppSession: () => ipcRenderer.invoke("app-session:load"),
     saveAppSession: (payload) => ipcRenderer.send("app-session:save", payload),
+    saveAppSessionFile: (payload) => ipcRenderer.invoke("app-session:save-file", payload),
+    openAppSessionFile: () => ipcRenderer.invoke("app-session:open-file"),
     restoreWorkspaceSession: (payload) => ipcRenderer.invoke("workspace-session:restore", payload),
     getWorkspaceDirectoryState: () => ipcRenderer.invoke("workspace-directory:state"),
     openWorkspaceDirectory: () => ipcRenderer.invoke("workspace-directory:open"),

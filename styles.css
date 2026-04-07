@@ -1318,7 +1318,45 @@ button {
 .canvas-topbar-spacer {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   min-width: 2.5rem;
+}
+
+.canvas-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+  padding-right: 0.2rem;
+}
+
+.canvas-brand-mark {
+  display: block;
+  width: 2.55rem;
+  height: 2.55rem;
+  flex: 0 0 auto;
+  border-radius: 0.8rem;
+  box-shadow: 0 0.6rem 1.4rem rgba(0, 0, 0, 0.28);
+}
+
+.canvas-brand-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.canvas-brand-name {
+  color: var(--color-ink);
+  font-size: 0.94rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.canvas-brand-tagline {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 .canvas-topbar-spacer {
@@ -2065,6 +2103,10 @@ button {
   .canvas-topbar {
     grid-template-columns: auto minmax(0, 1fr);
     row-gap: var(--space-2);
+  }
+
+  .canvas-brand-tagline {
+    display: none;
   }
 
   .canvas-topbar-spacer {

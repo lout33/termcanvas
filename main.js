@@ -5,6 +5,7 @@ const path = require("node:path");
 const os = require("node:os");
 const pty = require("node-pty");
 const { createDirectorySnapshot } = require("./directory_snapshot");
+const { getNodePtyHelperPaths } = require("./node_pty_runtime");
 const {
   activateWorkspaceFolder,
   createWorkspaceRegistry,
@@ -25,7 +26,7 @@ const workspaceWatchers = new Map();
 const activeTerminalShortcutStates = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
-const TMUX_SESSION_PREFIX = "canvas-learning";
+const TMUX_SESSION_PREFIX = "termcanvas";
 let cachedTmuxBinary = undefined;
 
 function resolveShell() {
@@ -33,10 +34,11 @@ function resolveShell() {
 }
 
 function ensureNodePtyHelperPermissions() {
-  const helperPaths = [
-    path.join(__dirname, "node_modules", "node-pty", "prebuilds", "darwin-arm64", "spawn-helper"),
-    path.join(__dirname, "node_modules", "node-pty", "prebuilds", "darwin-x64", "spawn-helper")
-  ];
+  const helperPaths = getNodePtyHelperPaths({
+    isPackaged: app.isPackaged,
+    appDirectory: __dirname,
+    resourcesPath: process.resourcesPath
+  });
 
   helperPaths.forEach((helperPath) => {
     if (fs.existsSync(helperPath)) {
@@ -901,7 +903,7 @@ function createMainWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: "#0f1218",
-    title: "Canvas Learning",
+    title: "TermCanvas",
     show: false,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -1179,7 +1181,7 @@ async function runSmokeTest(window) {
     const workspaceSidebarSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.populateWorkspaceEntries(240)");
 
     if (
-      workspaceSidebarSnapshot.workspaceRootPath !== "/tmp/canvas-learning-workspace-debug"
+      workspaceSidebarSnapshot.workspaceRootPath !== "/tmp/termcanvas-workspace-debug"
       || workspaceSidebarSnapshot.workspaceEntryPaths.length !== 240
       || workspaceSidebarSnapshot.workspaceSectionVisible !== true
     ) {
@@ -1343,7 +1345,7 @@ async function runSmokeTest(window) {
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.switchCanvas(${JSON.stringify(workspaceOwnerCanvasIndex)})`);
 
     logStep("preview workspace markdown file");
-    const smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
+    const smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-smoke-workspace-"));
     smokeWorkspacePaths.push(smokeWorkspacePath);
     const canonicalSmokeWorkspacePath = fs.realpathSync(smokeWorkspacePath);
     fs.mkdirSync(path.join(smokeWorkspacePath, "agent-output", "reports"), { recursive: true });
@@ -1563,7 +1565,7 @@ async function runSmokeTest(window) {
     }
 
     logStep("bind second canvas to a different workspace");
-    const secondWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
+    const secondWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-smoke-workspace-"));
     smokeWorkspacePaths.push(secondWorkspacePath);
     const canonicalSecondWorkspacePath = fs.realpathSync(secondWorkspacePath);
     fs.mkdirSync(path.join(secondWorkspacePath, "secondary"), { recursive: true });
@@ -1729,6 +1731,63 @@ ipcMain.on("app-session:save", (_event, payload) => {
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
   }
+});
+
+ipcMain.handle("app-session:save-file", async (event, payload) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+
+  if (ownerWindow === null) {
+    throw new Error("Unable to resolve owner window.");
+  }
+
+  const suggestedName = typeof payload?.suggestedName === "string" && payload.suggestedName.trim().length > 0
+    ? payload.suggestedName.trim()
+    : "termcanvas-app-data";
+  const contents = typeof payload?.contents === "string" ? payload.contents : "";
+
+  if (contents.length === 0) {
+    throw new Error("App data export contents are required.");
+  }
+
+  const { canceled, filePath } = await dialog.showSaveDialog(ownerWindow, {
+    title: "Export app data JSON",
+    defaultPath: path.join(resolveDialogDefaultDirectory(event.sender.id), `${suggestedName}.json`),
+    filters: [{ name: "TermCanvas App Data", extensions: ["json"] }]
+  });
+
+  if (canceled || typeof filePath !== "string") {
+    return { canceled: true };
+  }
+
+  fs.writeFileSync(filePath, contents, "utf8");
+  return { canceled: false, filePath };
+});
+
+ipcMain.handle("app-session:open-file", async (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+
+  if (ownerWindow === null) {
+    throw new Error("Unable to resolve owner window.");
+  }
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(ownerWindow, {
+    title: "Import app data JSON",
+    defaultPath: resolveDialogDefaultDirectory(event.sender.id),
+    properties: ["openFile"],
+    filters: [{ name: "TermCanvas App Data", extensions: ["json"] }]
+  });
+
+  const filePath = filePaths[0];
+
+  if (canceled || typeof filePath !== "string") {
+    return { canceled: true };
+  }
+
+  return {
+    canceled: false,
+    filePath,
+    snapshot: normalizeAppSessionSnapshot(JSON.parse(fs.readFileSync(filePath, "utf8")))
+  };
 });
 
 ipcMain.on("terminal:active-state", (event, payload) => {
@@ -2116,7 +2175,16 @@ ipcMain.handle("terminal:resolve-tracked-cwds", async (event, payload) => {
 });
 
 ipcMain.handle("terminal:write", (event, payload) => {
-  const session = ensureAuthorizedSession(event, payload.terminalId);
+  const session = getSession(payload.terminalId);
+
+  if (session === undefined) {
+    return;
+  }
+
+  if (session.ownerWebContentsId !== event.sender.id) {
+    throw new Error("Terminal session is not owned by this window.");
+  }
+
   const data = typeof payload.data === "string" ? payload.data : "";
 
   if (data.length > 0) {
@@ -2176,7 +2244,7 @@ ipcMain.handle("canvas:save-file", async (event, payload) => {
 
   const suggestedName = typeof payload?.suggestedName === "string" && payload.suggestedName.trim().length > 0
     ? payload.suggestedName.trim()
-    : "canvas-learning-canvas";
+    : "termcanvas-canvas";
   const contents = typeof payload?.contents === "string" ? payload.contents : "";
 
   if (contents.length === 0) {

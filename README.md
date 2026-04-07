@@ -1,6 +1,6 @@
-# Canvas Learning
+# TermCanvas
 
-Canvas Learning is a minimal Electron app for spatial terminal workflows.
+TermCanvas is a minimal Electron app for spatial terminal workflows.
 
 Instead of text notes, the canvas opens real shell terminals as world-space nodes. You can pan and zoom the board, switch canvases from the top bar, browse workspace files from the left drawer, and reopen the app into the same working session.
 
@@ -18,6 +18,7 @@ Instead of text notes, the canvas opens real shell terminals as world-space node
 - App-session restore across relaunches
 - tmux-backed live terminal reattach on reopen when `tmux` is available
 - Canvas JSON export/import for the active canvas
+- Full app-data JSON export/import for manual state transfer between installs
 - Clean Electron security boundary: Node stays out of the renderer
 
 ## Session persistence
@@ -36,6 +37,14 @@ Important behavior:
 - closing a terminal node with `×` destroys that terminal for real
 - closing the app/window preserves live tmux-backed terminals for relaunch
 - if `tmux` is unavailable, the app falls back to plain PTY shells and still restores layout/state, but not the exact live shell process
+
+## Manual app-data transfer
+
+If you want to move state between installs or machines, use the canvas menu actions to export and import full app data as JSON.
+
+- `Export app data` writes the current saved app session to a `.json` file
+- `Import app data` replaces the saved app session for the next launch
+- after importing app data, close and reopen `TermCanvas` to load it cleanly
 
 ## Working directory behavior
 
@@ -71,6 +80,24 @@ npm run build
 ```
 
 This build step is a fast syntax check for `main.js`, `preload.js`, and `renderer.js`.
+
+## Local macOS package
+
+To create local unsigned macOS release artifacts, run:
+
+```bash
+npm run dist:mac
+```
+
+This command runs the existing build and test checks first, then packages the app into local `DMG` and `ZIP` artifacts for the current machine architecture.
+
+Generated artifacts land in:
+
+```text
+release/
+```
+
+This is phase-one local packaging only. It does not sign, notarize, or upload builds to GitHub Releases yet.
 
 ## Fast smoke test
 

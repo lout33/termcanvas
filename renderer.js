@@ -49,6 +49,8 @@ const canvasStripNextButton = document.getElementById("canvas-strip-next-button"
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
+const exportAppSessionButton = document.getElementById("export-app-session-button");
+const importAppSessionButton = document.getElementById("import-app-session-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
 const createWorkspaceFileButton = document.getElementById("create-workspace-file-button");
@@ -2973,7 +2975,7 @@ function getDefaultTerminalWorkingDirectory() {
 }
 
 function sanitizeCanvasExportName(canvasName) {
-  const fallbackName = "canvas-learning-canvas";
+  const fallbackName = "termcanvas-canvas";
   const normalizedName = typeof canvasName === "string" && canvasName.trim().length > 0 ? canvasName.trim() : fallbackName;
   const safeName = normalizedName
     .toLowerCase()
@@ -3364,6 +3366,29 @@ async function exportActiveCanvas() {
     suggestedName: sanitizeCanvasExportName(activeCanvas.name),
     contents: JSON.stringify(exportPayload, null, 2)
   });
+}
+
+async function exportAppSessionData() {
+  for (const canvasRecord of canvases) {
+    await refreshCanvasTerminalWorkingDirectories(canvasRecord);
+  }
+
+  await window.noteCanvas.saveAppSessionFile({
+    suggestedName: "termcanvas-app-data",
+    contents: JSON.stringify(serializeAppSession(), null, 2)
+  });
+}
+
+async function importAppSessionData() {
+  const opened = await window.noteCanvas.openAppSessionFile();
+
+  if (opened?.canceled === true) {
+    return;
+  }
+
+  window.noteCanvas.saveAppSession(opened?.snapshot ?? null);
+  closeCanvasSwitcherMenu();
+  window.alert("App data imported. Close and reopen TermCanvas to load it.");
 }
 
 async function importCanvasFromData(importedCanvas) {
@@ -4937,7 +4962,7 @@ if (window.noteCanvas.isSmokeTest) {
       applyWorkspaceState({
         importedFolders: [{
           id: "workspace-folder-debug",
-          rootPath: "/tmp/canvas-learning-workspace-debug",
+          rootPath: "/tmp/termcanvas-workspace-debug",
           rootName: "canvas_desktop",
           isTruncated: false,
           lastError: "",
@@ -5049,6 +5074,18 @@ exportCanvasButton?.addEventListener("click", () => {
 
 importCanvasButton?.addEventListener("click", () => {
   void importCanvas().catch((error) => {
+    console.error(error);
+  });
+});
+
+exportAppSessionButton?.addEventListener("click", () => {
+  void exportAppSessionData().catch((error) => {
+    console.error(error);
+  });
+});
+
+importAppSessionButton?.addEventListener("click", () => {
+  void importAppSessionData().catch((error) => {
     console.error(error);
   });
 });

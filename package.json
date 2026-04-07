@@ -1,14 +1,17 @@
 {
-  "name": "canvas-learning",
+  "name": "termcanvas",
+  "productName": "TermCanvas",
   "version": "0.1.0",
   "private": true,
-  "description": "Minimal Electron note canvas MVP.",
+  "description": "Spatial terminal workspace for persistent shell canvases.",
+  "author": "lout",
   "main": "main.js",
   "scripts": {
     "postinstall": "python3 -c \"from pathlib import Path; [p.exists() and p.chmod(p.stat().st_mode | 0o111) for p in [Path('node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'), Path('node_modules/node-pty/prebuilds/darwin-x64/spawn-helper')]]\"",
     "test": "node --test test/*.test.js",
     "build": "node --check main.js && node --check preload.js && node --check renderer.js",
-    "dev": "npm run build && electron ."
+    "dev": "npm run build && electron .",
+    "dist:mac": "npm run build && npm test && electron-builder --mac dmg zip --publish never"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -16,6 +19,7 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
-    "electron": "^35.5.1"
+    "electron": "^35.5.1",
+    "electron-builder": "^26.8.1"
   }
 }

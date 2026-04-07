@@ -2,6 +2,7 @@ node_modules/
 .worktrees/
 .superpowers/
 docs/
+release/
 task_plan.md
 findings.md
 progress.md

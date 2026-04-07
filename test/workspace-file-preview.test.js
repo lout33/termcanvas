@@ -10,7 +10,7 @@ const EXPECTED_MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
 const EXPECTED_MAX_BINARY_PREVIEW_BYTES = 8 * 1024 * 1024;
 
 function withTempDirectory(callback) {
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-workspace-preview-"));
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-workspace-preview-"));
 
   try {
     return callback(tempDirectory);

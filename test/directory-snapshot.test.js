@@ -7,7 +7,7 @@ const path = require("node:path");
 const { createDirectorySnapshot } = require("../directory_snapshot.js");
 
 function withTempDirectory(callback) {
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-directory-snapshot-"));
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-directory-snapshot-"));
 
   try {
     return callback(tempDirectory);

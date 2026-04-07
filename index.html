@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; frame-src 'self' blob:; connect-src 'none';" />
-    <title>Canvas Learning</title>
+    <title>TermCanvas</title>
     <link rel="stylesheet" href="./node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -84,6 +84,13 @@
       <main class="workspace-shell">
         <div class="canvas-topbar" id="canvas-topbar">
           <div class="canvas-topbar-leading">
+            <div class="canvas-brand" aria-label="TermCanvas brand mark">
+              <img class="canvas-brand-mark" src="./assets/branding/termcanvas-mark.svg" alt="" />
+              <div class="canvas-brand-copy">
+                <span class="canvas-brand-name">TermCanvas</span>
+                <span class="canvas-brand-tagline">Spatial terminal workspace</span>
+              </div>
+            </div>
             <button class="canvas-topbar-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">+</button>
           </div>
 
@@ -113,6 +120,26 @@
                     <path d="M8 3.5v7.25"></path>
                     <path d="M5.25 8 8 10.75 10.75 8"></path>
                     <path d="M3.25 12.5h9.5"></path>
+                  </svg>
+                </button>
+
+                <button class="canvas-list-action sidebar-section-action" id="export-app-session-button" type="button" aria-label="Export app data" title="Export app data">
+                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 10.75V3.5"></path>
+                    <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
+                    <path d="M4.5 12.5h7"></path>
+                    <path d="M4.5 9.75v2.75"></path>
+                    <path d="M11.5 9.75v2.75"></path>
+                  </svg>
+                </button>
+
+                <button class="canvas-list-action sidebar-section-action" id="import-app-session-button" type="button" aria-label="Import app data" title="Import app data">
+                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 3.5v7.25"></path>
+                    <path d="M5.25 8 8 10.75 10.75 8"></path>
+                    <path d="M4.5 12.5h7"></path>
+                    <path d="M4.5 9.75v2.75"></path>
+                    <path d="M11.5 9.75v2.75"></path>
                   </svg>
                 </button>
               </div>

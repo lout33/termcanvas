@@ -52,6 +52,7 @@ function loadPreloadWithMocks() {
 test("preload exposes chooseCanvasWorkspace over the canvas IPC channel", () => {
   const { exposedApi, invokeCalls, preloadPath } = loadPreloadWithMocks();
 
+  assert.equal(exposedApi.appName, "TermCanvas");
   assert.equal(typeof exposedApi.chooseCanvasWorkspace, "function");
 
   exposedApi.chooseCanvasWorkspace();
@@ -113,5 +114,21 @@ test("preload exposes active terminal shortcut sync and maximize toggle listener
   assert.equal(typeof removeListener, "function");
   assert.deepEqual(sendCalls, [["terminal:active-state", { hasActiveTerminal: true }]]);
   assert.deepEqual(onCalls, [["terminal:toggle-maximize-active"]]);
+  delete require.cache[preloadPath];
+});
+
+test("preload exposes app session file import and export methods", () => {
+  const { exposedApi, invokeCalls, preloadPath } = loadPreloadWithMocks();
+
+  assert.equal(typeof exposedApi.saveAppSessionFile, "function");
+  assert.equal(typeof exposedApi.openAppSessionFile, "function");
+
+  exposedApi.saveAppSessionFile({ suggestedName: "termcanvas-app-data", contents: "{}" });
+  exposedApi.openAppSessionFile();
+
+  assert.deepEqual(invokeCalls, [
+    ["app-session:save-file", { suggestedName: "termcanvas-app-data", contents: "{}" }],
+    ["app-session:open-file"]
+  ]);
   delete require.cache[preloadPath];
 });

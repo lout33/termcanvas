@@ -1,9 +1,9 @@
-# Design System: Canvas Learning
+# Design System: TermCanvas
 **Project ID:** local-canvas-desktop
 
 ## 1. Visual Theme & Atmosphere
 
-Canvas Learning should feel like a **nocturnal operator's desk for spatial shell work**. The atmosphere is **quiet, technical, and intentionally restrained**: closer to a premium terminal cockpit than a note-taking app, whiteboard, or generic productivity dashboard.
+TermCanvas should feel like a **nocturnal operator's desk for spatial shell work**. The atmosphere is **quiet, technical, and intentionally restrained**: closer to a premium terminal cockpit than a note-taking app, whiteboard, or generic productivity dashboard.
 
 The aesthetic direction is **dark, layered, and low-glare**. Visual weight should stay concentrated in the live terminal surfaces, while supporting UI such as drawers, hints, and inspectors recede into soft translucent shells. The interface should reward long sessions by feeling calm under sustained use rather than loud on first impression.
 

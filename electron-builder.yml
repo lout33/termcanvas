@@ -1,0 +1,22 @@
+appId: com.lout.termcanvas
+productName: TermCanvas
+directories:
+  output: release
+files:
+  - "**/*"
+  - "!docs/**"
+  - "!release/**"
+  - "!test/**"
+  - "!.superpowers/**"
+  - "!task_plan.md"
+  - "!findings.md"
+  - "!progress.md"
+  - "!*.log"
+asarUnpack:
+  - "node_modules/node-pty/**/*"
+mac:
+  category: public.app-category.developer-tools
+  icon: assets/branding/termcanvas.icns
+  target:
+    - dmg
+    - zip

@@ -21,7 +21,7 @@ function createMockContents(id, contentsEventHandlers, sentMessages) {
   };
 }
 
-function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult = "", resolveWhenReady = false }) {
+function loadMainWithMocks({ smokeTest = false, showOpenDialog, showSaveDialog, openPathResult = "", resolveWhenReady = false }) {
   const handlers = new Map();
   const openPathCalls = [];
   const openExternalCalls = [];
@@ -31,8 +31,9 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
   const contentsEventHandlers = new Map();
   const sentMessages = [];
 
-  function createMockWindow() {
+  function createMockWindow(options = {}) {
     const window = {
+      title: options.title,
       once: () => {},
       show: () => {},
       loadFile: () => {},
@@ -49,8 +50,8 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
     return window;
   }
 
-  function MockBrowserWindow() {
-    return createMockWindow();
+  function MockBrowserWindow(options) {
+    return createMockWindow(options);
   }
 
   MockBrowserWindow.fromWebContents = () => ({});
@@ -68,7 +69,8 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
     },
     BrowserWindow: MockBrowserWindow,
     dialog: {
-      showOpenDialog
+      showOpenDialog,
+      showSaveDialog
     },
     shell: {
       openPath: async (targetPath) => {
@@ -614,6 +616,7 @@ test("createMainWindow denies new windows and opens external links in the system
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(createdWindows.length, 1);
+  assert.equal(createdWindows[0].title, "TermCanvas");
   const handlerResult = createdWindows[0].webContents.windowOpenHandler({ url: "https://example.com/docs" });
 
   assert.deepEqual(handlerResult, { action: "deny" });
@@ -704,4 +707,91 @@ test("Cmd+M is swallowed without forwarding when no active terminal is cached", 
   assert.equal(passthroughEvent.preventDefaultCalled, true);
   assert.deepEqual(sentMessages, []);
   delete require.cache[mainPath];
+});
+
+test("terminal:write ignores missing sessions", () => {
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const writeTerminal = handlers.get("terminal:write");
+
+  assert.equal(typeof writeTerminal, "function");
+  assert.doesNotThrow(() => {
+    writeTerminal({ sender: { id: 91 } }, {
+      terminalId: "missing-terminal",
+      data: "pwd\r"
+    });
+  });
+
+  delete require.cache[mainPath];
+});
+
+test("app-session:save-file writes exported app data to a chosen JSON file", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-app-session-ipc-"));
+  const targetPath = path.join(tempRoot, "termcanvas-app-data.json");
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showSaveDialog: async () => ({ canceled: false, filePath: targetPath })
+  });
+
+  const saveAppSessionFile = handlers.get("app-session:save-file");
+
+  assert.equal(typeof saveAppSessionFile, "function");
+
+  const result = await saveAppSessionFile({ sender: { id: 101 } }, {
+    suggestedName: "legacy-export",
+    contents: "{\n  \"version\": 1\n}\n"
+  });
+
+  assert.deepEqual(result, {
+    canceled: false,
+    filePath: targetPath
+  });
+  assert.equal(fs.readFileSync(targetPath, "utf8"), "{\n  \"version\": 1\n}\n");
+
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("app-session:open-file reads and normalizes imported app data JSON", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-app-session-ipc-"));
+  const sourcePath = path.join(tempRoot, "legacy-app-data.json");
+  fs.writeFileSync(sourcePath, JSON.stringify({
+    ui: {
+      isSidebarCollapsed: false,
+      hasDismissedBoardIntro: true
+    },
+    canvases: [{
+      id: "canvas-1",
+      name: "Imported",
+      terminalNodes: [{}]
+    }],
+    activeCanvasId: "canvas-1"
+  }, null, 2), "utf8");
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: false, filePaths: [sourcePath] })
+  });
+
+  const openAppSessionFile = handlers.get("app-session:open-file");
+
+  assert.equal(typeof openAppSessionFile, "function");
+
+  const result = await openAppSessionFile({ sender: { id: 102 } });
+
+  assert.equal(result.canceled, false);
+  assert.equal(result.filePath, sourcePath);
+  assert.equal(result.snapshot.ui.isSidebarCollapsed, false);
+  assert.equal(result.snapshot.ui.hasDismissedBoardIntro, true);
+  assert.equal(result.snapshot.canvases.length, 1);
+  assert.equal(result.snapshot.canvases[0].name, "Imported");
+  assert.equal(result.snapshot.canvases[0].terminalNodes.length, 1);
+  assert.equal(result.snapshot.activeCanvasId, "canvas-1");
+
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
 });
