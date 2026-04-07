@@ -27,7 +27,8 @@ jobs:
 
       - name: Read package version
         id: package_version
-        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag matches package version
         run: node scripts/verify-release-tag.js

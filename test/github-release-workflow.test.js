@@ -32,6 +32,14 @@ test("release workflow uploads only the dmg and zip release artifacts", () => {
   assert.doesNotMatch(workflow, /blockmap/);
 });
 
+test("release workflow reads package version without escaped inline shell quoting", () => {
+  const workflow = readWorkflow();
+  assert.match(
+    workflow,
+    /- name: Read package version\n\s+id: package_version\n\s+run: \|\n\s+echo "value=\$\(node -p "require\('\.\/package\.json'\)\.version"\)" >> "\$GITHUB_OUTPUT"/
+  );
+});
+
 test("README documents the version tag release flow", () => {
   const readmePath = path.join(__dirname, "..", "README.md");
   const readme = fs.readFileSync(readmePath, "utf8");
