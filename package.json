@@ -3,8 +3,28 @@
   "productName": "TermCanvas",
   "version": "0.1.0",
   "private": true,
-  "description": "Spatial terminal workspace for persistent shell canvases.",
+  "description": "Infinite canvas desktop app for arranging real terminal sessions and tmux-backed developer workflows.",
   "author": "lout",
+  "homepage": "https://github.com/lout33/termcanvas",
+  "bugs": {
+    "url": "https://github.com/lout33/termcanvas/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lout33/termcanvas.git"
+  },
+  "keywords": [
+    "terminal",
+    "terminal-workspace",
+    "spatial-terminal",
+    "infinite-canvas",
+    "tmux",
+    "electron",
+    "developer-tools",
+    "developer-productivity",
+    "ai-agents",
+    "xterm"
+  ],
   "main": "main.js",
   "scripts": {
     "postinstall": "python3 -c \"from pathlib import Path; [p.exists() and p.chmod(p.stat().st_mode | 0o111) for p in [Path('node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'), Path('node_modules/node-pty/prebuilds/darwin-x64/spawn-helper')]]\"",
