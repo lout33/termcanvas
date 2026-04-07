@@ -123,6 +123,28 @@ Current outputs include:
 - `.zip`
 - packaged `.app`
 
+## GitHub Releases
+
+TermCanvas uses a tag-driven GitHub release flow for macOS builds.
+
+Release steps:
+
+```bash
+npm version patch --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: release v0.1.1"
+git push origin main
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+When the `v0.1.1` style tag is pushed, GitHub Actions:
+
+- verifies the tag matches `package.json`
+- runs the macOS build pipeline
+- creates a GitHub Release for that tag
+- uploads the `.dmg` and `.zip` artifacts
+
 ## Current Limits
 
 - no node connections or graph linking yet
