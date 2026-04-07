@@ -25,5 +25,6 @@ test("renderer helper modules expose browser-safe globals without require", () =
   assert.equal(typeof workspaceWindow.noteCanvasRendererWorkspace?.deriveCanvasWorkspaceAfterRestore, "function");
   assert.equal(typeof actionDialogWindow.noteCanvasRendererActionDialog?.openWorkspaceActionDialog, "function");
   assert.equal(typeof switcherWindow.noteCanvasRendererCanvasSwitcher?.deriveCanvasSwitcherViewModel, "function");
+  assert.equal(typeof switcherWindow.noteCanvasRendererCanvasSwitcher?.deriveCanvasStripOverflowState, "function");
   assert.equal(typeof previewWindow.noteCanvasRendererWorkspacePreview?.deriveWorkspacePreviewViewModel, "function");
 });

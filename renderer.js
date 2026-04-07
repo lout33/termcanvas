@@ -14,7 +14,10 @@ const {
   closeWorkspaceActionDialog,
   getWorkspaceActionDialogSubmitValue
 } = window.noteCanvasRendererActionDialog;
-const { deriveCanvasSwitcherViewModel } = window.noteCanvasRendererCanvasSwitcher;
+const {
+  deriveCanvasSwitcherViewModel,
+  deriveCanvasStripOverflowState
+} = window.noteCanvasRendererCanvasSwitcher;
 const {
   deriveWorkspacePreviewViewModel,
   shouldApplyWorkspacePreviewActionError
@@ -40,6 +43,9 @@ const canvasSwitcherSection = document.getElementById("canvas-switcher-section")
 const canvasSwitcherButton = document.getElementById("canvas-switcher-button");
 const canvasSwitcherMenu = document.getElementById("canvas-switcher-menu");
 const canvasSwitcherMenuBody = document.getElementById("canvas-switcher-menu-body");
+const canvasStripList = document.getElementById("canvas-strip-list");
+const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
+const canvasStripNextButton = document.getElementById("canvas-strip-next-button");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
@@ -103,6 +109,8 @@ let renderedCanvasId = null;
 let viewportRenderFrame = 0;
 let terminalSizeSyncFrame = 0;
 let zoomIndicatorTimeout = 0;
+let canvasStripOverflowSyncFrame = 0;
+let shouldEnsureActiveCanvasStripItemVisible = false;
 const pendingTerminalSizeNodes = new Set();
 let pendingCanvasListFocus = null;
 let isCanvasSwitcherMenuOpen = false;
@@ -1079,6 +1087,65 @@ function toggleCanvasSwitcherMenu() {
   setCanvasSwitcherMenuOpen(!isCanvasSwitcherMenuOpen);
 }
 
+function syncCanvasStripOverflowControls() {
+  canvasStripOverflowSyncFrame = 0;
+
+  if (
+    !(canvasStripList instanceof HTMLElement)
+    || !(canvasStripPrevButton instanceof HTMLButtonElement)
+    || !(canvasStripNextButton instanceof HTMLButtonElement)
+  ) {
+    shouldEnsureActiveCanvasStripItemVisible = false;
+    return;
+  }
+
+  if (shouldEnsureActiveCanvasStripItemVisible) {
+    const activeStripItem = canvasStripList.querySelector(`[data-canvas-id="${activeCanvasId}"]`);
+
+    if (activeStripItem instanceof HTMLElement) {
+      activeStripItem.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  shouldEnsureActiveCanvasStripItemVisible = false;
+
+  const overflowState = deriveCanvasStripOverflowState({
+    scrollLeft: canvasStripList.scrollLeft,
+    clientWidth: canvasStripList.clientWidth,
+    scrollWidth: canvasStripList.scrollWidth
+  });
+
+  canvasStripPrevButton.hidden = !overflowState.hasOverflow;
+  canvasStripNextButton.hidden = !overflowState.hasOverflow;
+  canvasStripPrevButton.disabled = !overflowState.canScrollBackward;
+  canvasStripNextButton.disabled = !overflowState.canScrollForward;
+}
+
+function scheduleCanvasStripOverflowControlsSync(options = {}) {
+  if (options.ensureActiveVisible === true) {
+    shouldEnsureActiveCanvasStripItemVisible = true;
+  }
+
+  if (canvasStripOverflowSyncFrame !== 0) {
+    return;
+  }
+
+  canvasStripOverflowSyncFrame = requestAnimationFrame(() => {
+    syncCanvasStripOverflowControls();
+  });
+}
+
+function scrollCanvasStrip(direction) {
+  if (!(canvasStripList instanceof HTMLElement)) {
+    return;
+  }
+
+  const scrollAmount = Math.max(canvasStripList.clientWidth * 0.72, 160);
+  const delta = direction === "backward" ? -scrollAmount : scrollAmount;
+  canvasStripList.scrollBy({ left: delta, behavior: "smooth" });
+  scheduleCanvasStripOverflowControlsSync();
+}
+
 function getCanvasSwitcherViewModel() {
   return deriveCanvasSwitcherViewModel({
     canvases,
@@ -1498,48 +1565,65 @@ function createCanvasSwitcherMenuItem(itemView) {
   return item;
 }
 
+function createCanvasStripItem(itemView) {
+  const canvasRecord = getCanvasById(itemView.id);
+
+  if (canvasRecord === null) {
+    return document.createElement("span");
+  }
+
+  const stripItem = document.createElement("button");
+  stripItem.className = "canvas-strip-item";
+  stripItem.type = "button";
+  stripItem.textContent = canvasRecord.name;
+  stripItem.title = `${canvasRecord.name} • ${itemView.terminalSummary}`;
+  stripItem.setAttribute("aria-label", `Open ${canvasRecord.name}`);
+  stripItem.dataset.canvasId = canvasRecord.id;
+  stripItem.dataset.canvasPart = "strip-switch";
+
+  if (itemView.isActive) {
+    stripItem.classList.add("is-active");
+    stripItem.setAttribute("aria-current", "true");
+  }
+
+  stripItem.addEventListener("click", () => {
+    setActiveCanvas(canvasRecord.id);
+  });
+
+  return stripItem;
+}
+
 function renderCanvasSwitcher() {
   if (
     !(canvasSwitcherButton instanceof HTMLButtonElement)
     || !(canvasSwitcherMenu instanceof HTMLElement)
     || !(canvasSwitcherMenuBody instanceof HTMLElement)
+    || !(canvasStripList instanceof HTMLElement)
   ) {
     return;
   }
 
   const viewModel = getCanvasSwitcherViewModel();
-  const triggerView = viewModel.trigger;
+  canvasStripList.setAttribute("aria-label", viewModel.strip.label);
 
-  const triggerCopy = document.createElement("span");
-  triggerCopy.className = "canvas-switcher-trigger-copy";
-
-  const triggerName = document.createElement("span");
-  triggerName.className = "canvas-switcher-trigger-name";
-  triggerName.textContent = triggerView?.name ?? "Canvas";
-
-  triggerCopy.append(triggerName);
-
-  const triggerIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  triggerIcon.setAttribute("class", "canvas-switcher-trigger-icon");
-  triggerIcon.setAttribute("viewBox", "0 0 16 16");
-  triggerIcon.setAttribute("aria-hidden", "true");
-  const triggerIconPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  triggerIconPath.setAttribute("d", "m4.25 6.25 3.75 3.75 3.75-3.75");
-  triggerIcon.append(triggerIconPath);
-  canvasSwitcherButton.replaceChildren(triggerCopy, triggerIcon);
+  const stripItems = viewModel.strip.items.map((itemView) => {
+    return createCanvasStripItem(itemView);
+  });
+  canvasStripList.replaceChildren(...stripItems);
 
   const menuList = document.createElement("ul");
   menuList.className = "canvas-switcher-menu-list canvas-list";
   menuList.id = "canvas-switcher-list";
-  menuList.setAttribute("aria-label", viewModel.list.label);
+  menuList.setAttribute("aria-label", viewModel.menu.label);
 
-  viewModel.list.items.forEach((itemView) => {
+  viewModel.menu.items.forEach((itemView) => {
     menuList.append(createCanvasSwitcherMenuItem(itemView));
   });
 
   canvasSwitcherMenuBody.replaceChildren(menuList);
-  setCanvasSwitcherMenuOpen(isCanvasSwitcherMenuOpen);
+  setCanvasSwitcherMenuOpen(viewModel.menu.isExpanded);
   focusPendingCanvasListControl();
+  scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
 }
 
 function getWorkspaceEntryName(relativePath) {
@@ -4342,6 +4426,21 @@ if (window.noteCanvas.isSmokeTest) {
     const sidebarRect = appShell?.querySelector(".canvas-sidebar")?.getBoundingClientRect();
     const workspaceSection = workspaceBrowser?.closest(".sidebar-section");
     const workspaceSectionRect = workspaceSection instanceof HTMLElement ? workspaceSection.getBoundingClientRect() : null;
+    const topCanvasStripItems = canvasStripList instanceof HTMLElement
+      ? [...canvasStripList.querySelectorAll('[data-canvas-part="strip-switch"]')]
+      : [];
+    const topCanvasStripRect = canvasStripList instanceof HTMLElement ? canvasStripList.getBoundingClientRect() : null;
+    const topCanvasStripOverflowState = canvasStripList instanceof HTMLElement
+      ? deriveCanvasStripOverflowState({
+        scrollLeft: canvasStripList.scrollLeft,
+        clientWidth: canvasStripList.clientWidth,
+        scrollWidth: canvasStripList.scrollWidth
+      })
+      : {
+        hasOverflow: false,
+        canScrollBackward: false,
+        canScrollForward: false
+      };
     const nodeScreenPositions = activeCanvas === null
       ? []
       : activeNodes.map((nodeRecord) => {
@@ -4392,6 +4491,19 @@ if (window.noteCanvas.isSmokeTest) {
         return nodeStyles.display !== "none" && nodeStyles.visibility !== "hidden" && Number.parseFloat(nodeStyles.opacity || "1") > 0;
       }).length,
       sidebarCollapsed: isSidebarCollapsed,
+      topCanvasStripVisible: Boolean(
+        topCanvasStripRect
+        && topCanvasStripRect.width > 0
+        && topCanvasStripRect.height > 0
+        && getComputedStyle(canvasStripList).display !== "none"
+        && getComputedStyle(canvasStripList).visibility !== "hidden"
+      ),
+      topCanvasStripNames: topCanvasStripItems
+        .filter((item) => item instanceof HTMLElement)
+        .map((item) => item.textContent?.trim() ?? ""),
+      topCanvasStripCanScrollBackward: topCanvasStripOverflowState.canScrollBackward,
+      topCanvasStripCanScrollForward: topCanvasStripOverflowState.canScrollForward,
+      leftDrawerOwnsPrimaryCanvasSwitcher: canvasSwitcherSection?.closest(".canvas-sidebar") instanceof HTMLElement,
         workspaceRootPath: getActiveWorkspaceFolder()?.rootPath ?? null,
         workspaceEntryPaths: getActiveWorkspaceFolder()?.entries.map((entry) => entry.relativePath) ?? [],
         workspaceVisibleEntryPaths: [...workspaceBrowser.querySelectorAll("[data-workspace-path]")].map((entryElement) => entryElement.dataset.workspacePath).filter((entryPath) => typeof entryPath === "string"),
@@ -4449,6 +4561,15 @@ if (window.noteCanvas.isSmokeTest) {
     });
   };
 
+  const getCanvasStripSwitches = () => {
+    if (!(canvasStripList instanceof HTMLElement)) {
+      return [];
+    }
+
+    return [...canvasStripList.querySelectorAll('[data-canvas-part="strip-switch"]')]
+      .filter((item) => item instanceof HTMLButtonElement);
+  };
+
   const escapeShellPathForSingleQuotes = (targetPath) => targetPath.replace(/'/g, "'\\''");
 
   const dispatchPointer = (target, type, point, pointerId) => {
@@ -4468,6 +4589,8 @@ if (window.noteCanvas.isSmokeTest) {
   window.__canvasLearningDebug = {
     createTerminalAt: async (x, y) => {
       await createTerminalNode(toWorldPoint({ x, y }));
+      await waitForAnimationFrame();
+      return getCanvasSnapshot();
     },
     createCanvas: () => {
       createCanvas();
@@ -4478,6 +4601,32 @@ if (window.noteCanvas.isSmokeTest) {
 
       if (canvasRecord !== undefined) {
         setActiveCanvas(canvasRecord.id);
+      }
+
+      return getCanvasSnapshot();
+    },
+    clickCanvasStripItem: async (index) => {
+      const stripItem = getCanvasStripSwitches()[index];
+
+      if (stripItem instanceof HTMLButtonElement) {
+        stripItem.click();
+        await waitForUiTransition();
+      }
+
+      return getCanvasSnapshot();
+    },
+    scrollCanvasStripForward: async () => {
+      if (canvasStripNextButton instanceof HTMLButtonElement && !canvasStripNextButton.hidden && !canvasStripNextButton.disabled) {
+        canvasStripNextButton.click();
+        await waitForUiTransition();
+      }
+
+      return getCanvasSnapshot();
+    },
+    scrollCanvasStripBackward: async () => {
+      if (canvasStripPrevButton instanceof HTMLButtonElement && !canvasStripPrevButton.hidden && !canvasStripPrevButton.disabled) {
+        canvasStripPrevButton.click();
+        await waitForUiTransition();
       }
 
       return getCanvasSnapshot();
@@ -4506,8 +4655,10 @@ if (window.noteCanvas.isSmokeTest) {
 
       return {
         hasNodes: snapshot.activeNodeCount > 0,
+        canvasCount: snapshot.canvasCount,
         canvasNames: snapshot.canvasNames,
         activeCanvasName: snapshot.activeCanvasName,
+        activeNodeCount: snapshot.activeNodeCount,
         viewportOffset: snapshot.viewportOffset,
         viewportScale: snapshot.viewportScale,
         terminalIds: snapshot.terminalIds,
@@ -4520,6 +4671,11 @@ if (window.noteCanvas.isSmokeTest) {
         firstTerminalText: snapshot.firstTerminalText,
         visibleNodeCount: snapshot.visibleNodeCount,
         sidebarCollapsed: snapshot.sidebarCollapsed,
+        topCanvasStripVisible: snapshot.topCanvasStripVisible,
+        topCanvasStripNames: snapshot.topCanvasStripNames,
+        topCanvasStripCanScrollBackward: snapshot.topCanvasStripCanScrollBackward,
+        topCanvasStripCanScrollForward: snapshot.topCanvasStripCanScrollForward,
+        leftDrawerOwnsPrimaryCanvasSwitcher: snapshot.leftDrawerOwnsPrimaryCanvasSwitcher,
         workspaceRootPath: snapshot.workspaceRootPath,
         workspaceEntryPaths: snapshot.workspaceEntryPaths,
         workspaceImportedFolderIds: snapshot.workspaceImportedFolderIds,
@@ -4887,6 +5043,22 @@ importCanvasButton?.addEventListener("click", () => {
 canvasSwitcherButton?.addEventListener("click", (event) => {
   event.preventDefault();
   toggleCanvasSwitcherMenu();
+});
+
+canvasStripList?.addEventListener("scroll", () => {
+  scheduleCanvasStripOverflowControlsSync();
+});
+
+canvasStripPrevButton?.addEventListener("click", () => {
+  scrollCanvasStrip("backward");
+});
+
+canvasStripNextButton?.addEventListener("click", () => {
+  scrollCanvasStrip("forward");
+});
+
+window.addEventListener("resize", () => {
+  scheduleCanvasStripOverflowControlsSync();
 });
 
 openWorkspaceButton?.addEventListener("click", () => {

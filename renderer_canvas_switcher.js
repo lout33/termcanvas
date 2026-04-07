@@ -31,35 +31,43 @@
     };
   }
 
+  function deriveCanvasStripOverflowState({ scrollLeft, clientWidth, scrollWidth }) {
+    const safeScrollLeft = Number.isFinite(scrollLeft) ? Math.max(0, scrollLeft) : 0;
+    const safeClientWidth = Number.isFinite(clientWidth) ? Math.max(0, clientWidth) : 0;
+    const safeScrollWidth = Number.isFinite(scrollWidth) ? Math.max(0, scrollWidth) : 0;
+    const hasOverflow = safeScrollWidth > safeClientWidth;
+    const maxScrollLeft = Math.max(0, safeScrollWidth - safeClientWidth);
+
+    return {
+      hasOverflow,
+      canScrollBackward: hasOverflow && safeScrollLeft > 0,
+      canScrollForward: hasOverflow && safeScrollLeft < maxScrollLeft
+    };
+  }
+
   function deriveCanvasSwitcherViewModel({ canvases, activeCanvasId, activeCanvasRenameId, isExpanded }) {
     const normalizedCanvases = Array.isArray(canvases) ? canvases : [];
     const activeCanvas = normalizedCanvases.find((canvasRecord) => canvasRecord?.id === activeCanvasId) ?? normalizedCanvases[0] ?? null;
-    const orderedCanvases = activeCanvas === null
-      ? normalizedCanvases
-      : [activeCanvas, ...normalizedCanvases.filter((canvasRecord) => canvasRecord?.id !== activeCanvas.id)];
-    const listItems = orderedCanvases.map((canvasRecord) => {
+    const items = normalizedCanvases.map((canvasRecord) => {
       return normalizeCanvasForSwitcher(canvasRecord, activeCanvas?.id ?? null, activeCanvasRenameId, normalizedCanvases.length > 1);
     });
     const disclosureExpanded = isExpanded === true;
 
     return {
-      trigger: activeCanvas === null
-        ? null
-        : {
-            name: activeCanvas.name,
-            buttonLabel: "Switch canvases",
-            isExpanded: disclosureExpanded,
-            isRenaming: activeCanvas.id === activeCanvasRenameId
-          },
-      list: {
-        label: "Available canvases",
+      strip: {
+        label: "Canvas navigator",
+        items
+      },
+      menu: {
+        label: "Manage canvases",
         isExpanded: disclosureExpanded,
-        items: listItems
+        items
       }
     };
   }
 
   return {
-    deriveCanvasSwitcherViewModel
+    deriveCanvasSwitcherViewModel,
+    deriveCanvasStripOverflowState
   };
 });

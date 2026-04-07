@@ -1,9 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { deriveCanvasSwitcherViewModel } = require("../renderer_canvas_switcher.js");
+const {
+  deriveCanvasSwitcherViewModel,
+  deriveCanvasStripOverflowState
+} = require("../renderer_canvas_switcher.js");
 
-test("deriveCanvasSwitcherViewModel keeps the trigger compact and current-canvas focused", () => {
+test("deriveCanvasSwitcherViewModel preserves canvas order for the strip and menu models", () => {
   const viewModel = deriveCanvasSwitcherViewModel({
     canvases: [
       {
@@ -27,14 +30,26 @@ test("deriveCanvasSwitcherViewModel keeps the trigger compact and current-canvas
     isExpanded: true
   });
 
-  assert.deepEqual(viewModel.trigger, {
-    buttonLabel: "Switch canvases",
-    name: "Alpha",
-    isExpanded: true,
-    isRenaming: false
+  assert.deepEqual(viewModel.strip, {
+    label: "Canvas navigator",
+    items: [{
+      id: "canvas-a",
+      name: "Alpha",
+      terminalSummary: "2 terminals",
+      isActive: true,
+      isRenaming: false,
+      canDelete: true
+    }, {
+      id: "canvas-b",
+      name: "Beta",
+      terminalSummary: "0 terminals",
+      isActive: false,
+      isRenaming: false,
+      canDelete: true
+    }]
   });
-  assert.deepEqual(viewModel.list, {
-    label: "Available canvases",
+  assert.deepEqual(viewModel.menu, {
+    label: "Manage canvases",
     isExpanded: true,
     items: [{
       id: "canvas-a",
@@ -54,7 +69,7 @@ test("deriveCanvasSwitcherViewModel keeps the trigger compact and current-canvas
   });
 });
 
-test("deriveCanvasSwitcherViewModel keeps the compact trigger honest when no workspace is linked", () => {
+test("deriveCanvasSwitcherViewModel keeps active and renaming flags in both strip and menu models", () => {
   const viewModel = deriveCanvasSwitcherViewModel({
     canvases: [{
       id: "canvas-b",
@@ -67,14 +82,19 @@ test("deriveCanvasSwitcherViewModel keeps the compact trigger honest when no wor
     isExpanded: false
   });
 
-  assert.deepEqual(viewModel.trigger, {
-    buttonLabel: "Switch canvases",
-    name: "Beta",
-    isExpanded: false,
-    isRenaming: true
+  assert.deepEqual(viewModel.strip, {
+    label: "Canvas navigator",
+    items: [{
+      id: "canvas-b",
+      name: "Beta",
+      terminalSummary: "1 terminal",
+      isActive: true,
+      isRenaming: true,
+      canDelete: false
+    }]
   });
-  assert.deepEqual(viewModel.list, {
-    label: "Available canvases",
+  assert.deepEqual(viewModel.menu, {
+    label: "Manage canvases",
     isExpanded: false,
     items: [{
       id: "canvas-b",
@@ -87,25 +107,36 @@ test("deriveCanvasSwitcherViewModel keeps the compact trigger honest when no wor
   });
 });
 
-test("deriveCanvasSwitcherViewModel keeps the active canvas first in the dropdown list", () => {
-  const viewModel = deriveCanvasSwitcherViewModel({
-    canvases: [{
-      id: "canvas-a",
-      name: "Alpha",
-      nodes: []
-    }, {
-      id: "canvas-b",
-      name: "Beta",
-      nodes: [{ id: "terminal-1" }]
-    }, {
-      id: "canvas-c",
-      name: "Gamma",
-      nodes: []
-    }],
-    activeCanvasId: "canvas-b",
-    activeCanvasRenameId: null,
-    isExpanded: true
+test("deriveCanvasStripOverflowState reports when a strip can scroll in either direction", () => {
+  assert.deepEqual(deriveCanvasStripOverflowState({
+    scrollLeft: 24,
+    clientWidth: 240,
+    scrollWidth: 480
+  }), {
+    hasOverflow: true,
+    canScrollBackward: true,
+    canScrollForward: true
+  });
+});
+
+test("deriveCanvasStripOverflowState handles non-overflowing and fully scrolled strips", () => {
+  assert.deepEqual(deriveCanvasStripOverflowState({
+    scrollLeft: 0,
+    clientWidth: 320,
+    scrollWidth: 320
+  }), {
+    hasOverflow: false,
+    canScrollBackward: false,
+    canScrollForward: false
   });
 
-  assert.deepEqual(viewModel.list.items.map((item) => item.id), ["canvas-b", "canvas-a", "canvas-c"]);
+  assert.deepEqual(deriveCanvasStripOverflowState({
+    scrollLeft: 160,
+    clientWidth: 320,
+    scrollWidth: 480
+  }), {
+    hasOverflow: true,
+    canScrollBackward: true,
+    canScrollForward: false
+  });
 });

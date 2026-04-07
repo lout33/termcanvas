@@ -19,52 +19,6 @@
 
         <div class="canvas-sidebar-panel">
           <div class="canvas-sidebar-content">
-            <section class="sidebar-section sidebar-primary-section sidebar-switcher-section" id="canvas-switcher-section" aria-label="Canvas switcher section">
-              <div class="sidebar-section-header-row sidebar-switcher-header-row">
-                <button class="canvas-switcher-trigger" id="canvas-switcher-button" type="button" aria-label="Switch canvases" aria-expanded="false" aria-controls="canvas-switcher-list">
-                  <span class="canvas-switcher-trigger-copy">
-                    <span class="canvas-switcher-trigger-label">Canvas</span>
-                    <span class="canvas-switcher-trigger-name" id="canvas-switcher-name">Canvas</span>
-                    <span class="canvas-switcher-trigger-meta" id="canvas-switcher-meta">No workspace linked</span>
-                    <span class="canvas-switcher-trigger-path" id="canvas-switcher-path">Choose a workspace for this canvas.</span>
-                  </span>
-
-                  <svg class="canvas-switcher-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="m4.25 6.25 3.75 3.75 3.75-3.75"></path>
-                  </svg>
-                </button>
-              </div>
-
-              <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden>
-                <div class="canvas-switcher-menu-body" id="canvas-switcher-menu-body"></div>
-
-                <div class="canvas-switcher-menu-actions" aria-label="Canvas actions">
-                  <button class="canvas-list-action sidebar-section-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">
-                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M8 3.25v9.5"></path>
-                      <path d="M3.25 8h9.5"></path>
-                    </svg>
-                  </button>
-
-                  <button class="canvas-list-action sidebar-section-action" id="export-canvas-button" type="button" aria-label="Export canvas" title="Export canvas">
-                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M8 10.75V3.5"></path>
-                      <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
-                      <path d="M3.25 12.5h9.5"></path>
-                    </svg>
-                  </button>
-
-                  <button class="canvas-list-action sidebar-section-action" id="import-canvas-button" type="button" aria-label="Import canvas" title="Import canvas">
-                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M8 3.5v7.25"></path>
-                      <path d="M5.25 8 8 10.75 10.75 8"></path>
-                      <path d="M3.25 12.5h9.5"></path>
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </section>
-
             <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
               <div class="sidebar-section-header-row">
                 <div class="sidebar-section-header">Workspace</div>
@@ -128,6 +82,46 @@
       </aside>
 
       <main class="workspace-shell">
+        <div class="canvas-topbar" id="canvas-topbar">
+          <div class="canvas-topbar-leading">
+            <button class="canvas-topbar-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">+</button>
+          </div>
+
+          <section class="canvas-switcher-topbar-section" id="canvas-switcher-section" aria-label="Canvas switcher section">
+            <button class="canvas-strip-overflow-button" id="canvas-strip-prev-button" type="button" aria-label="Show previous canvases" title="Show previous canvases" hidden>&lt;</button>
+
+            <div class="canvas-strip-list" id="canvas-strip-list" role="toolbar" aria-label="Canvas navigator"></div>
+
+            <button class="canvas-strip-overflow-button" id="canvas-strip-next-button" type="button" aria-label="Show more canvases" title="Show more canvases" hidden>&gt;</button>
+
+            <button class="canvas-switcher-trigger" id="canvas-switcher-button" type="button" aria-label="Manage canvases" aria-expanded="false" aria-controls="canvas-switcher-list">...</button>
+
+            <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden>
+              <div class="canvas-switcher-menu-body" id="canvas-switcher-menu-body"></div>
+
+              <div class="canvas-switcher-menu-actions" aria-label="Canvas actions">
+                <button class="canvas-list-action sidebar-section-action" id="export-canvas-button" type="button" aria-label="Export canvas" title="Export canvas">
+                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 10.75V3.5"></path>
+                    <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
+                    <path d="M3.25 12.5h9.5"></path>
+                  </svg>
+                </button>
+
+                <button class="canvas-list-action sidebar-section-action" id="import-canvas-button" type="button" aria-label="Import canvas" title="Import canvas">
+                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 3.5v7.25"></path>
+                    <path d="M5.25 8 8 10.75 10.75 8"></path>
+                    <path d="M3.25 12.5h9.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div class="canvas-topbar-spacer" aria-hidden="true"></div>
+        </div>
+
         <section class="board" id="board">
           <div class="board-grid" aria-hidden="true"></div>
 

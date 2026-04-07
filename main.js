@@ -1154,76 +1154,140 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: crowded sidebar content was not scrollable. Snapshot: ${JSON.stringify(sidebarScrollSnapshot)}`);
     }
 
-    logStep("keep canvas switcher to a single compact row");
-    const compactCanvasSwitcherSnapshot = await window.webContents.executeJavaScript(`(() => {
-      const section = document.getElementById("canvas-switcher-section");
-      const trigger = document.getElementById("canvas-switcher-button");
-      const visibleHeaderActions = Array.from(document.querySelectorAll("#canvas-switcher-section .sidebar-switcher-header-row .sidebar-section-actions button"))
-        .filter((button) => button instanceof HTMLElement && getComputedStyle(button).display !== "none").length;
+    logStep("verify top canvas strip owns primary navigator");
+    const topCanvasStripSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.topCanvasStripVisible === true && Array.isArray(snapshot.topCanvasStripNames),
+      4000
+    );
 
-      if (!(section instanceof HTMLElement) || !(trigger instanceof HTMLElement)) {
+    if (
+      topCanvasStripSnapshot.topCanvasStripVisible !== true
+      || topCanvasStripSnapshot.leftDrawerOwnsPrimaryCanvasSwitcher !== false
+      || topCanvasStripSnapshot.topCanvasStripNames.length !== topCanvasStripSnapshot.canvasNames.length
+      || topCanvasStripSnapshot.topCanvasStripNames.join("\n") !== topCanvasStripSnapshot.canvasNames.join("\n")
+    ) {
+      throw new Error(`Smoke test failed: top canvas strip did not replace the drawer-owned primary navigator. Snapshot: ${JSON.stringify(topCanvasStripSnapshot)}`);
+    }
+
+    logStep("keep top canvas strip usable while terminals are maximized");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(0)");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.renameFirstTerminal('Canvas 1 Maximized Terminal')");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
+    const maximizedCanvasOneSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.activeCanvasName === "Canvas 1"
+        && snapshot.maximizedNodeTitle === "Canvas 1 Maximized Terminal"
+        && snapshot.topCanvasStripVisible === true,
+      4000
+    );
+
+    if (
+      maximizedCanvasOneSnapshot.maximizedNodeTitle !== "Canvas 1 Maximized Terminal"
+      || maximizedCanvasOneSnapshot.topCanvasStripVisible !== true
+    ) {
+      throw new Error(`Smoke test failed: maximizing the first canvas terminal hid or desynced the top strip. Snapshot: ${JSON.stringify(maximizedCanvasOneSnapshot)}`);
+    }
+
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(1)");
+    const secondCanvasReadySnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.activeCanvasName === "Canvas 2",
+      4000
+    );
+
+    if (secondCanvasReadySnapshot.activeNodeCount === 0) {
+      const createdCanvasTwoTerminalSnapshot = await window.webContents.executeJavaScript("window.__canvasLearningDebug.createTerminalAt(840, 360)");
+      const canvasTwoTerminalSnapshot = await waitForSnapshot(
+        "window.__canvasLearningDebug.getSnapshot()",
+        (snapshot) => snapshot.activeCanvasName === "Canvas 2" && snapshot.activeNodeCount > 0,
+        4000
+      );
+
+      if (
+        createdCanvasTwoTerminalSnapshot?.activeNodeCount <= 0
+        || canvasTwoTerminalSnapshot.activeNodeCount <= 0
+      ) {
+        throw new Error(`Smoke test failed: Canvas 2 did not create a terminal before maximize assertions. Snapshots: ${JSON.stringify({
+          createdCanvasTwoTerminalSnapshot,
+          canvasTwoTerminalSnapshot
+        })}`);
+      }
+    }
+
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.renameFirstTerminal('Canvas 2 Maximized Terminal')");
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
+    const maximizedCanvasTwoSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.activeCanvasName === "Canvas 2"
+        && snapshot.maximizedNodeTitle === "Canvas 2 Maximized Terminal"
+        && snapshot.topCanvasStripVisible === true,
+      4000
+    );
+
+    if (
+      maximizedCanvasTwoSnapshot.maximizedNodeTitle !== "Canvas 2 Maximized Terminal"
+      || maximizedCanvasTwoSnapshot.topCanvasStripVisible !== true
+    ) {
+      throw new Error(`Smoke test failed: the second canvas did not preserve its own maximized terminal while keeping the top strip visible. Snapshot: ${JSON.stringify(maximizedCanvasTwoSnapshot)}`);
+    }
+
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(0)");
+    const restoredCanvasOneSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.activeCanvasName === "Canvas 1" && snapshot.maximizedNodeTitle === "Canvas 1 Maximized Terminal",
+      4000
+    );
+
+    if (restoredCanvasOneSnapshot.maximizedNodeTitle !== "Canvas 1 Maximized Terminal") {
+      throw new Error(`Smoke test failed: returning to Canvas 1 did not restore its maximized terminal. Snapshot: ${JSON.stringify(restoredCanvasOneSnapshot)}`);
+    }
+
+    await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(1)");
+    const restoredCanvasTwoSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => snapshot.activeCanvasName === "Canvas 2" && snapshot.maximizedNodeTitle === "Canvas 2 Maximized Terminal",
+      4000
+    );
+
+    if (restoredCanvasTwoSnapshot.maximizedNodeTitle !== "Canvas 2 Maximized Terminal") {
+      throw new Error(`Smoke test failed: returning to Canvas 2 did not restore its maximized terminal. Snapshot: ${JSON.stringify(restoredCanvasTwoSnapshot)}`);
+    }
+
+    const topCanvasStripLayoutSnapshot = await window.webContents.executeJavaScript(`(() => {
+      const boardElement = document.getElementById("board");
+      const stripList = document.getElementById("canvas-strip-list");
+
+      if (!(boardElement instanceof HTMLElement) || !(stripList instanceof HTMLElement)) {
         return null;
       }
 
+      const boardRect = boardElement.getBoundingClientRect();
+      const stripRect = stripList.getBoundingClientRect();
+      const availableHeightBelowStrip = window.innerHeight - stripRect.bottom;
+
       return {
-        sectionHeight: section.getBoundingClientRect().height,
-        triggerHeight: trigger.getBoundingClientRect().height,
-        visibleHeaderActions
+        boardTop: boardRect.top,
+        boardHeight: boardRect.height,
+        stripBottom: stripRect.bottom,
+        stripHeight: stripRect.height,
+        availableHeightBelowStrip,
+        boardHeightRatioBelowStrip: availableHeightBelowStrip > 0 ? (boardRect.height / availableHeightBelowStrip) : 0
       };
     })()`);
 
     if (
-      compactCanvasSwitcherSnapshot === null
-      || compactCanvasSwitcherSnapshot.visibleHeaderActions !== 0
-      || compactCanvasSwitcherSnapshot.sectionHeight > compactCanvasSwitcherSnapshot.triggerHeight + 40
+      topCanvasStripLayoutSnapshot === null
+      || topCanvasStripLayoutSnapshot.boardTop + 2 < topCanvasStripLayoutSnapshot.stripBottom
+      || topCanvasStripLayoutSnapshot.boardHeightRatioBelowStrip < 0.72
     ) {
-      throw new Error(`Smoke test failed: canvas switcher is not reduced to a single compact trigger row. Snapshot: ${JSON.stringify(compactCanvasSwitcherSnapshot)}`);
-    }
-
-    logStep("open canvas switcher without shrinking workspace area");
-    const canvasSwitcherOverlaySnapshot = await window.webContents.executeJavaScript(`(() => {
-      const trigger = document.getElementById("canvas-switcher-button");
-      const menu = document.getElementById("canvas-switcher-menu");
-      const workspaceSection = document.getElementById("workspace-browser-section");
-
-      if (!(trigger instanceof HTMLElement) || !(menu instanceof HTMLElement) || !(workspaceSection instanceof HTMLElement)) {
-        return null;
-      }
-
-      const beforeWorkspaceTop = workspaceSection.getBoundingClientRect().top;
-      trigger.click();
-
-      return new Promise((resolve) => {
-        requestAnimationFrame(() => {
-          const triggerRect = trigger.getBoundingClientRect();
-          const menuRect = menu.getBoundingClientRect();
-          const afterWorkspaceTop = workspaceSection.getBoundingClientRect().top;
-          const snapshot = {
-            beforeWorkspaceTop,
-            afterWorkspaceTop,
-            menuHidden: menu.hidden,
-            menuTop: menuRect.top,
-            triggerBottom: triggerRect.bottom,
-            verticalShift: afterWorkspaceTop - beforeWorkspaceTop
-          };
-
-          trigger.click();
-          resolve(snapshot);
-        });
-      });
-    })()`);
-
-    if (
-      canvasSwitcherOverlaySnapshot === null
-      || canvasSwitcherOverlaySnapshot.menuHidden !== false
-      || Math.abs(canvasSwitcherOverlaySnapshot.verticalShift) > 2
-      || canvasSwitcherOverlaySnapshot.menuTop < canvasSwitcherOverlaySnapshot.triggerBottom - 2
-    ) {
-      throw new Error(`Smoke test failed: canvas switcher still pushes the workspace section instead of overlaying it. Snapshot: ${JSON.stringify(canvasSwitcherOverlaySnapshot)}`);
+      throw new Error(`Smoke test failed: the board no longer keeps most of the vertical space beneath the top strip. Snapshot: ${JSON.stringify(topCanvasStripLayoutSnapshot)}`);
     }
 
     const workspaceOwnerCanvasIndex = workspaceSidebarSnapshot.canvasCount - 1;
     const workspaceOwnerCanvasName = workspaceSidebarSnapshot.activeCanvasName;
+
+    await window.webContents.executeJavaScript(`window.__canvasLearningDebug.switchCanvas(${JSON.stringify(workspaceOwnerCanvasIndex)})`);
 
     logStep("preview workspace markdown file");
     const smokeWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-learning-smoke-workspace-"));
