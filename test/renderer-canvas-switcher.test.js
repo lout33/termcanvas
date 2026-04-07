@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 const { deriveCanvasSwitcherViewModel } = require("../renderer_canvas_switcher.js");
 
-test("deriveCanvasSwitcherViewModel surfaces active canvas workspace ownership for the switcher header", () => {
+test("deriveCanvasSwitcherViewModel keeps the trigger compact and current-canvas focused", () => {
   const viewModel = deriveCanvasSwitcherViewModel({
     canvases: [
       {
@@ -30,10 +30,7 @@ test("deriveCanvasSwitcherViewModel surfaces active canvas workspace ownership f
   assert.deepEqual(viewModel.trigger, {
     buttonLabel: "Switch canvases",
     name: "Alpha",
-    meta: "Workspace linked · 2 terminals",
-    path: "/tmp/project-alpha",
     isExpanded: true,
-    hasLinkedWorkspace: true,
     isRenaming: false
   });
   assert.deepEqual(viewModel.list, {
@@ -57,7 +54,7 @@ test("deriveCanvasSwitcherViewModel surfaces active canvas workspace ownership f
   });
 });
 
-test("deriveCanvasSwitcherViewModel keeps disclosure copy honest when no workspace is linked", () => {
+test("deriveCanvasSwitcherViewModel keeps the compact trigger honest when no workspace is linked", () => {
   const viewModel = deriveCanvasSwitcherViewModel({
     canvases: [{
       id: "canvas-b",
@@ -73,10 +70,7 @@ test("deriveCanvasSwitcherViewModel keeps disclosure copy honest when no workspa
   assert.deepEqual(viewModel.trigger, {
     buttonLabel: "Switch canvases",
     name: "Beta",
-    meta: "No workspace linked · 1 terminal",
-    path: "Choose a workspace for this canvas.",
     isExpanded: false,
-    hasLinkedWorkspace: false,
     isRenaming: true
   });
   assert.deepEqual(viewModel.list, {
@@ -91,4 +85,27 @@ test("deriveCanvasSwitcherViewModel keeps disclosure copy honest when no workspa
       canDelete: false
     }]
   });
+});
+
+test("deriveCanvasSwitcherViewModel keeps the active canvas first in the dropdown list", () => {
+  const viewModel = deriveCanvasSwitcherViewModel({
+    canvases: [{
+      id: "canvas-a",
+      name: "Alpha",
+      nodes: []
+    }, {
+      id: "canvas-b",
+      name: "Beta",
+      nodes: [{ id: "terminal-1" }]
+    }, {
+      id: "canvas-c",
+      name: "Gamma",
+      nodes: []
+    }],
+    activeCanvasId: "canvas-b",
+    activeCanvasRenameId: null,
+    isExpanded: true
+  });
+
+  assert.deepEqual(viewModel.list.items.map((item) => item.id), ["canvas-b", "canvas-a", "canvas-c"]);
 });

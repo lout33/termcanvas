@@ -33,8 +33,12 @@
                     <path d="m4.25 6.25 3.75 3.75 3.75-3.75"></path>
                   </svg>
                 </button>
+              </div>
 
-                <div class="sidebar-section-actions" aria-label="Canvas actions">
+              <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden>
+                <div class="canvas-switcher-menu-body" id="canvas-switcher-menu-body"></div>
+
+                <div class="canvas-switcher-menu-actions" aria-label="Canvas actions">
                   <button class="canvas-list-action sidebar-section-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">
                     <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
                       <path d="M8 3.25v9.5"></path>
@@ -59,8 +63,6 @@
                   </button>
                 </div>
               </div>
-
-              <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden></div>
             </section>
 
             <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
@@ -79,6 +81,41 @@
                     <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
                       <path d="M12.75 5V2.75H10.5"></path>
                       <path d="M12.75 2.75A5.5 5.5 0 1 0 13.5 9"></path>
+                    </svg>
+                  </button>
+
+                  <button class="canvas-list-action sidebar-section-action" id="create-workspace-file-button" type="button" aria-label="New file" title="New file">
+                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M4 2.75h5.25L12.5 6v7.25c0 .55-.45 1-1 1H4c-.55 0-1-.45-1-1v-9.5c0-.55.45-1 1-1Z"></path>
+                      <path d="M9.25 2.75V6h3.25"></path>
+                      <path d="M8 8v3.5"></path>
+                      <path d="M6.25 9.75h3.5"></path>
+                    </svg>
+                  </button>
+
+                  <button class="canvas-list-action sidebar-section-action" id="create-workspace-directory-button" type="button" aria-label="New folder" title="New folder">
+                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M2.5 5h3.5l1.25-1.5h5.25a1 1 0 0 1 1 1v1"></path>
+                      <path d="M2.5 5h11a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"></path>
+                      <path d="M8 7.5v3"></path>
+                      <path d="M6.5 9h3"></path>
+                    </svg>
+                  </button>
+
+                  <button class="canvas-list-action sidebar-section-action" id="rename-workspace-entry-button" type="button" aria-label="Rename selected entry" title="Rename selected entry">
+                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3.25 12.75h2.5l6-6-2.5-2.5-6 6v2.5Z"></path>
+                      <path d="M8.75 4.25 11.25 6.75"></path>
+                    </svg>
+                  </button>
+
+                  <button class="canvas-list-action sidebar-section-action" id="delete-workspace-entry-button" type="button" aria-label="Delete selected entry" title="Delete selected entry">
+                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3.75 4.5h8.5"></path>
+                      <path d="M6.25 4.5V3.25h3.5V4.5"></path>
+                      <path d="M5 4.5v7.25c0 .55.45 1 1 1h4c.55 0 1-.45 1-1V4.5"></path>
+                      <path d="M6.75 6.75v4"></path>
+                      <path d="M9.25 6.75v4"></path>
                     </svg>
                   </button>
                 </div>
@@ -119,11 +156,25 @@
 
       <div class="panel-resize-handle inspector-resize-handle" id="file-inspector-resize-handle" aria-hidden="true"></div>
       <aside class="file-inspector" id="file-inspector" aria-label="File preview"></aside>
+
+      <div class="workspace-action-dialog" id="workspace-action-dialog" hidden>
+        <div class="workspace-action-dialog-backdrop" id="workspace-action-dialog-backdrop"></div>
+        <form class="workspace-action-dialog-card" id="workspace-action-dialog-form">
+          <div class="workspace-action-dialog-title" id="workspace-action-dialog-title">Action</div>
+          <div class="workspace-action-dialog-message" id="workspace-action-dialog-message"></div>
+          <input class="workspace-action-dialog-input" id="workspace-action-dialog-input" type="text" autocomplete="off" />
+          <div class="workspace-action-dialog-actions">
+            <button class="canvas-secondary-button" id="workspace-action-dialog-cancel" type="button">Cancel</button>
+            <button class="canvas-secondary-button" id="workspace-action-dialog-confirm" type="submit">Confirm</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="./node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script src="./renderer_workspace.js"></script>
+    <script src="./renderer_action_dialog.js"></script>
     <script src="./renderer_canvas_switcher.js"></script>
     <script src="./renderer_workspace_preview.js"></script>
     <script src="./renderer.js"></script>

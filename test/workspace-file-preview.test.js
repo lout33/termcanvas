@@ -70,17 +70,17 @@ test("readWorkspaceFilePreview returns bounded base64 previews for image files",
   assert.equal(preview.fallbackReason, "");
 }));
 
-test("readWorkspaceFilePreview keeps svg files on fallback metadata instead of inline image preview", () => withTempDirectory((rootPath) => {
+test("readWorkspaceFilePreview keeps svg files readable for render and source modes", () => withTempDirectory((rootPath) => {
   fs.writeFileSync(path.join(rootPath, "diagram.svg"), "<svg viewBox=\"0 0 1 1\"></svg>\n", "utf8");
 
   const preview = readWorkspaceFilePreview(rootPath, "diagram.svg");
 
-  assert.equal(preview.kind, "unsupported");
-  assert.equal(preview.language, null);
-  assert.equal(preview.mimeType, null);
-  assert.equal(preview.textContents, "");
+  assert.equal(preview.kind, "svg");
+  assert.equal(preview.language, "svg");
+  assert.equal(preview.mimeType, "image/svg+xml");
+  assert.equal(preview.textContents, "<svg viewBox=\"0 0 1 1\"></svg>\n");
   assert.equal(preview.binaryContentsBase64, "");
-  assert.match(preview.fallbackReason, /not supported/u);
+  assert.equal(preview.fallbackReason, "");
 }));
 
 test("readWorkspaceFilePreview returns bounded base64 previews for pdf files", () => withTempDirectory((rootPath) => {

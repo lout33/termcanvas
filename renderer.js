@@ -8,6 +8,12 @@ const {
   getCanvasWorkspacePreviewRelativePath,
   getCanvasWorkspaceRootPath
 } = window.noteCanvasRendererWorkspace;
+const {
+  createWorkspaceActionDialogState,
+  openWorkspaceActionDialog,
+  closeWorkspaceActionDialog,
+  getWorkspaceActionDialogSubmitValue
+} = window.noteCanvasRendererActionDialog;
 const { deriveCanvasSwitcherViewModel } = window.noteCanvasRendererCanvasSwitcher;
 const {
   deriveWorkspacePreviewViewModel,
@@ -33,14 +39,27 @@ const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
 const canvasSwitcherButton = document.getElementById("canvas-switcher-button");
 const canvasSwitcherMenu = document.getElementById("canvas-switcher-menu");
+const canvasSwitcherMenuBody = document.getElementById("canvas-switcher-menu-body");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
+const createWorkspaceFileButton = document.getElementById("create-workspace-file-button");
+const createWorkspaceDirectoryButton = document.getElementById("create-workspace-directory-button");
+const renameWorkspaceEntryButton = document.getElementById("rename-workspace-entry-button");
+const deleteWorkspaceEntryButton = document.getElementById("delete-workspace-entry-button");
 const workspaceBrowser = document.getElementById("workspace-browser");
 const fileInspector = document.getElementById("file-inspector");
 const fileInspectorResizeHandle = document.getElementById("file-inspector-resize-handle");
+const workspaceActionDialog = document.getElementById("workspace-action-dialog");
+const workspaceActionDialogBackdrop = document.getElementById("workspace-action-dialog-backdrop");
+const workspaceActionDialogForm = document.getElementById("workspace-action-dialog-form");
+const workspaceActionDialogTitle = document.getElementById("workspace-action-dialog-title");
+const workspaceActionDialogMessage = document.getElementById("workspace-action-dialog-message");
+const workspaceActionDialogInput = document.getElementById("workspace-action-dialog-input");
+const workspaceActionDialogCancelButton = document.getElementById("workspace-action-dialog-cancel");
+const workspaceActionDialogConfirmButton = document.getElementById("workspace-action-dialog-confirm");
 const sidebarToggleButton = document.getElementById("sidebar-toggle-button");
 const sidebarResizeHandle = document.getElementById("sidebar-resize-handle");
 const sidebarPanel = document.querySelector(".canvas-sidebar-panel");
@@ -94,6 +113,7 @@ let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
 let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
+let workspaceActionDialogResolve = null;
 
 const workspacePreviewState = {
   folderId: null,
@@ -101,8 +121,20 @@ const workspacePreviewState = {
   status: "empty",
   data: null,
   errorMessage: "",
-  actionErrorMessage: ""
+  actionErrorMessage: "",
+  viewMode: "auto",
+  isEditing: false,
+  draftText: "",
+  saveErrorMessage: ""
 };
+
+const workspaceSelectionState = {
+  folderId: null,
+  relativePath: null,
+  kind: null
+};
+
+let workspaceActionDialogState = createWorkspaceActionDialogState();
 
 const workspaceState = {
   importedFolders: [],
@@ -1467,7 +1499,11 @@ function createCanvasSwitcherMenuItem(itemView) {
 }
 
 function renderCanvasSwitcher() {
-  if (!(canvasSwitcherButton instanceof HTMLButtonElement) || !(canvasSwitcherMenu instanceof HTMLElement)) {
+  if (
+    !(canvasSwitcherButton instanceof HTMLButtonElement)
+    || !(canvasSwitcherMenu instanceof HTMLElement)
+    || !(canvasSwitcherMenuBody instanceof HTMLElement)
+  ) {
     return;
   }
 
@@ -1477,26 +1513,11 @@ function renderCanvasSwitcher() {
   const triggerCopy = document.createElement("span");
   triggerCopy.className = "canvas-switcher-trigger-copy";
 
-  const triggerLabel = document.createElement("span");
-  triggerLabel.className = "canvas-switcher-trigger-label";
-  triggerLabel.textContent = "Canvas";
-
   const triggerName = document.createElement("span");
   triggerName.className = "canvas-switcher-trigger-name";
   triggerName.textContent = triggerView?.name ?? "Canvas";
 
-  const triggerMeta = document.createElement("span");
-  triggerMeta.className = "canvas-switcher-trigger-meta";
-  triggerMeta.textContent = triggerView === null
-    ? "No canvas selected"
-    : triggerView.meta;
-
-  const triggerPath = document.createElement("span");
-  triggerPath.className = "canvas-switcher-trigger-path";
-  triggerPath.textContent = triggerView?.path ?? "Choose a workspace for this canvas.";
-  triggerPath.title = triggerPath.textContent;
-
-  triggerCopy.append(triggerLabel, triggerName, triggerMeta, triggerPath);
+  triggerCopy.append(triggerName);
 
   const triggerIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   triggerIcon.setAttribute("class", "canvas-switcher-trigger-icon");
@@ -1516,7 +1537,7 @@ function renderCanvasSwitcher() {
     menuList.append(createCanvasSwitcherMenuItem(itemView));
   });
 
-  canvasSwitcherMenu.replaceChildren(menuList);
+  canvasSwitcherMenuBody.replaceChildren(menuList);
   setCanvasSwitcherMenuOpen(isCanvasSwitcherMenuOpen);
   focusPendingCanvasListControl();
 }
@@ -1616,6 +1637,199 @@ function getWorkspaceFilePaths(folderRecord) {
   );
 }
 
+function clearWorkspaceSelection() {
+  workspaceSelectionState.folderId = null;
+  workspaceSelectionState.relativePath = null;
+  workspaceSelectionState.kind = null;
+}
+
+function setWorkspaceSelection(folderId, relativePath, kind) {
+  workspaceSelectionState.folderId = typeof folderId === "string" ? folderId : null;
+  workspaceSelectionState.relativePath = typeof relativePath === "string" ? relativePath : null;
+  workspaceSelectionState.kind = kind === "directory" || kind === "file" ? kind : null;
+}
+
+function getWorkspaceEntryByRelativePath(folderRecord, relativePath) {
+  if (folderRecord === null || typeof relativePath !== "string" || relativePath.length === 0) {
+    return null;
+  }
+
+  return folderRecord.entries.find((entry) => entry.relativePath === relativePath) ?? null;
+}
+
+function syncWorkspaceSelectionWithState() {
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (activeFolder === null) {
+    clearWorkspaceSelection();
+    return;
+  }
+
+  if (
+    workspacePreviewState.folderId === activeFolder.id
+    && typeof workspacePreviewState.relativePath === "string"
+    && getWorkspaceFilePaths(activeFolder).has(workspacePreviewState.relativePath)
+  ) {
+    setWorkspaceSelection(activeFolder.id, workspacePreviewState.relativePath, "file");
+    return;
+  }
+
+  if (workspaceSelectionState.folderId !== activeFolder.id) {
+    clearWorkspaceSelection();
+    return;
+  }
+
+  const selectedEntry = getWorkspaceEntryByRelativePath(activeFolder, workspaceSelectionState.relativePath);
+
+  if (selectedEntry === null) {
+    clearWorkspaceSelection();
+    return;
+  }
+
+  workspaceSelectionState.kind = selectedEntry.kind;
+}
+
+function getWorkspaceActionContext() {
+  const activeFolder = getActiveWorkspaceFolder();
+  const selectedEntry = activeFolder === null
+    ? null
+    : getWorkspaceEntryByRelativePath(activeFolder, workspaceSelectionState.relativePath);
+  const parentRelativePath = selectedEntry === null
+    ? ""
+    : (selectedEntry.kind === "directory"
+        ? selectedEntry.relativePath
+        : getWorkspaceEntryParentPath(selectedEntry.relativePath));
+
+  return {
+    activeFolder,
+    selectedEntry,
+    parentRelativePath,
+    canRename: selectedEntry !== null,
+    canDelete: selectedEntry !== null
+  };
+}
+
+function expandWorkspaceSelectionPath(relativePath, options = {}) {
+  const activeCanvas = getActiveCanvas();
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (activeCanvas === null || activeFolder === null || typeof relativePath !== "string") {
+    return;
+  }
+
+  const expandedDirectories = new Set(getCanvasWorkspaceExpandedDirectories(activeCanvas));
+  let currentPath = options.includeSelf === true ? relativePath : getWorkspaceEntryParentPath(relativePath);
+
+  while (currentPath.length > 0) {
+    expandedDirectories.add(currentPath);
+    currentPath = getWorkspaceEntryParentPath(currentPath);
+  }
+
+  syncCanvasWorkspaceFromLiveState(activeCanvas, {
+    ...activeCanvas.workspace,
+    rootPath: activeFolder.rootPath,
+    rootName: activeFolder.rootName,
+    expandedDirectoryPaths: [...expandedDirectories],
+    previewRelativePath: getCanvasWorkspacePreviewRelativePath(activeCanvas)
+  });
+
+  scheduleAppSessionSave();
+}
+
+function renderWorkspaceActionDialog() {
+  if (
+    !(workspaceActionDialog instanceof HTMLElement)
+    || !(workspaceActionDialogTitle instanceof HTMLElement)
+    || !(workspaceActionDialogMessage instanceof HTMLElement)
+    || !(workspaceActionDialogInput instanceof HTMLInputElement)
+    || !(workspaceActionDialogCancelButton instanceof HTMLButtonElement)
+    || !(workspaceActionDialogConfirmButton instanceof HTMLButtonElement)
+  ) {
+    return;
+  }
+
+  workspaceActionDialog.hidden = workspaceActionDialogState.isOpen !== true;
+  workspaceActionDialogTitle.textContent = workspaceActionDialogState.title;
+  workspaceActionDialogMessage.textContent = workspaceActionDialogState.message;
+  workspaceActionDialogInput.hidden = workspaceActionDialogState.kind !== "prompt";
+  workspaceActionDialogInput.value = workspaceActionDialogState.value;
+  workspaceActionDialogCancelButton.hidden = workspaceActionDialogState.cancelLabel.length === 0;
+  workspaceActionDialogCancelButton.textContent = workspaceActionDialogState.cancelLabel || "Cancel";
+  workspaceActionDialogConfirmButton.textContent = workspaceActionDialogState.confirmLabel;
+}
+
+function resolveWorkspaceActionDialog(result) {
+  const resolve = workspaceActionDialogResolve;
+  workspaceActionDialogResolve = null;
+  workspaceActionDialogState = closeWorkspaceActionDialog(workspaceActionDialogState);
+  renderWorkspaceActionDialog();
+
+  if (typeof resolve === "function") {
+    resolve(result);
+  }
+}
+
+function requestWorkspaceActionDialog(options) {
+  if (typeof workspaceActionDialogResolve === "function") {
+    workspaceActionDialogResolve(null);
+    workspaceActionDialogResolve = null;
+  }
+
+  workspaceActionDialogState = openWorkspaceActionDialog(workspaceActionDialogState, options);
+  renderWorkspaceActionDialog();
+
+  window.requestAnimationFrame(() => {
+    if (workspaceActionDialogState.kind === "prompt") {
+      workspaceActionDialogInput?.focus();
+      workspaceActionDialogInput?.select();
+    } else {
+      workspaceActionDialogConfirmButton?.focus();
+    }
+  });
+
+  return new Promise((resolve) => {
+    workspaceActionDialogResolve = resolve;
+  });
+}
+
+async function promptForWorkspaceEntryName(message, initialValue = "", confirmLabel = "Confirm") {
+  const result = await requestWorkspaceActionDialog({
+    kind: "prompt",
+    title: confirmLabel,
+    message,
+    confirmLabel,
+    cancelLabel: "Cancel",
+    initialValue
+  });
+
+  return typeof result === "string" ? result : null;
+}
+
+async function confirmWorkspaceAction(title, message, confirmLabel) {
+  const result = await requestWorkspaceActionDialog({
+    kind: "confirm",
+    title,
+    message,
+    confirmLabel,
+    cancelLabel: "Cancel"
+  });
+
+  return result === true;
+}
+
+async function showWorkspaceActionError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(error);
+
+  await requestWorkspaceActionDialog({
+    kind: "confirm",
+    title: "Action failed",
+    message,
+    confirmLabel: "OK",
+    cancelLabel: ""
+  });
+}
+
 function getExpandedDirectoriesForFolder(folderId) {
   const folderRecord = getWorkspaceFolderById(folderId);
   const activeCanvas = getActiveCanvas();
@@ -1636,6 +1850,10 @@ function clearWorkspacePreview(options = {}) {
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
   workspacePreviewState.actionErrorMessage = "";
+  workspacePreviewState.viewMode = "auto";
+  workspacePreviewState.isEditing = false;
+  workspacePreviewState.draftText = "";
+  workspacePreviewState.saveErrorMessage = "";
 
   if (options.skipCanvasWorkspaceSync !== true) {
     captureActiveCanvasWorkspaceSnapshot();
@@ -1678,6 +1896,15 @@ function decodeBase64ToBytes(base64Value) {
 }
 
 function getWorkspacePreviewObjectUrl(viewModel) {
+  if (viewModel.mode === "svg") {
+    clearWorkspacePreviewObjectUrl();
+    const blob = new Blob([viewModel.textContents], {
+      type: viewModel.mimeType || "image/svg+xml"
+    });
+    workspacePreviewObjectUrl = URL.createObjectURL(blob);
+    return workspacePreviewObjectUrl;
+  }
+
   if ((viewModel.mode !== "image" && viewModel.mode !== "pdf") || viewModel.binaryContentsBase64.length === 0) {
     clearWorkspacePreviewObjectUrl();
     return null;
@@ -1713,6 +1940,70 @@ function setScopedWorkspacePreviewActionErrorMessage({ folderId, relativePath, m
   setWorkspacePreviewActionErrorMessage(message);
 }
 
+function setWorkspacePreviewViewMode(viewMode) {
+  workspacePreviewState.viewMode = viewMode === "source" ? "source" : "render";
+  workspacePreviewState.isEditing = false;
+  workspacePreviewState.saveErrorMessage = "";
+  renderFileInspector();
+}
+
+function startWorkspacePreviewEdit() {
+  if (!isWorkspacePreviewOpen() || typeof workspacePreviewState.data?.textContents !== "string") {
+    return;
+  }
+
+  workspacePreviewState.isEditing = true;
+  workspacePreviewState.viewMode = "source";
+  workspacePreviewState.draftText = workspacePreviewState.data.textContents;
+  workspacePreviewState.saveErrorMessage = "";
+  renderFileInspector();
+}
+
+function cancelWorkspacePreviewEdit() {
+  workspacePreviewState.isEditing = false;
+  workspacePreviewState.draftText = typeof workspacePreviewState.data?.textContents === "string"
+    ? workspacePreviewState.data.textContents
+    : "";
+  workspacePreviewState.saveErrorMessage = "";
+  renderFileInspector();
+}
+
+async function saveWorkspacePreviewText() {
+  if (!isWorkspacePreviewOpen() || workspacePreviewState.isEditing !== true) {
+    return null;
+  }
+
+  const actionFolderId = workspacePreviewState.folderId;
+  const actionRelativePath = workspacePreviewState.relativePath;
+
+  try {
+    const savedPreview = await window.noteCanvas.saveWorkspaceFile(
+      actionFolderId,
+      actionRelativePath,
+      workspacePreviewState.draftText,
+      workspacePreviewState.data?.lastModifiedMs ?? null
+    );
+
+    if (workspacePreviewState.folderId !== actionFolderId || workspacePreviewState.relativePath !== actionRelativePath) {
+      return null;
+    }
+
+    workspacePreviewState.data = savedPreview;
+    workspacePreviewState.status = "ready";
+    workspacePreviewState.errorMessage = "";
+    workspacePreviewState.actionErrorMessage = "";
+    workspacePreviewState.isEditing = false;
+    workspacePreviewState.draftText = savedPreview.textContents ?? "";
+    workspacePreviewState.saveErrorMessage = "";
+    renderFileInspector();
+    return savedPreview;
+  } catch (error) {
+    workspacePreviewState.saveErrorMessage = error instanceof Error ? error.message : String(error);
+    renderFileInspector();
+    return null;
+  }
+}
+
 function syncAppShellWorkspaceState() {
   appShell?.classList.toggle("has-file-inspector", isWorkspacePreviewOpen());
 }
@@ -1724,7 +2015,9 @@ function buildWorkspaceTreeRows(folderRecord) {
 
   const childrenByParentPath = new Map();
   const expandedDirectories = getExpandedDirectoriesForFolder(folderRecord.id);
-  const selectedPreviewRelativePath = getCanvasWorkspacePreviewRelativePath(getActiveCanvas());
+  const selectedRelativePath = workspaceSelectionState.folderId === folderRecord.id
+    ? workspaceSelectionState.relativePath
+    : null;
 
   folderRecord.entries.forEach((entry) => {
     const parentPath = getWorkspaceEntryParentPath(entry.relativePath);
@@ -1750,7 +2043,7 @@ function buildWorkspaceTreeRows(folderRecord) {
         ...entry,
         depth,
         isExpanded,
-        isSelected: entry.kind === "file" && selectedPreviewRelativePath === entry.relativePath
+        isSelected: selectedRelativePath === entry.relativePath
       });
 
       if (isExpanded) {
@@ -1787,6 +2080,7 @@ function renderFileInspector() {
   const title = document.createElement("div");
   title.className = "file-inspector-title";
   title.textContent = previewViewModel.fileName || getWorkspaceEntryName(workspacePreviewState.relativePath);
+  title.title = title.textContent;
 
   const pathMeta = document.createElement("div");
   pathMeta.className = "file-inspector-path";
@@ -1802,12 +2096,67 @@ function renderFileInspector() {
   const actions = document.createElement("div");
   actions.className = "file-inspector-actions";
 
+  if (previewViewModel.canRender && workspacePreviewState.isEditing !== true) {
+    const renderButton = document.createElement("button");
+    renderButton.className = "canvas-secondary-button file-inspector-button";
+    renderButton.type = "button";
+    renderButton.textContent = "Render";
+    renderButton.classList.toggle("is-active", previewViewModel.viewMode === "render");
+    renderButton.disabled = previewViewModel.viewMode === "render";
+    renderButton.addEventListener("click", () => {
+      setWorkspacePreviewViewMode("render");
+    });
+
+    const sourceButton = document.createElement("button");
+    sourceButton.className = "canvas-secondary-button file-inspector-button";
+    sourceButton.type = "button";
+    sourceButton.textContent = "Source";
+    sourceButton.classList.toggle("is-active", previewViewModel.viewMode === "source");
+    sourceButton.disabled = previewViewModel.viewMode === "source";
+    sourceButton.addEventListener("click", () => {
+      setWorkspacePreviewViewMode("source");
+    });
+
+    actions.append(renderButton, sourceButton);
+  }
+
+  if (previewViewModel.canEdit) {
+    if (workspacePreviewState.isEditing) {
+      const saveButton = document.createElement("button");
+      saveButton.className = "canvas-secondary-button file-inspector-button";
+      saveButton.type = "button";
+      saveButton.textContent = "Save";
+      saveButton.addEventListener("click", () => {
+        void saveWorkspacePreviewText();
+      });
+
+      const cancelButton = document.createElement("button");
+      cancelButton.className = "canvas-secondary-button file-inspector-button";
+      cancelButton.type = "button";
+      cancelButton.textContent = "Cancel";
+      cancelButton.addEventListener("click", () => {
+        cancelWorkspacePreviewEdit();
+      });
+
+      actions.append(saveButton, cancelButton);
+    } else {
+      const editButton = document.createElement("button");
+      editButton.className = "canvas-secondary-button file-inspector-button";
+      editButton.type = "button";
+      editButton.textContent = "Edit";
+      editButton.addEventListener("click", () => {
+        startWorkspacePreviewEdit();
+      });
+      actions.append(editButton);
+    }
+  }
+
   const refreshButton = document.createElement("button");
   refreshButton.className = "canvas-secondary-button file-inspector-button";
   refreshButton.type = "button";
   refreshButton.dataset.fileInspectorAction = "refresh";
   refreshButton.textContent = workspacePreviewState.status === "loading" ? "Loading" : "Refresh";
-  refreshButton.disabled = workspacePreviewState.status === "loading";
+  refreshButton.disabled = workspacePreviewState.status === "loading" || workspacePreviewState.isEditing === true;
   refreshButton.addEventListener("click", () => {
     void refreshSelectedWorkspaceFilePreview();
   });
@@ -1829,7 +2178,23 @@ function renderFileInspector() {
   const body = document.createElement("div");
   body.className = "file-inspector-body";
 
-  if (previewViewModel.mode === "loading") {
+  if (workspacePreviewState.isEditing) {
+    const editor = document.createElement("textarea");
+    editor.className = "file-inspector-editor";
+    editor.value = workspacePreviewState.draftText;
+    editor.spellcheck = false;
+    editor.addEventListener("input", () => {
+      workspacePreviewState.draftText = editor.value;
+    });
+    body.append(editor);
+
+    if (workspacePreviewState.saveErrorMessage.length > 0) {
+      const saveError = document.createElement("div");
+      saveError.className = "file-inspector-error";
+      saveError.textContent = workspacePreviewState.saveErrorMessage;
+      body.append(saveError);
+    }
+  } else if (previewViewModel.mode === "loading") {
     const loading = document.createElement("div");
     loading.className = "file-inspector-empty";
     loading.textContent = previewViewModel.message;
@@ -1909,6 +2274,17 @@ function renderFileInspector() {
     image.alt = previewViewModel.fileName;
     image.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
     body.append(image);
+  } else if (previewViewModel.mode === "svg") {
+    const image = document.createElement("img");
+    image.className = "file-inspector-image file-inspector-svg";
+    image.alt = previewViewModel.fileName;
+    image.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
+    body.append(image);
+  } else if (previewViewModel.mode === "markdown") {
+    const article = document.createElement("article");
+    article.className = "file-inspector-markdown";
+    article.innerHTML = previewViewModel.renderedContentsHtml;
+    body.append(article);
   } else if (previewViewModel.mode === "pdf") {
     const frame = document.createElement("iframe");
     frame.className = "file-inspector-pdf-frame";
@@ -1930,7 +2306,7 @@ function renderFileInspector() {
   fileInspector.replaceChildren(fragment);
 }
 
-async function loadWorkspaceFilePreview(relativePath) {
+async function loadWorkspaceFilePreview(relativePath, options = {}) {
   const activeFolder = getActiveWorkspaceFolder();
 
   if (activeFolder === null) {
@@ -1940,6 +2316,7 @@ async function loadWorkspaceFilePreview(relativePath) {
   const requestId = ++workspacePreviewRequestId;
   const previewFolderId = activeFolder.id;
   const previewRootPath = activeFolder.rootPath;
+  const nextViewMode = options.preserveViewMode === true ? workspacePreviewState.viewMode : "auto";
   clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = previewFolderId;
   workspacePreviewState.relativePath = relativePath;
@@ -1947,6 +2324,11 @@ async function loadWorkspaceFilePreview(relativePath) {
   workspacePreviewState.data = null;
   workspacePreviewState.errorMessage = "";
   workspacePreviewState.actionErrorMessage = "";
+  workspacePreviewState.viewMode = nextViewMode;
+  workspacePreviewState.isEditing = false;
+  workspacePreviewState.draftText = "";
+  workspacePreviewState.saveErrorMessage = "";
+  setWorkspaceSelection(previewFolderId, relativePath, "file");
   captureActiveCanvasWorkspaceSnapshot();
   renderWorkspaceBrowser();
   renderFileInspector();
@@ -1968,6 +2350,9 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.status = "ready";
     workspacePreviewState.errorMessage = "";
     workspacePreviewState.actionErrorMessage = "";
+    workspacePreviewState.draftText = typeof preview.textContents === "string" ? preview.textContents : "";
+    workspacePreviewState.saveErrorMessage = "";
+    setWorkspaceSelection(previewFolderId, relativePath, "file");
     captureActiveCanvasWorkspaceSnapshot();
     renderWorkspaceBrowser();
     renderFileInspector();
@@ -1988,6 +2373,8 @@ async function loadWorkspaceFilePreview(relativePath) {
     workspacePreviewState.data = null;
     workspacePreviewState.errorMessage = error instanceof Error ? error.message : String(error);
     workspacePreviewState.actionErrorMessage = "";
+    workspacePreviewState.draftText = "";
+    workspacePreviewState.saveErrorMessage = "";
     captureActiveCanvasWorkspaceSnapshot();
     renderWorkspaceBrowser();
     renderFileInspector();
@@ -2011,7 +2398,157 @@ async function refreshSelectedWorkspaceFilePreview() {
     return null;
   }
 
-  return loadWorkspaceFilePreview(workspacePreviewState.relativePath);
+  return loadWorkspaceFilePreview(workspacePreviewState.relativePath, { preserveViewMode: true });
+}
+
+async function createWorkspaceFileAtSelection() {
+  const workspaceActionContext = getWorkspaceActionContext();
+
+  if (workspaceActionContext.activeFolder === null) {
+    return null;
+  }
+
+  const fileName = await promptForWorkspaceEntryName("Choose a name for the new file.", "untitled.txt", "Create file");
+
+  if (fileName === null) {
+    return null;
+  }
+
+  const response = await window.noteCanvas.createWorkspaceFile(
+    workspaceActionContext.activeFolder.id,
+    workspaceActionContext.parentRelativePath,
+    fileName
+  );
+
+  applyWorkspaceState(response?.state ?? null);
+  expandWorkspaceSelectionPath(response?.relativePath ?? "", { includeSelf: false });
+
+  if (typeof response?.relativePath === "string") {
+    return selectWorkspaceFile(response.relativePath);
+  }
+
+  return null;
+}
+
+async function createWorkspaceDirectoryAtSelection() {
+  const workspaceActionContext = getWorkspaceActionContext();
+
+  if (workspaceActionContext.activeFolder === null) {
+    return null;
+  }
+
+  const directoryName = await promptForWorkspaceEntryName("Choose a name for the new folder.", "untitled-folder", "Create folder");
+
+  if (directoryName === null) {
+    return null;
+  }
+
+  const response = await window.noteCanvas.createWorkspaceDirectory(
+    workspaceActionContext.activeFolder.id,
+    workspaceActionContext.parentRelativePath,
+    directoryName
+  );
+
+  applyWorkspaceState(response?.state ?? null);
+
+  if (typeof response?.relativePath === "string") {
+    expandWorkspaceSelectionPath(response.relativePath, { includeSelf: true });
+    setWorkspaceSelection(workspaceActionContext.activeFolder.id, response.relativePath, "directory");
+    renderWorkspaceBrowser();
+  }
+
+  return response ?? null;
+}
+
+async function renameSelectedWorkspaceEntry() {
+  const workspaceActionContext = getWorkspaceActionContext();
+
+  if (workspaceActionContext.activeFolder === null || workspaceActionContext.selectedEntry === null) {
+    return null;
+  }
+
+  const nextName = await promptForWorkspaceEntryName(
+    `Rename ${workspaceActionContext.selectedEntry.relativePath}`,
+    getWorkspaceEntryName(workspaceActionContext.selectedEntry.relativePath),
+    "Rename"
+  );
+
+  if (nextName === null) {
+    return null;
+  }
+
+  const previousRelativePath = workspaceActionContext.selectedEntry.relativePath;
+  const previousPreviewRelativePath = workspacePreviewState.folderId === workspaceActionContext.activeFolder.id
+    ? workspacePreviewState.relativePath
+    : null;
+  const wasPreviewingSelection = workspacePreviewState.folderId === workspaceActionContext.activeFolder.id
+    && workspacePreviewState.relativePath === previousRelativePath;
+  const response = await window.noteCanvas.renameWorkspaceEntry(
+    workspaceActionContext.activeFolder.id,
+    previousRelativePath,
+    nextName
+  );
+
+  applyWorkspaceState(response?.state ?? null);
+
+  if (typeof response?.relativePath === "string") {
+    if (workspaceActionContext.selectedEntry.kind === "directory") {
+      const renamedPreviewRelativePath = typeof previousPreviewRelativePath === "string"
+        && previousPreviewRelativePath.startsWith(`${previousRelativePath}/`)
+        ? `${response.relativePath}${previousPreviewRelativePath.slice(previousRelativePath.length)}`
+        : null;
+
+      expandWorkspaceSelectionPath(response.relativePath, { includeSelf: true });
+      setWorkspaceSelection(workspaceActionContext.activeFolder.id, response.relativePath, "directory");
+      if (typeof renamedPreviewRelativePath === "string") {
+        await selectWorkspaceFile(renamedPreviewRelativePath);
+      } else {
+        renderWorkspaceBrowser();
+      }
+    } else if (wasPreviewingSelection) {
+      await selectWorkspaceFile(response.relativePath);
+    } else {
+      setWorkspaceSelection(workspaceActionContext.activeFolder.id, response.relativePath, "file");
+      renderWorkspaceBrowser();
+    }
+  }
+
+  return response ?? null;
+}
+
+async function deleteSelectedWorkspaceEntry() {
+  const workspaceActionContext = getWorkspaceActionContext();
+
+  if (workspaceActionContext.activeFolder === null || workspaceActionContext.selectedEntry === null) {
+    return null;
+  }
+
+  const confirmed = await confirmWorkspaceAction(
+    "Delete entry",
+    `Delete ${workspaceActionContext.selectedEntry.relativePath}? This cannot be undone.`,
+    "Delete"
+  );
+
+  if (!confirmed) {
+    return null;
+  }
+
+  const nextSelectedRelativePath = getWorkspaceEntryParentPath(workspaceActionContext.selectedEntry.relativePath);
+  const response = await window.noteCanvas.deleteWorkspaceEntry(
+    workspaceActionContext.activeFolder.id,
+    workspaceActionContext.selectedEntry.relativePath
+  );
+
+  applyWorkspaceState(response?.state ?? null);
+
+  if (nextSelectedRelativePath.length > 0 && getWorkspaceDirectoryPaths(getActiveWorkspaceFolder()).has(nextSelectedRelativePath)) {
+    setWorkspaceSelection(workspaceActionContext.activeFolder.id, nextSelectedRelativePath, "directory");
+  } else {
+    clearWorkspaceSelection();
+  }
+
+  renderWorkspaceBrowser();
+  return response ?? null;
 }
 
 function toggleWorkspaceDirectory(relativePath) {
@@ -2030,6 +2567,8 @@ function toggleWorkspaceDirectory(relativePath) {
 }
 
 function updateWorkspaceControls() {
+  const workspaceActionContext = getWorkspaceActionContext();
+
   if (openWorkspaceButton instanceof HTMLButtonElement) {
     const actionLabel = hasWorkspaceDirectory() ? "Replace workspace" : "Choose workspace";
     openWorkspaceButton.setAttribute("aria-label", actionLabel);
@@ -2044,6 +2583,22 @@ function updateWorkspaceControls() {
       workspaceState.isRefreshing ? "Refreshing workspace" : "Refresh workspace"
     );
     refreshWorkspaceButton.title = workspaceState.isRefreshing ? "Refreshing workspace" : "Refresh workspace";
+  }
+
+  if (createWorkspaceFileButton instanceof HTMLButtonElement) {
+    createWorkspaceFileButton.disabled = !hasWorkspaceDirectory();
+  }
+
+  if (createWorkspaceDirectoryButton instanceof HTMLButtonElement) {
+    createWorkspaceDirectoryButton.disabled = !hasWorkspaceDirectory();
+  }
+
+  if (renameWorkspaceEntryButton instanceof HTMLButtonElement) {
+    renameWorkspaceEntryButton.disabled = !workspaceActionContext.canRename;
+  }
+
+  if (deleteWorkspaceEntryButton instanceof HTMLButtonElement) {
+    deleteWorkspaceEntryButton.disabled = !workspaceActionContext.canDelete;
   }
 }
 
@@ -2144,10 +2699,12 @@ function renderWorkspaceBrowser() {
         if (entry.kind === "directory") {
           button.setAttribute("aria-expanded", entry.isExpanded ? "true" : "false");
           button.addEventListener("click", () => {
+            setWorkspaceSelection(activeFolder.id, entry.relativePath, "directory");
             toggleWorkspaceDirectory(entry.relativePath);
           });
         } else {
           button.addEventListener("click", () => {
+            setWorkspaceSelection(activeFolder.id, entry.relativePath, "file");
             void selectWorkspaceFile(entry.relativePath);
           });
         }
@@ -2239,6 +2796,8 @@ function applyWorkspaceState(nextState, options = {}) {
       skipSessionSave: options.skipCanvasWorkspaceSync
     });
   }
+
+  syncWorkspaceSelectionWithState();
 
   renderWorkspaceBrowser();
   renderFileInspector();
@@ -3659,6 +4218,16 @@ function handleWindowKeyDown(event) {
     return;
   }
 
+  if (workspaceActionDialogState.isOpen === true && event.key === "Escape") {
+    event.preventDefault();
+    resolveWorkspaceActionDialog(null);
+    return;
+  }
+
+  if (workspaceActionDialogState.isOpen === true) {
+    return;
+  }
+
   if (event.key === "Escape" && activeTitleEditorRecord !== null) {
     event.preventDefault();
     cancelNodeTitleEditing(activeTitleEditorRecord);
@@ -4332,6 +4901,30 @@ refreshWorkspaceButton?.addEventListener("click", () => {
   });
 });
 
+createWorkspaceFileButton?.addEventListener("click", () => {
+  void createWorkspaceFileAtSelection().catch((error) => {
+    showWorkspaceActionError(error);
+  });
+});
+
+createWorkspaceDirectoryButton?.addEventListener("click", () => {
+  void createWorkspaceDirectoryAtSelection().catch((error) => {
+    showWorkspaceActionError(error);
+  });
+});
+
+renameWorkspaceEntryButton?.addEventListener("click", () => {
+  void renameSelectedWorkspaceEntry().catch((error) => {
+    showWorkspaceActionError(error);
+  });
+});
+
+deleteWorkspaceEntryButton?.addEventListener("click", () => {
+  void deleteSelectedWorkspaceEntry().catch((error) => {
+    showWorkspaceActionError(error);
+  });
+});
+
 sidebarToggleButton?.addEventListener("click", () => {
   toggleSidebar();
 });
@@ -4347,6 +4940,30 @@ if (fileInspectorResizeHandle instanceof HTMLElement) {
     startPanelResize(event, fileInspectorResizeHandle, "inspector");
   });
 }
+
+workspaceActionDialogBackdrop?.addEventListener("click", () => {
+  resolveWorkspaceActionDialog(null);
+});
+
+workspaceActionDialogInput?.addEventListener("input", () => {
+  workspaceActionDialogState.value = workspaceActionDialogInput.value;
+});
+
+workspaceActionDialogCancelButton?.addEventListener("click", () => {
+  resolveWorkspaceActionDialog(null);
+});
+
+workspaceActionDialogForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const submitValue = getWorkspaceActionDialogSubmitValue(workspaceActionDialogState);
+
+  if (workspaceActionDialogState.kind === "prompt" && submitValue === null) {
+    workspaceActionDialogInput?.focus();
+    return;
+  }
+
+  resolveWorkspaceActionDialog(submitValue);
+});
 
 
 boardFullscreenExitButton?.addEventListener("click", (event) => {
@@ -4364,6 +4981,7 @@ board.addEventListener("pointerup", handleBoardPointerUp);
 board.addEventListener("pointercancel", handleBoardPointerCancel);
 board.addEventListener("wheel", handleBoardWheel, { passive: false });
 board.addEventListener("dblclick", handleBoardDoubleClick);
+renderWorkspaceActionDialog();
 window.addEventListener("click", handleWindowClick);
 window.addEventListener("pointermove", handleWindowPointerMove);
 window.addEventListener("pointerup", handleWindowPointerUp);

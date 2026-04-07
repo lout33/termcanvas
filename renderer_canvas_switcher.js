@@ -34,14 +34,12 @@
   function deriveCanvasSwitcherViewModel({ canvases, activeCanvasId, activeCanvasRenameId, isExpanded }) {
     const normalizedCanvases = Array.isArray(canvases) ? canvases : [];
     const activeCanvas = normalizedCanvases.find((canvasRecord) => canvasRecord?.id === activeCanvasId) ?? normalizedCanvases[0] ?? null;
-    const listItems = normalizedCanvases.map((canvasRecord) => {
+    const orderedCanvases = activeCanvas === null
+      ? normalizedCanvases
+      : [activeCanvas, ...normalizedCanvases.filter((canvasRecord) => canvasRecord?.id !== activeCanvas.id)];
+    const listItems = orderedCanvases.map((canvasRecord) => {
       return normalizeCanvasForSwitcher(canvasRecord, activeCanvas?.id ?? null, activeCanvasRenameId, normalizedCanvases.length > 1);
     });
-    const activeWorkspace = activeCanvas?.workspace ?? null;
-    const activeTerminalCount = Array.isArray(activeCanvas?.nodes) ? activeCanvas.nodes.length : 0;
-    const hasLinkedWorkspace = Boolean(activeWorkspace?.rootPath);
-    const terminalSummary = getTerminalSummary(activeTerminalCount);
-    const workspaceStatus = hasLinkedWorkspace ? "Workspace linked" : "No workspace linked";
     const disclosureExpanded = isExpanded === true;
 
     return {
@@ -50,10 +48,7 @@
         : {
             name: activeCanvas.name,
             buttonLabel: "Switch canvases",
-            meta: `${workspaceStatus} · ${terminalSummary}`,
-            path: hasLinkedWorkspace ? activeWorkspace.rootPath : "Choose a workspace for this canvas.",
             isExpanded: disclosureExpanded,
-            hasLinkedWorkspace,
             isRenaming: activeCanvas.id === activeCanvasRenameId
           },
       list: {

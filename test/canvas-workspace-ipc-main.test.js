@@ -5,21 +5,47 @@ const os = require("node:os");
 const path = require("node:path");
 const Module = require("node:module");
 
-function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult = "" }) {
+function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult = "", resolveWhenReady = false }) {
   const handlers = new Map();
   const openPathCalls = [];
+  const openExternalCalls = [];
   const showItemInFolderCalls = [];
+  const createdWindows = [];
+
+  function createMockWindow() {
+    const window = {
+      once: () => {},
+      show: () => {},
+      loadFile: () => {},
+      webContents: {
+        once: () => {},
+        on: () => {},
+        setWindowOpenHandler: (handler) => {
+          window.webContents.windowOpenHandler = handler;
+        }
+      }
+    };
+
+    createdWindows.push(window);
+    return window;
+  }
+
+  function MockBrowserWindow() {
+    return createMockWindow();
+  }
+
+  MockBrowserWindow.fromWebContents = () => ({});
+  MockBrowserWindow.getAllWindows = () => createdWindows;
+
   const electronStub = {
     app: {
-      whenReady: () => new Promise(() => {}),
+      whenReady: () => resolveWhenReady ? Promise.resolve() : new Promise(() => {}),
       on: () => {},
       quit: () => {},
       exit: () => {},
       getPath: () => os.homedir()
     },
-    BrowserWindow: {
-      fromWebContents: () => ({})
-    },
+    BrowserWindow: MockBrowserWindow,
     dialog: {
       showOpenDialog
     },
@@ -29,6 +55,9 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
         return typeof openPathResult === "function"
           ? openPathResult(targetPath)
           : openPathResult;
+      },
+      openExternal: async (targetPath) => {
+        openExternalCalls.push(targetPath);
       },
       showItemInFolder: (targetPath) => {
         showItemInFolderCalls.push(targetPath);
@@ -84,7 +113,7 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, openPathResult =
     }
   }
 
-  return { handlers, mainPath, openPathCalls, showItemInFolderCalls };
+  return { handlers, mainPath, openPathCalls, openExternalCalls, showItemInFolderCalls, createdWindows };
 }
 
 test("workspace-directory:choose-canvas replaces the owner's existing workspace registry", async () => {
@@ -403,4 +432,161 @@ test("workspace-file:open-external surfaces shell.openPath errors", async () => 
   } else {
     process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
   }
+});
+
+test("workspace entry create, rename, and delete handlers update the owner workspace safely", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(workspacePath, { recursive: true });
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const createDirectoryHandler = handlers.get("workspace-entry:create-directory");
+  const createFileHandler = handlers.get("workspace-entry:create-file");
+  const renameHandler = handlers.get("workspace-entry:rename");
+  const deleteHandler = handlers.get("workspace-entry:delete");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 81 } }, { directoryPath: workspacePath });
+
+  const folderId = stateHandler({ sender: { id: 81 } }).importedFolders[0].id;
+
+  const createdDirectory = await createDirectoryHandler(
+    { sender: { id: 81 } },
+    { folderId, parentRelativePath: "", name: "drafts" }
+  );
+  assert.equal(createdDirectory.relativePath, "drafts");
+  assert.equal(fs.statSync(path.join(workspacePath, "drafts")).isDirectory(), true);
+
+  const createdFile = await createFileHandler(
+    { sender: { id: 81 } },
+    { folderId, parentRelativePath: "drafts", name: "todo.md" }
+  );
+  assert.equal(createdFile.relativePath, "drafts/todo.md");
+  assert.equal(fs.readFileSync(path.join(workspacePath, "drafts", "todo.md"), "utf8"), "");
+
+  const renamedEntry = await renameHandler(
+    { sender: { id: 81 } },
+    { folderId, relativePath: "drafts/todo.md", nextName: "todo-final.md" }
+  );
+  assert.equal(renamedEntry.relativePath, "drafts/todo-final.md");
+  assert.equal(fs.existsSync(path.join(workspacePath, "drafts", "todo-final.md")), true);
+  assert.equal(fs.existsSync(path.join(workspacePath, "drafts", "todo.md")), false);
+
+  const deletedEntry = await deleteHandler(
+    { sender: { id: 81 } },
+    { folderId, relativePath: "drafts/todo-final.md" }
+  );
+  assert.equal(deletedEntry.deletedRelativePath, "drafts/todo-final.md");
+  assert.equal(fs.existsSync(path.join(workspacePath, "drafts", "todo-final.md")), false);
+
+  const currentState = stateHandler({ sender: { id: 81 } });
+  assert.equal(currentState.importedFolders[0].entries.some((entry) => entry.relativePath === "drafts"), true);
+  assert.equal(currentState.importedFolders[0].entries.some((entry) => entry.relativePath === "drafts/todo-final.md"), false);
+
+  restoreHandler({ sender: { id: 81 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("workspace-file:write saves text-like files and rejects stale writes", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const filePath = path.join(workspacePath, "docs", "notes.md");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, "before\n", "utf8");
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const readHandler = handlers.get("workspace-file:read");
+  const writeHandler = handlers.get("workspace-file:write");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 91 } }, { directoryPath: workspacePath });
+
+  const folderId = stateHandler({ sender: { id: 91 } }).importedFolders[0].id;
+  const initialPreview = await readHandler(
+    { sender: { id: 91 } },
+    { folderId, relativePath: "docs/notes.md" }
+  );
+
+  const savedPreview = await writeHandler(
+    { sender: { id: 91 } },
+    {
+      folderId,
+      relativePath: "docs/notes.md",
+      textContents: "after\n",
+      expectedLastModifiedMs: initialPreview.lastModifiedMs
+    }
+  );
+
+  assert.equal(savedPreview.textContents, "after\n");
+  assert.equal(fs.readFileSync(filePath, "utf8"), "after\n");
+
+  fs.writeFileSync(filePath, "external\n", "utf8");
+  const nextMtime = new Date(Math.trunc(savedPreview.lastModifiedMs) + 5000);
+  fs.utimesSync(filePath, nextMtime, nextMtime);
+
+  assert.throws(
+    () => writeHandler(
+      { sender: { id: 91 } },
+      {
+        folderId,
+        relativePath: "docs/notes.md",
+        textContents: "stale\n",
+        expectedLastModifiedMs: savedPreview.lastModifiedMs
+      }
+    ),
+    /changed on disk/u
+  );
+
+  restoreHandler({ sender: { id: 91 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("createMainWindow denies new windows and opens external links in the system browser", async () => {
+  const { createdWindows, openExternalCalls, mainPath } = loadMainWithMocks({
+    resolveWhenReady: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(createdWindows.length, 1);
+  const handlerResult = createdWindows[0].webContents.windowOpenHandler({ url: "https://example.com/docs" });
+
+  assert.deepEqual(handlerResult, { action: "deny" });
+  assert.deepEqual(openExternalCalls, ["https://example.com/docs"]);
+  delete require.cache[mainPath];
 });

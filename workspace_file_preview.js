@@ -13,6 +13,7 @@ const TEXT_TYPE_BY_EXTENSION = new Map([
   [".md", { language: "markdown", mimeType: "text/markdown" }],
   [".py", { language: "python", mimeType: "text/x-python" }],
   [".sh", { language: "shell", mimeType: "text/x-shellscript" }],
+  [".svg", { language: "svg", mimeType: "image/svg+xml" }],
   [".ts", { language: "typescript", mimeType: "text/typescript" }],
   [".tsx", { language: "typescript", mimeType: "text/typescript" }],
   [".txt", { language: "text", mimeType: "text/plain" }],
@@ -107,7 +108,9 @@ function getPreviewDescriptor(filePath) {
 
   if (textType) {
     return {
-      kind: textType.language === "json" ? "json" : "text",
+      kind: textType.language === "json"
+        ? "json"
+        : (textType.language === "svg" ? "svg" : "text"),
       language: textType.language,
       mimeType: textType.mimeType,
       maxBytes: MAX_TEXT_PREVIEW_BYTES,

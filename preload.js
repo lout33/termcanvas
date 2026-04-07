@@ -17,8 +17,33 @@ contextBridge.exposeInMainWorld(
     removeWorkspaceFolder: (folderId) => ipcRenderer.invoke("workspace-folder:remove", { folderId }),
     debugOpenWorkspaceDirectory: (directoryPath) => ipcRenderer.invoke("workspace-directory:debug-open", { directoryPath }),
     readWorkspaceFile: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:read", { folderId, relativePath }),
+    saveWorkspaceFile: (folderId, relativePath, textContents, expectedLastModifiedMs) => ipcRenderer.invoke("workspace-file:write", {
+      folderId,
+      relativePath,
+      textContents,
+      expectedLastModifiedMs
+    }),
     openWorkspaceFileExternally: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:open-external", { folderId, relativePath }),
     revealWorkspaceFile: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:reveal", { folderId, relativePath }),
+    createWorkspaceFile: (folderId, parentRelativePath, name) => ipcRenderer.invoke("workspace-entry:create-file", {
+      folderId,
+      parentRelativePath,
+      name
+    }),
+    createWorkspaceDirectory: (folderId, parentRelativePath, name) => ipcRenderer.invoke("workspace-entry:create-directory", {
+      folderId,
+      parentRelativePath,
+      name
+    }),
+    renameWorkspaceEntry: (folderId, relativePath, nextName) => ipcRenderer.invoke("workspace-entry:rename", {
+      folderId,
+      relativePath,
+      nextName
+    }),
+    deleteWorkspaceEntry: (folderId, relativePath) => ipcRenderer.invoke("workspace-entry:delete", {
+      folderId,
+      relativePath
+    }),
     createTerminal: (payload) => ipcRenderer.invoke("terminal:create", payload),
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),

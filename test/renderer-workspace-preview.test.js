@@ -42,6 +42,83 @@ test("deriveWorkspacePreviewViewModel maps json and text previews to text inspec
   assert.equal(textViewModel.textContents, "ship preview helper\n");
 });
 
+test("deriveWorkspacePreviewViewModel renders markdown by default and can fall back to source mode", () => {
+  const renderedMarkdownViewModel = deriveWorkspacePreviewViewModel({
+    relativePath: "docs/readme.md",
+    status: "ready",
+    data: {
+      kind: "text",
+      language: "markdown",
+      mimeType: "text/markdown",
+      fileName: "readme.md",
+      textContents: "# Hello\n\n- item\n"
+    },
+    viewMode: "auto",
+    errorMessage: ""
+  });
+
+  assert.equal(renderedMarkdownViewModel.mode, "markdown");
+  assert.equal(renderedMarkdownViewModel.canEdit, true);
+  assert.equal(renderedMarkdownViewModel.canRender, true);
+  assert.match(renderedMarkdownViewModel.renderedContentsHtml, /<h1>Hello<\/h1>/u);
+  assert.match(renderedMarkdownViewModel.renderedContentsHtml, /<li>item<\/li>/u);
+
+  const sourceMarkdownViewModel = deriveWorkspacePreviewViewModel({
+    relativePath: "docs/readme.md",
+    status: "ready",
+    data: {
+      kind: "text",
+      language: "markdown",
+      mimeType: "text/markdown",
+      fileName: "readme.md",
+      textContents: "# Hello\n\n- item\n"
+    },
+    viewMode: "source",
+    errorMessage: ""
+  });
+
+  assert.equal(sourceMarkdownViewModel.mode, "text");
+  assert.equal(sourceMarkdownViewModel.textContents, "# Hello\n\n- item\n");
+});
+
+test("deriveWorkspacePreviewViewModel renders svg by default and can fall back to source mode", () => {
+  const renderedSvgViewModel = deriveWorkspacePreviewViewModel({
+    relativePath: "assets/logo.svg",
+    status: "ready",
+    data: {
+      kind: "svg",
+      language: "svg",
+      mimeType: "image/svg+xml",
+      fileName: "logo.svg",
+      textContents: "<svg viewBox=\"0 0 1 1\"><circle cx=\"0.5\" cy=\"0.5\" r=\"0.5\" /></svg>"
+    },
+    viewMode: "auto",
+    errorMessage: ""
+  });
+
+  assert.equal(renderedSvgViewModel.mode, "svg");
+  assert.equal(renderedSvgViewModel.canEdit, true);
+  assert.equal(renderedSvgViewModel.canRender, true);
+  assert.equal(renderedSvgViewModel.textContents.includes("<svg"), true);
+
+  const sourceSvgViewModel = deriveWorkspacePreviewViewModel({
+    relativePath: "assets/logo.svg",
+    status: "ready",
+    data: {
+      kind: "svg",
+      language: "svg",
+      mimeType: "image/svg+xml",
+      fileName: "logo.svg",
+      textContents: "<svg viewBox=\"0 0 1 1\"></svg>"
+    },
+    viewMode: "source",
+    errorMessage: ""
+  });
+
+  assert.equal(sourceSvgViewModel.mode, "text");
+  assert.equal(sourceSvgViewModel.textContents, "<svg viewBox=\"0 0 1 1\"></svg>");
+});
+
 test("deriveWorkspacePreviewViewModel maps image and pdf previews to rendered inspector modes", () => {
   const imageViewModel = deriveWorkspacePreviewViewModel({
     relativePath: "images/diagram.png",

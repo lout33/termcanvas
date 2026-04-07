@@ -242,7 +242,30 @@ function getActiveWorkspaceFolderForOwner(ownerWebContentsId) {
   return getWorkspaceFolder(workspaceRegistry, workspaceRegistry.activeFolderId);
 }
 
-function getOwnedWorkspaceFileTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+function isPathWithinDirectory(rootPath, targetPath) {
+  const relativePath = path.relative(rootPath, targetPath);
+  return relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath);
+}
+
+function normalizeWorkspaceEntryName(value) {
+  if (typeof value !== "string") {
+    throw new Error("A workspace entry name is required.");
+  }
+
+  const trimmedValue = value.trim();
+
+  if (trimmedValue.length === 0) {
+    throw new Error("A workspace entry name is required.");
+  }
+
+  if (trimmedValue === "." || trimmedValue === ".." || /[\\/]/u.test(trimmedValue)) {
+    throw new Error("Workspace entry names cannot contain path separators.");
+  }
+
+  return trimmedValue;
+}
+
+function getOwnedWorkspaceFolderRecord(ownerWebContentsId, folderId, missingFolderMessage) {
   const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
 
   if (workspaceRegistry === null) {
@@ -255,7 +278,156 @@ function getOwnedWorkspaceFileTarget(ownerWebContentsId, folderId, relativePath,
     throw new Error(missingFolderMessage);
   }
 
-  return resolveWorkspaceFilePath(workspaceFolder.rootPath, relativePath);
+  const resolvedRootPath = resolveExistingDirectoryPath(workspaceFolder.rootPath);
+
+  if (resolvedRootPath === null) {
+    throw new Error("Workspace folder is unavailable.");
+  }
+
+  return {
+    workspaceFolder,
+    rootPath: fs.realpathSync(resolvedRootPath)
+  };
+}
+
+function resolveOwnedWorkspaceTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  const { workspaceFolder, rootPath } = getOwnedWorkspaceFolderRecord(ownerWebContentsId, folderId, missingFolderMessage);
+  const normalizedRelativePath = typeof relativePath === "string" ? relativePath : "";
+  const candidatePath = path.resolve(rootPath, normalizedRelativePath);
+
+  if (!isPathWithinDirectory(rootPath, candidatePath)) {
+    throw new Error("Workspace file preview must stay inside the workspace root.");
+  }
+
+  if (fs.existsSync(candidatePath)) {
+    const realCandidatePath = fs.realpathSync(candidatePath);
+
+    if (!isPathWithinDirectory(rootPath, realCandidatePath)) {
+      throw new Error("Workspace file preview must stay inside the workspace root.");
+    }
+
+    return {
+      workspaceFolder,
+      rootPath,
+      filePath: realCandidatePath,
+      relativePath: path.relative(rootPath, realCandidatePath).split(path.sep).join("/")
+    };
+  }
+
+  return {
+    workspaceFolder,
+    rootPath,
+    filePath: candidatePath,
+    relativePath: path.relative(rootPath, candidatePath).split(path.sep).join("/")
+  };
+}
+
+function getOwnedWorkspaceFileTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  return resolveWorkspaceFilePath(
+    getOwnedWorkspaceFolderRecord(ownerWebContentsId, folderId, missingFolderMessage).rootPath,
+    relativePath
+  );
+}
+
+function getOwnedWorkspaceDirectoryTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  const resolvedTarget = resolveOwnedWorkspaceTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage);
+  const targetStats = fs.statSync(resolvedTarget.filePath);
+
+  if (!targetStats.isDirectory()) {
+    throw new Error("Workspace target must be a directory.");
+  }
+
+  return resolvedTarget;
+}
+
+function refreshWorkspaceRegistryAfterMutation(ownerWebContentsId, folderId) {
+  const nextState = refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId);
+  pushWorkspaceRegistryToOwner(ownerWebContentsId);
+  return nextState;
+}
+
+function createOwnedWorkspaceEntry(ownerWebContentsId, folderId, parentRelativePath, name, kind) {
+  const parentTarget = getOwnedWorkspaceDirectoryTarget(
+    ownerWebContentsId,
+    folderId,
+    parentRelativePath,
+    "Open a workspace folder before managing files."
+  );
+  const entryName = normalizeWorkspaceEntryName(name);
+  const nextPath = path.resolve(parentTarget.filePath, entryName);
+
+  if (!isPathWithinDirectory(parentTarget.rootPath, nextPath)) {
+    throw new Error("Workspace file preview must stay inside the workspace root.");
+  }
+
+  if (fs.existsSync(nextPath)) {
+    throw new Error("A file or folder with that name already exists.");
+  }
+
+  if (kind === "directory") {
+    fs.mkdirSync(nextPath, { recursive: false });
+  } else {
+    fs.writeFileSync(nextPath, "", "utf8");
+  }
+
+  return {
+    filePath: nextPath,
+    relativePath: path.relative(parentTarget.rootPath, nextPath).split(path.sep).join("/")
+  };
+}
+
+function renameOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath, nextName) {
+  const currentTarget = resolveOwnedWorkspaceTarget(
+    ownerWebContentsId,
+    folderId,
+    relativePath,
+    "Open a workspace folder before managing files."
+  );
+  const resolvedNextName = normalizeWorkspaceEntryName(nextName);
+  const renamedPath = path.resolve(path.dirname(currentTarget.filePath), resolvedNextName);
+
+  if (!fs.existsSync(currentTarget.filePath)) {
+    throw new Error("Workspace entry was not found.");
+  }
+
+  if (!isPathWithinDirectory(currentTarget.rootPath, renamedPath)) {
+    throw new Error("Workspace file preview must stay inside the workspace root.");
+  }
+
+  if (renamedPath !== currentTarget.filePath && fs.existsSync(renamedPath)) {
+    throw new Error("A file or folder with that name already exists.");
+  }
+
+  fs.renameSync(currentTarget.filePath, renamedPath);
+
+  return {
+    filePath: renamedPath,
+    relativePath: path.relative(currentTarget.rootPath, renamedPath).split(path.sep).join("/")
+  };
+}
+
+function deleteOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath) {
+  const currentTarget = resolveOwnedWorkspaceTarget(
+    ownerWebContentsId,
+    folderId,
+    relativePath,
+    "Open a workspace folder before managing files."
+  );
+
+  if (!fs.existsSync(currentTarget.filePath)) {
+    throw new Error("Workspace entry was not found.");
+  }
+
+  if (currentTarget.relativePath.length === 0) {
+    throw new Error("The workspace root cannot be deleted.");
+  }
+
+  fs.rmSync(currentTarget.filePath, { recursive: true, force: false });
+  return currentTarget.relativePath;
+}
+
+function isEditableWorkspacePreview(preview) {
+  return preview?.kind === "text" || preview?.kind === "json" || preview?.kind === "svg";
 }
 
 function getOwnerWorkspaceWatchers(ownerWebContentsId) {
@@ -731,6 +903,21 @@ function createMainWindow() {
     window.show();
   });
 
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//u.test(url)) {
+      void shell.openExternal(url);
+    }
+
+    return { action: "deny" };
+  });
+
+  window.webContents.on("will-navigate", (event, url) => {
+    if (/^https?:\/\//u.test(url)) {
+      event.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+
   void window.loadFile(path.join(__dirname, "index.html"));
 
   if (process.env.CANVAS_SMOKE_TEST === "1") {
@@ -965,6 +1152,74 @@ async function runSmokeTest(window) {
       || !["auto", "scroll"].includes(sidebarScrollSnapshot.overflowY)
     ) {
       throw new Error(`Smoke test failed: crowded sidebar content was not scrollable. Snapshot: ${JSON.stringify(sidebarScrollSnapshot)}`);
+    }
+
+    logStep("keep canvas switcher to a single compact row");
+    const compactCanvasSwitcherSnapshot = await window.webContents.executeJavaScript(`(() => {
+      const section = document.getElementById("canvas-switcher-section");
+      const trigger = document.getElementById("canvas-switcher-button");
+      const visibleHeaderActions = Array.from(document.querySelectorAll("#canvas-switcher-section .sidebar-switcher-header-row .sidebar-section-actions button"))
+        .filter((button) => button instanceof HTMLElement && getComputedStyle(button).display !== "none").length;
+
+      if (!(section instanceof HTMLElement) || !(trigger instanceof HTMLElement)) {
+        return null;
+      }
+
+      return {
+        sectionHeight: section.getBoundingClientRect().height,
+        triggerHeight: trigger.getBoundingClientRect().height,
+        visibleHeaderActions
+      };
+    })()`);
+
+    if (
+      compactCanvasSwitcherSnapshot === null
+      || compactCanvasSwitcherSnapshot.visibleHeaderActions !== 0
+      || compactCanvasSwitcherSnapshot.sectionHeight > compactCanvasSwitcherSnapshot.triggerHeight + 40
+    ) {
+      throw new Error(`Smoke test failed: canvas switcher is not reduced to a single compact trigger row. Snapshot: ${JSON.stringify(compactCanvasSwitcherSnapshot)}`);
+    }
+
+    logStep("open canvas switcher without shrinking workspace area");
+    const canvasSwitcherOverlaySnapshot = await window.webContents.executeJavaScript(`(() => {
+      const trigger = document.getElementById("canvas-switcher-button");
+      const menu = document.getElementById("canvas-switcher-menu");
+      const workspaceSection = document.getElementById("workspace-browser-section");
+
+      if (!(trigger instanceof HTMLElement) || !(menu instanceof HTMLElement) || !(workspaceSection instanceof HTMLElement)) {
+        return null;
+      }
+
+      const beforeWorkspaceTop = workspaceSection.getBoundingClientRect().top;
+      trigger.click();
+
+      return new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          const triggerRect = trigger.getBoundingClientRect();
+          const menuRect = menu.getBoundingClientRect();
+          const afterWorkspaceTop = workspaceSection.getBoundingClientRect().top;
+          const snapshot = {
+            beforeWorkspaceTop,
+            afterWorkspaceTop,
+            menuHidden: menu.hidden,
+            menuTop: menuRect.top,
+            triggerBottom: triggerRect.bottom,
+            verticalShift: afterWorkspaceTop - beforeWorkspaceTop
+          };
+
+          trigger.click();
+          resolve(snapshot);
+        });
+      });
+    })()`);
+
+    if (
+      canvasSwitcherOverlaySnapshot === null
+      || canvasSwitcherOverlaySnapshot.menuHidden !== false
+      || Math.abs(canvasSwitcherOverlaySnapshot.verticalShift) > 2
+      || canvasSwitcherOverlaySnapshot.menuTop < canvasSwitcherOverlaySnapshot.triggerBottom - 2
+    ) {
+      throw new Error(`Smoke test failed: canvas switcher still pushes the workspace section instead of overlaying it. Snapshot: ${JSON.stringify(canvasSwitcherOverlaySnapshot)}`);
     }
 
     const workspaceOwnerCanvasIndex = workspaceSidebarSnapshot.canvasCount - 1;
@@ -1509,6 +1764,43 @@ ipcMain.handle("workspace-file:read", (event, payload) => {
   );
 });
 
+ipcMain.handle("workspace-file:write", (event, payload) => {
+  const resolvedTarget = getOwnedWorkspaceFileTarget(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.relativePath === "string" ? payload.relativePath : "",
+    "Open a workspace folder before saving files."
+  );
+  const currentPreview = readWorkspaceFilePreview(
+    resolvedTarget.rootPath,
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
+  );
+
+  if (!isEditableWorkspacePreview(currentPreview)) {
+    throw new Error("Only text-like workspace files can be edited.");
+  }
+
+  const currentStats = fs.statSync(resolvedTarget.filePath);
+  const expectedLastModifiedMs = Number.isFinite(payload?.expectedLastModifiedMs)
+    ? Math.trunc(payload.expectedLastModifiedMs)
+    : null;
+
+  if (expectedLastModifiedMs !== null && Math.trunc(currentStats.mtimeMs) !== expectedLastModifiedMs) {
+    throw new Error("File changed on disk. Refresh and try again.");
+  }
+
+  fs.writeFileSync(
+    resolvedTarget.filePath,
+    typeof payload?.textContents === "string" ? payload.textContents : "",
+    "utf8"
+  );
+
+  return readWorkspaceFilePreview(
+    resolvedTarget.rootPath,
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
+  );
+});
+
 ipcMain.handle("workspace-file:open-external", async (event, payload) => {
   const resolvedTarget = getOwnedWorkspaceFileTarget(
     event.sender.id,
@@ -1535,6 +1827,63 @@ ipcMain.handle("workspace-file:reveal", (event, payload) => {
 
   shell.showItemInFolder(resolvedTarget.filePath);
   return null;
+});
+
+ipcMain.handle("workspace-entry:create-file", (event, payload) => {
+  const createdEntry = createOwnedWorkspaceEntry(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.parentRelativePath === "string" ? payload.parentRelativePath : "",
+    payload?.name,
+    "file"
+  );
+
+  return {
+    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
+    relativePath: createdEntry.relativePath
+  };
+});
+
+ipcMain.handle("workspace-entry:create-directory", (event, payload) => {
+  const createdEntry = createOwnedWorkspaceEntry(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.parentRelativePath === "string" ? payload.parentRelativePath : "",
+    payload?.name,
+    "directory"
+  );
+
+  return {
+    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
+    relativePath: createdEntry.relativePath
+  };
+});
+
+ipcMain.handle("workspace-entry:rename", (event, payload) => {
+  const renamedEntry = renameOwnedWorkspaceEntry(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.relativePath === "string" ? payload.relativePath : "",
+    payload?.nextName
+  );
+
+  return {
+    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
+    relativePath: renamedEntry.relativePath
+  };
+});
+
+ipcMain.handle("workspace-entry:delete", (event, payload) => {
+  const deletedRelativePath = deleteOwnedWorkspaceEntry(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
+  );
+
+  return {
+    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
+    deletedRelativePath
+  };
 });
 
 ipcMain.handle("terminal:create", (event, payload) => {
