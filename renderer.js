@@ -16,7 +16,8 @@ const {
 } = window.noteCanvasRendererActionDialog;
 const {
   deriveCanvasSwitcherViewModel,
-  deriveCanvasStripOverflowState
+  deriveCanvasStripOverflowState,
+  deriveTerminalStripViewModel
 } = window.noteCanvasRendererCanvasSwitcher;
 const {
   shouldHandleCanvasWheel,
@@ -24,7 +25,9 @@ const {
   shouldClearActiveTerminalSelection,
   shouldSelectTerminal,
   shouldEnableTerminalInteractionOverlay,
-  shouldShowBoardHintsForCanvas
+  shouldShowBoardHintsForCanvas,
+  deriveTerminalStripActivation,
+  getViewportOffsetToCenterNode
 } = window.noteCanvasRendererCanvasNavigation;
 const {
   deriveWorkspacePreviewViewModel,
@@ -55,6 +58,10 @@ const canvasSwitcherMenuBody = document.getElementById("canvas-switcher-menu-bod
 const canvasStripList = document.getElementById("canvas-strip-list");
 const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
 const canvasStripNextButton = document.getElementById("canvas-strip-next-button");
+const terminalStripSection = document.getElementById("terminal-strip-section");
+const terminalStripList = document.getElementById("terminal-strip-list");
+const terminalStripPrevButton = document.getElementById("terminal-strip-prev-button");
+const terminalStripNextButton = document.getElementById("terminal-strip-next-button");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
@@ -121,7 +128,9 @@ let viewportRenderFrame = 0;
 let terminalSizeSyncFrame = 0;
 let zoomIndicatorTimeout = 0;
 let canvasStripOverflowSyncFrame = 0;
+let terminalStripOverflowSyncFrame = 0;
 let shouldEnsureActiveCanvasStripItemVisible = false;
+let shouldEnsureActiveTerminalStripItemVisible = false;
 const pendingTerminalSizeNodes = new Set();
 let pendingCanvasListFocus = null;
 let isCanvasSwitcherMenuOpen = false;
@@ -392,6 +401,7 @@ function commitNodeTitle(nodeRecord, rawTitle) {
   nodeRecord.titleText = nextTitle;
   updateNodeTitleInput(nodeRecord);
   syncMaximizeButton(nodeRecord);
+  renderTerminalStrip();
   scheduleAppSessionSave();
 }
 
@@ -974,6 +984,26 @@ function setActiveCanvasViewportOffset(nextX, nextY) {
   return setActiveCanvasViewport(nextX, nextY);
 }
 
+function centerViewportOnNode(nodeRecord) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null || nodeRecord?.canvas !== activeCanvas) {
+    return false;
+  }
+
+  const nextOffset = getViewportOffsetToCenterNode({
+    nodeX: nodeRecord.x,
+    nodeY: nodeRecord.y,
+    nodeWidth: nodeRecord.width,
+    nodeHeight: nodeRecord.height,
+    viewportScale: activeCanvas.viewportScale,
+    viewportWidth: board.clientWidth,
+    viewportHeight: board.clientHeight
+  });
+
+  return setActiveCanvasViewportOffset(nextOffset.x, nextOffset.y);
+}
+
 function panActiveCanvasBy(deltaX, deltaY) {
   const activeCanvas = getActiveCanvas();
 
@@ -1183,6 +1213,151 @@ function getCanvasSwitcherViewModel() {
   });
 }
 
+function getTerminalStripViewModel() {
+  return deriveTerminalStripViewModel({
+    activeCanvas: getActiveCanvas(),
+    activeNodeId: activeNodeRecord?.id ?? null
+  });
+}
+
+function getActiveCanvasNodeById(nodeId) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null || typeof nodeId !== "string") {
+    return null;
+  }
+
+  return activeCanvas.nodes.find((candidate) => String(candidate.id) === nodeId) ?? null;
+}
+
+function syncTerminalStripOverflowControls() {
+  terminalStripOverflowSyncFrame = 0;
+
+  if (
+    !(terminalStripList instanceof HTMLElement)
+    || !(terminalStripPrevButton instanceof HTMLButtonElement)
+    || !(terminalStripNextButton instanceof HTMLButtonElement)
+  ) {
+    shouldEnsureActiveTerminalStripItemVisible = false;
+    return;
+  }
+
+  if (shouldEnsureActiveTerminalStripItemVisible) {
+    const activeStripItem = terminalStripList.querySelector(`[data-node-id="${activeNodeRecord?.id ?? ""}"]`);
+
+    if (activeStripItem instanceof HTMLElement) {
+      activeStripItem.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  shouldEnsureActiveTerminalStripItemVisible = false;
+
+  const overflowState = deriveCanvasStripOverflowState({
+    scrollLeft: terminalStripList.scrollLeft,
+    clientWidth: terminalStripList.clientWidth,
+    scrollWidth: terminalStripList.scrollWidth
+  });
+
+  terminalStripPrevButton.hidden = !overflowState.hasOverflow;
+  terminalStripNextButton.hidden = !overflowState.hasOverflow;
+  terminalStripPrevButton.disabled = !overflowState.canScrollBackward;
+  terminalStripNextButton.disabled = !overflowState.canScrollForward;
+}
+
+function scheduleTerminalStripOverflowControlsSync(options = {}) {
+  if (options.ensureActiveVisible === true) {
+    shouldEnsureActiveTerminalStripItemVisible = true;
+  }
+
+  if (terminalStripOverflowSyncFrame !== 0) {
+    return;
+  }
+
+  terminalStripOverflowSyncFrame = requestAnimationFrame(() => {
+    syncTerminalStripOverflowControls();
+  });
+}
+
+function scrollTerminalStrip(direction) {
+  if (!(terminalStripList instanceof HTMLElement)) {
+    return;
+  }
+
+  const scrollAmount = Math.max(terminalStripList.clientWidth * 0.72, 160);
+  const delta = direction === "backward" ? -scrollAmount : scrollAmount;
+  terminalStripList.scrollBy({ left: delta, behavior: "smooth" });
+  scheduleTerminalStripOverflowControlsSync();
+}
+
+function createTerminalStripItem(itemView) {
+  const stripItem = document.createElement("button");
+  stripItem.type = "button";
+  stripItem.className = "terminal-strip-item";
+  stripItem.textContent = itemView.label;
+  stripItem.dataset.nodeId = itemView.id;
+
+  if (itemView.isActive) {
+    stripItem.classList.add("is-active");
+  }
+
+  if (itemView.isEmptyState) {
+    stripItem.disabled = true;
+    stripItem.classList.add("is-empty-state");
+    return stripItem;
+  }
+
+  const activateNodeFromStrip = (clickCount) => {
+    const nodeRecord = getActiveCanvasNodeById(itemView.id);
+
+    if (nodeRecord === null) {
+      return;
+    }
+
+    const activation = deriveTerminalStripActivation({
+      isFullscreenMode: getVisibleMaximizedNode() !== null,
+      clickCount
+    });
+
+    setActiveNode(nodeRecord);
+
+    if (activation.shouldCenterViewport) {
+      centerViewportOnNode(nodeRecord);
+    }
+
+    if (activation.shouldMaximize) {
+      setNodeMaximized(nodeRecord, true);
+    }
+
+    if (activation.shouldFocus) {
+      nodeRecord.terminal?.focus();
+    }
+  };
+
+  stripItem.addEventListener("click", (event) => {
+    activateNodeFromStrip(event.detail);
+  });
+
+  stripItem.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    activateNodeFromStrip(2);
+  });
+
+  return stripItem;
+}
+
+function renderTerminalStrip() {
+  if (!(terminalStripList instanceof HTMLElement)) {
+    return;
+  }
+
+  const viewModel = getTerminalStripViewModel();
+  terminalStripList.setAttribute("aria-label", viewModel.label);
+  terminalStripList.replaceChildren(...viewModel.items.map((itemView) => createTerminalStripItem(itemView)));
+  terminalStripSection?.classList.toggle("is-empty", viewModel.isEmpty);
+  scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
+}
+
 function openWorkspaceDrawer() {
   setSidebarCollapsed(false);
   document.getElementById("workspace-browser-section")?.scrollIntoView({ block: "nearest" });
@@ -1303,6 +1478,7 @@ function setActiveNode(nodeRecord) {
   if (nodeRecord === null) {
     activeNodeRecord?.element.classList.remove("is-active");
     activeNodeRecord = null;
+    renderTerminalStrip();
     window.noteCanvas.setActiveTerminalShortcutState(false);
     syncAllTerminalInteractionOverlays();
     return;
@@ -1310,6 +1486,7 @@ function setActiveNode(nodeRecord) {
 
   if (activeNodeRecord === nodeRecord) {
     bringNodeToFront(nodeRecord);
+    renderTerminalStrip();
     window.noteCanvas.setActiveTerminalShortcutState(true);
     syncAllTerminalInteractionOverlays();
     return;
@@ -1319,6 +1496,7 @@ function setActiveNode(nodeRecord) {
   activeNodeRecord = nodeRecord;
   activeNodeRecord.element.classList.add("is-active");
   bringNodeToFront(activeNodeRecord);
+  renderTerminalStrip();
   window.noteCanvas.setActiveTerminalShortcutState(true);
   syncAllTerminalInteractionOverlays();
 }
@@ -1685,6 +1863,7 @@ function renderCanvasSwitcher() {
   setCanvasSwitcherMenuOpen(viewModel.menu.isExpanded);
   focusPendingCanvasListControl();
   scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
+  renderTerminalStrip();
 }
 
 function getWorkspaceEntryName(relativePath) {
@@ -5184,6 +5363,10 @@ canvasStripList?.addEventListener("scroll", () => {
   scheduleCanvasStripOverflowControlsSync();
 });
 
+terminalStripList?.addEventListener("scroll", () => {
+  scheduleTerminalStripOverflowControlsSync();
+});
+
 canvasStripPrevButton?.addEventListener("click", () => {
   scrollCanvasStrip("backward");
 });
@@ -5192,8 +5375,17 @@ canvasStripNextButton?.addEventListener("click", () => {
   scrollCanvasStrip("forward");
 });
 
+terminalStripPrevButton?.addEventListener("click", () => {
+  scrollTerminalStrip("backward");
+});
+
+terminalStripNextButton?.addEventListener("click", () => {
+  scrollTerminalStrip("forward");
+});
+
 window.addEventListener("resize", () => {
   scheduleCanvasStripOverflowControlsSync();
+  scheduleTerminalStripOverflowControlsSync();
 });
 
 openWorkspaceButton?.addEventListener("click", () => {

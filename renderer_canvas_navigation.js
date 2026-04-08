@@ -65,6 +65,47 @@
     return Array.isArray(canvasRecord?.nodes) && canvasRecord.nodes.length === 0;
   }
 
+  function deriveTerminalStripActivation({ isFullscreenMode, clickCount }) {
+    const isDoubleClick = Number.isFinite(clickCount) && clickCount >= 2;
+
+    if (isDoubleClick) {
+      return {
+        shouldFocus: true,
+        shouldCenterViewport: false,
+        shouldMaximize: true
+      };
+    }
+
+    return {
+      shouldFocus: true,
+      shouldCenterViewport: isFullscreenMode !== true,
+      shouldMaximize: isFullscreenMode === true
+    };
+  }
+
+  function getViewportOffsetToCenterNode({
+    nodeX,
+    nodeY,
+    nodeWidth,
+    nodeHeight,
+    viewportScale,
+    viewportWidth,
+    viewportHeight
+  }) {
+    const safeScale = Number.isFinite(viewportScale) && viewportScale > 0 ? viewportScale : 1;
+    const safeViewportWidth = Number.isFinite(viewportWidth) ? viewportWidth : 0;
+    const safeViewportHeight = Number.isFinite(viewportHeight) ? viewportHeight : 0;
+    const safeNodeX = Number.isFinite(nodeX) ? nodeX : 0;
+    const safeNodeY = Number.isFinite(nodeY) ? nodeY : 0;
+    const safeNodeWidth = Number.isFinite(nodeWidth) ? nodeWidth : 0;
+    const safeNodeHeight = Number.isFinite(nodeHeight) ? nodeHeight : 0;
+
+    return {
+      x: (safeViewportWidth / 2) - ((safeNodeX + (safeNodeWidth / 2)) * safeScale),
+      y: (safeViewportHeight / 2) - ((safeNodeY + (safeNodeHeight / 2)) * safeScale)
+    };
+  }
+
   return {
     shouldHandleCanvasWheel,
     shouldTerminalHandleWheel,
@@ -72,6 +113,8 @@
     shouldSelectTerminal,
     shouldEnableTerminalInteractionOverlay,
     shouldDisableTerminalAnimations,
-    shouldShowBoardHintsForCanvas
+    shouldShowBoardHintsForCanvas,
+    deriveTerminalStripActivation,
+    getViewportOffsetToCenterNode
   };
 });

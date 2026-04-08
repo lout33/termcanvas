@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 
 const {
   deriveCanvasSwitcherViewModel,
-  deriveCanvasStripOverflowState
+  deriveCanvasStripOverflowState,
+  deriveTerminalStripViewModel
 } = require("../renderer_canvas_switcher.js");
 
 test("deriveCanvasSwitcherViewModel preserves canvas order for the strip and menu models", () => {
@@ -138,5 +139,70 @@ test("deriveCanvasStripOverflowState handles non-overflowing and fully scrolled 
     hasOverflow: true,
     canScrollBackward: true,
     canScrollForward: false
+  });
+});
+
+test("deriveTerminalStripViewModel lists only active canvas terminals and marks the active terminal", () => {
+  const viewModel = deriveTerminalStripViewModel({
+    activeCanvas: {
+      id: "canvas-a",
+      nodes: [
+        { id: "node-1", titleText: "server" },
+        { id: "node-2", titleText: "database" }
+      ]
+    },
+    activeNodeId: "node-2"
+  });
+
+  assert.deepEqual(viewModel, {
+    label: "Terminal navigator",
+    isEmpty: false,
+    items: [
+      { id: "node-1", label: "server", isActive: false, isEmptyState: false },
+      { id: "node-2", label: "database", isActive: true, isEmptyState: false }
+    ]
+  });
+});
+
+test("deriveTerminalStripViewModel returns a passive empty item when the active canvas has no terminals", () => {
+  const viewModel = deriveTerminalStripViewModel({
+    activeCanvas: {
+      id: "canvas-a",
+      nodes: []
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(viewModel, {
+    label: "Terminal navigator",
+    isEmpty: true,
+    items: [{
+      id: "terminal-strip-empty",
+      label: "No terminals in this canvas",
+      isActive: false,
+      isEmptyState: true
+    }]
+  });
+});
+
+test("deriveTerminalStripViewModel preserves numeric node ids as clickable string ids", () => {
+  const viewModel = deriveTerminalStripViewModel({
+    activeCanvas: {
+      id: "canvas-a",
+      nodes: [
+        { id: 1, titleText: "server" },
+        { id: 2, titleText: "database" }
+      ]
+    },
+    activeNodeId: 2
+  });
+
+  assert.deepEqual(viewModel, {
+    label: "Terminal navigator",
+    isEmpty: false,
+    items: [
+      { id: "1", label: "server", isActive: false, isEmptyState: false },
+      { id: "2", label: "database", isActive: true, isEmptyState: false }
+    ]
   });
 });

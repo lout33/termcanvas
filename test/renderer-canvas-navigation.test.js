@@ -127,3 +127,57 @@ test("shouldShowBoardHintsForCanvas only shows hints on empty canvases", () => {
   assert.equal(shouldShowBoardHintsForCanvas({ nodes: [{}, {}] }), false);
   assert.equal(shouldShowBoardHintsForCanvas(null), false);
 });
+
+test("deriveTerminalStripActivation preserves fullscreen on single click and fullscreen-enables on double click", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { deriveTerminalStripActivation } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.deepEqual(JSON.parse(JSON.stringify(deriveTerminalStripActivation({ isFullscreenMode: false, clickCount: 1 }))), {
+    shouldFocus: true,
+    shouldCenterViewport: true,
+    shouldMaximize: false
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(deriveTerminalStripActivation({ isFullscreenMode: true, clickCount: 1 }))), {
+    shouldFocus: true,
+    shouldCenterViewport: false,
+    shouldMaximize: true
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(deriveTerminalStripActivation({ isFullscreenMode: false, clickCount: 2 }))), {
+    shouldFocus: true,
+    shouldCenterViewport: false,
+    shouldMaximize: true
+  });
+});
+
+test("getViewportOffsetToCenterNode centers a node using the current canvas scale", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { getViewportOffsetToCenterNode } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.deepEqual(JSON.parse(JSON.stringify(getViewportOffsetToCenterNode({
+    nodeX: 120,
+    nodeY: 80,
+    nodeWidth: 400,
+    nodeHeight: 240,
+    viewportScale: 1,
+    viewportWidth: 1200,
+    viewportHeight: 800
+  }))), {
+    x: 280,
+    y: 200
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(getViewportOffsetToCenterNode({
+    nodeX: 120,
+    nodeY: 80,
+    nodeWidth: 400,
+    nodeHeight: 240,
+    viewportScale: 1.5,
+    viewportWidth: 1200,
+    viewportHeight: 800
+  }))), {
+    x: 120,
+    y: 100
+  });
+});

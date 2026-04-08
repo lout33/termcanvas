@@ -66,8 +66,45 @@
     };
   }
 
+  function normalizeTerminalStripItem(nodeRecord, activeNodeId) {
+    const normalizedId = typeof nodeRecord?.id === "string" || typeof nodeRecord?.id === "number"
+      ? String(nodeRecord.id)
+      : "";
+
+    return {
+      id: normalizedId,
+      label: typeof nodeRecord?.titleText === "string" ? nodeRecord.titleText : "",
+      isActive: normalizedId.length > 0 && normalizedId === String(activeNodeId),
+      isEmptyState: false
+    };
+  }
+
+  function deriveTerminalStripViewModel({ activeCanvas, activeNodeId }) {
+    const terminalNodes = Array.isArray(activeCanvas?.nodes) ? activeCanvas.nodes : [];
+
+    if (terminalNodes.length === 0) {
+      return {
+        label: "Terminal navigator",
+        isEmpty: true,
+        items: [{
+          id: "terminal-strip-empty",
+          label: "No terminals in this canvas",
+          isActive: false,
+          isEmptyState: true
+        }]
+      };
+    }
+
+    return {
+      label: "Terminal navigator",
+      isEmpty: false,
+      items: terminalNodes.map((nodeRecord) => normalizeTerminalStripItem(nodeRecord, activeNodeId))
+    };
+  }
+
   return {
     deriveCanvasSwitcherViewModel,
-    deriveCanvasStripOverflowState
+    deriveCanvasStripOverflowState,
+    deriveTerminalStripViewModel
   };
 });

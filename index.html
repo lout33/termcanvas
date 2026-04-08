@@ -12,74 +12,84 @@
     <div class="app-shell">
       <main class="workspace-shell">
         <div class="canvas-topbar" id="canvas-topbar">
-          <div class="canvas-topbar-leading">
-            <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Open drawer with Command+B">
-              <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
-            </button>
+          <div class="canvas-topbar-shell">
+            <div class="canvas-topbar-primary-row">
+              <div class="canvas-topbar-leading">
+                <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Open drawer with Command+B">
+                  <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
+                </button>
 
-            <div class="canvas-brand" aria-label="TermCanvas brand mark">
-              <img class="canvas-brand-mark" src="./assets/branding/termcanvas-mark.svg" alt="" />
-              <div class="canvas-brand-copy">
-                <span class="canvas-brand-name">TermCanvas</span>
-                <span class="canvas-brand-tagline">Spatial terminal workspace</span>
+                <div class="canvas-brand" aria-label="TermCanvas brand mark">
+                  <img class="canvas-brand-mark" src="./assets/branding/termcanvas-mark.svg" alt="" />
+                  <div class="canvas-brand-copy">
+                    <span class="canvas-brand-name">TermCanvas</span>
+                    <span class="canvas-brand-tagline">Spatial terminal workspace</span>
+                  </div>
+                </div>
+                <button class="canvas-topbar-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">+</button>
               </div>
+
+              <section class="canvas-switcher-topbar-section" id="canvas-switcher-section" aria-label="Canvas switcher section">
+                <button class="canvas-strip-overflow-button" id="canvas-strip-prev-button" type="button" aria-label="Show previous canvases" title="Show previous canvases" hidden>&lt;</button>
+
+                <div class="canvas-strip-list" id="canvas-strip-list" role="toolbar" aria-label="Canvas navigator"></div>
+
+                <button class="canvas-strip-overflow-button" id="canvas-strip-next-button" type="button" aria-label="Show more canvases" title="Show more canvases" hidden>&gt;</button>
+
+                <button class="canvas-switcher-trigger" id="canvas-switcher-button" type="button" aria-label="Manage canvases" aria-expanded="false" aria-controls="canvas-switcher-list">...</button>
+
+                <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden>
+                  <div class="canvas-switcher-menu-body" id="canvas-switcher-menu-body"></div>
+
+                  <div class="canvas-switcher-menu-actions" aria-label="Canvas actions">
+                    <button class="canvas-list-action sidebar-section-action" id="export-canvas-button" type="button" aria-label="Export canvas" title="Export canvas">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8 10.75V3.5"></path>
+                        <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
+                        <path d="M3.25 12.5h9.5"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="import-canvas-button" type="button" aria-label="Import canvas" title="Import canvas">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8 3.5v7.25"></path>
+                        <path d="M5.25 8 8 10.75 10.75 8"></path>
+                        <path d="M3.25 12.5h9.5"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="export-app-session-button" type="button" aria-label="Export app data" title="Export app data">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8 10.75V3.5"></path>
+                        <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
+                        <path d="M4.5 12.5h7"></path>
+                        <path d="M4.5 9.75v2.75"></path>
+                        <path d="M11.5 9.75v2.75"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="import-app-session-button" type="button" aria-label="Import app data" title="Import app data">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8 3.5v7.25"></path>
+                        <path d="M5.25 8 8 10.75 10.75 8"></path>
+                        <path d="M4.5 12.5h7"></path>
+                        <path d="M4.5 9.75v2.75"></path>
+                        <path d="M11.5 9.75v2.75"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <div class="canvas-topbar-spacer" aria-hidden="true"></div>
             </div>
-            <button class="canvas-topbar-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">+</button>
+
+            <section class="terminal-strip-topbar-section" id="terminal-strip-section" aria-label="Active canvas terminals">
+              <button class="terminal-strip-overflow-button" id="terminal-strip-prev-button" type="button" aria-label="Show previous terminals" title="Show previous terminals" hidden>&lt;</button>
+              <div class="terminal-strip-list" id="terminal-strip-list" role="toolbar" aria-label="Terminal navigator"></div>
+              <button class="terminal-strip-overflow-button" id="terminal-strip-next-button" type="button" aria-label="Show more terminals" title="Show more terminals" hidden>&gt;</button>
+            </section>
           </div>
-
-          <section class="canvas-switcher-topbar-section" id="canvas-switcher-section" aria-label="Canvas switcher section">
-            <button class="canvas-strip-overflow-button" id="canvas-strip-prev-button" type="button" aria-label="Show previous canvases" title="Show previous canvases" hidden>&lt;</button>
-
-            <div class="canvas-strip-list" id="canvas-strip-list" role="toolbar" aria-label="Canvas navigator"></div>
-
-            <button class="canvas-strip-overflow-button" id="canvas-strip-next-button" type="button" aria-label="Show more canvases" title="Show more canvases" hidden>&gt;</button>
-
-            <button class="canvas-switcher-trigger" id="canvas-switcher-button" type="button" aria-label="Manage canvases" aria-expanded="false" aria-controls="canvas-switcher-list">...</button>
-
-            <div class="canvas-switcher-menu" id="canvas-switcher-menu" hidden>
-              <div class="canvas-switcher-menu-body" id="canvas-switcher-menu-body"></div>
-
-              <div class="canvas-switcher-menu-actions" aria-label="Canvas actions">
-                <button class="canvas-list-action sidebar-section-action" id="export-canvas-button" type="button" aria-label="Export canvas" title="Export canvas">
-                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M8 10.75V3.5"></path>
-                    <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
-                    <path d="M3.25 12.5h9.5"></path>
-                  </svg>
-                </button>
-
-                <button class="canvas-list-action sidebar-section-action" id="import-canvas-button" type="button" aria-label="Import canvas" title="Import canvas">
-                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M8 3.5v7.25"></path>
-                    <path d="M5.25 8 8 10.75 10.75 8"></path>
-                    <path d="M3.25 12.5h9.5"></path>
-                  </svg>
-                </button>
-
-                <button class="canvas-list-action sidebar-section-action" id="export-app-session-button" type="button" aria-label="Export app data" title="Export app data">
-                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M8 10.75V3.5"></path>
-                    <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
-                    <path d="M4.5 12.5h7"></path>
-                    <path d="M4.5 9.75v2.75"></path>
-                    <path d="M11.5 9.75v2.75"></path>
-                  </svg>
-                </button>
-
-                <button class="canvas-list-action sidebar-section-action" id="import-app-session-button" type="button" aria-label="Import app data" title="Import app data">
-                  <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M8 3.5v7.25"></path>
-                    <path d="M5.25 8 8 10.75 10.75 8"></path>
-                    <path d="M4.5 12.5h7"></path>
-                    <path d="M4.5 9.75v2.75"></path>
-                    <path d="M11.5 9.75v2.75"></path>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <div class="canvas-topbar-spacer" aria-hidden="true"></div>
         </div>
 
         <section class="board" id="board">
