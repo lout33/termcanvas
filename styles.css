@@ -1774,7 +1774,7 @@ button {
 .terminal-node-title-group {
   display: grid;
   min-width: 0;
-  gap: 0.14rem;
+  gap: 0;
 }
 
 .terminal-node-title-input {
@@ -1787,7 +1787,7 @@ button {
   background: transparent;
   color: var(--color-terminal-ink);
   font-family: inherit;
-  font-size: 0.74rem;
+  font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.015em;
   user-select: text;
@@ -1812,6 +1812,10 @@ button {
   font-size: 0.6rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.terminal-node-meta:empty {
+  display: none;
 }
 
 .terminal-node-actions {

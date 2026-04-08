@@ -57,8 +57,8 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
   assert.match(styles, /\.canvas-brand-tagline\s*\{[\s\S]*letter-spacing:\s*0\.12em;/);
   assert.match(styles, /\.canvas-strip-item\s*\{[\s\S]*font-size:\s*0\.8rem;/);
   assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.5rem 0\.6875rem;/);
-  assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*font-size:\s*0\.74rem;/);
-  assert.match(styles, /\.terminal-node-meta\s*\{[\s\S]*letter-spacing:\s*0\.08em;/);
+  assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*font-size:\s*0\.9rem;/);
+  assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*gap:\s*0;/);
 });
 
 test("board hints and sidebar utility text use more disciplined spacing", () => {

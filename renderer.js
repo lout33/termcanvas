@@ -505,7 +505,7 @@ function setNodeLiveState(nodeRecord, shellName) {
   nodeRecord.exitSignal = null;
   nodeRecord.shellName = shellName;
   nodeRecord.status.textContent = "Live";
-  nodeRecord.meta.textContent = shellName;
+  nodeRecord.meta.textContent = "";
   nodeRecord.element.classList.remove("is-exited");
   updateExitedOverlay(nodeRecord);
   scheduleAppSessionSave();
