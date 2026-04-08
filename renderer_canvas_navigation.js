@@ -106,6 +106,47 @@
     };
   }
 
+  function getStripScrollTarget({ scrollLeft, clientWidth, scrollWidth, direction }) {
+    const safeScrollLeft = Number.isFinite(scrollLeft) ? Math.max(0, scrollLeft) : 0;
+    const safeClientWidth = Number.isFinite(clientWidth) ? Math.max(0, clientWidth) : 0;
+    const safeScrollWidth = Number.isFinite(scrollWidth) ? Math.max(0, scrollWidth) : 0;
+    const maxScrollLeft = Math.max(0, safeScrollWidth - safeClientWidth);
+    const scrollAmount = Math.max(safeClientWidth * 0.72, 160);
+    const delta = direction === "backward" ? -scrollAmount : scrollAmount;
+    const nextScrollLeft = safeScrollLeft + delta;
+
+    return Math.min(maxScrollLeft, Math.max(0, nextScrollLeft));
+  }
+
+  function getStripOverflowTargetIndex({ itemOffsets, scrollLeft, clientWidth, direction }) {
+    const offsets = Array.isArray(itemOffsets) ? itemOffsets : [];
+    const viewportStart = Number.isFinite(scrollLeft) ? Math.max(0, scrollLeft) : 0;
+    const viewportWidth = Number.isFinite(clientWidth) ? Math.max(0, clientWidth) : 0;
+    const viewportEnd = viewportStart + viewportWidth;
+
+    if (direction === "backward") {
+      for (let index = offsets.length - 1; index >= 0; index -= 1) {
+        const itemStart = Number.isFinite(offsets[index]?.start) ? offsets[index].start : 0;
+
+        if (itemStart < viewportStart - 1) {
+          return index;
+        }
+      }
+
+      return -1;
+    }
+
+    for (let index = 0; index < offsets.length; index += 1) {
+      const itemEnd = Number.isFinite(offsets[index]?.end) ? offsets[index].end : 0;
+
+      if (itemEnd > viewportEnd + 1) {
+        return index;
+      }
+    }
+
+    return -1;
+  }
+
   return {
     shouldHandleCanvasWheel,
     shouldTerminalHandleWheel,
@@ -115,6 +156,8 @@
     shouldDisableTerminalAnimations,
     shouldShowBoardHintsForCanvas,
     deriveTerminalStripActivation,
-    getViewportOffsetToCenterNode
+    getViewportOffsetToCenterNode,
+    getStripScrollTarget,
+    getStripOverflowTargetIndex
   };
 });

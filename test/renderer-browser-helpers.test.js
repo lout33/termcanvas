@@ -37,5 +37,7 @@ test("renderer helper modules expose browser-safe globals without require", () =
   assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.shouldShowBoardHintsForCanvas, "function");
   assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.deriveTerminalStripActivation, "function");
   assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.getViewportOffsetToCenterNode, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.getStripScrollTarget, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.getStripOverflowTargetIndex, "function");
   assert.equal(typeof previewWindow.noteCanvasRendererWorkspacePreview?.deriveWorkspacePreviewViewModel, "function");
 });

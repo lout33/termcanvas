@@ -75,3 +75,14 @@ test("file inspector lives inside the board so it does not occupy the header", (
   assert.match(boardHtml, /id="file-inspector-resize-handle"/i);
   assert.match(boardHtml, /id="file-inspector"/i);
 });
+
+test("terminal strip row keeps the inner shell without a heading label", () => {
+  const html = readIndexHtml();
+
+  assert.match(
+    html,
+    /<section class="terminal-strip-topbar-section" id="terminal-strip-section"[\s\S]*?<div class="terminal-strip-shell">[\s\S]*?<div class="terminal-strip-list" id="terminal-strip-list"/i
+  );
+
+  assert.doesNotMatch(html, /terminal-strip-heading/i);
+});

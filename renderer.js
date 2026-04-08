@@ -27,7 +27,9 @@ const {
   shouldEnableTerminalInteractionOverlay,
   shouldShowBoardHintsForCanvas,
   deriveTerminalStripActivation,
-  getViewportOffsetToCenterNode
+  getViewportOffsetToCenterNode,
+  getStripScrollTarget,
+  getStripOverflowTargetIndex
 } = window.noteCanvasRendererCanvasNavigation;
 const {
   deriveWorkspacePreviewViewModel,
@@ -1198,9 +1200,35 @@ function scrollCanvasStrip(direction) {
     return;
   }
 
-  const scrollAmount = Math.max(canvasStripList.clientWidth * 0.72, 160);
-  const delta = direction === "backward" ? -scrollAmount : scrollAmount;
-  canvasStripList.scrollBy({ left: delta, behavior: "smooth" });
+  const stripItems = Array.from(canvasStripList.querySelectorAll(".canvas-strip-item"));
+  const itemOffsets = stripItems.map((item) => ({
+    start: item.offsetLeft,
+    end: item.offsetLeft + item.offsetWidth
+  }));
+  const targetIndex = getStripOverflowTargetIndex({
+    itemOffsets,
+    scrollLeft: canvasStripList.scrollLeft,
+    clientWidth: canvasStripList.clientWidth,
+    direction
+  });
+
+  if (targetIndex >= 0) {
+    stripItems[targetIndex]?.scrollIntoView({
+      block: "nearest",
+      inline: direction === "backward" ? "start" : "end"
+    });
+    scheduleCanvasStripOverflowControlsSync();
+    return;
+  }
+
+  const nextScrollLeft = getStripScrollTarget({
+    scrollLeft: canvasStripList.scrollLeft,
+    clientWidth: canvasStripList.clientWidth,
+    scrollWidth: canvasStripList.scrollWidth,
+    direction
+  });
+
+  canvasStripList.scrollLeft = nextScrollLeft;
   scheduleCanvasStripOverflowControlsSync();
 }
 
@@ -1283,9 +1311,35 @@ function scrollTerminalStrip(direction) {
     return;
   }
 
-  const scrollAmount = Math.max(terminalStripList.clientWidth * 0.72, 160);
-  const delta = direction === "backward" ? -scrollAmount : scrollAmount;
-  terminalStripList.scrollBy({ left: delta, behavior: "smooth" });
+  const stripItems = Array.from(terminalStripList.querySelectorAll(".terminal-strip-item:not(.is-empty-state)"));
+  const itemOffsets = stripItems.map((item) => ({
+    start: item.offsetLeft,
+    end: item.offsetLeft + item.offsetWidth
+  }));
+  const targetIndex = getStripOverflowTargetIndex({
+    itemOffsets,
+    scrollLeft: terminalStripList.scrollLeft,
+    clientWidth: terminalStripList.clientWidth,
+    direction
+  });
+
+  if (targetIndex >= 0) {
+    stripItems[targetIndex]?.scrollIntoView({
+      block: "nearest",
+      inline: direction === "backward" ? "start" : "end"
+    });
+    scheduleTerminalStripOverflowControlsSync();
+    return;
+  }
+
+  const nextScrollLeft = getStripScrollTarget({
+    scrollLeft: terminalStripList.scrollLeft,
+    clientWidth: terminalStripList.clientWidth,
+    scrollWidth: terminalStripList.scrollWidth,
+    direction
+  });
+
+  terminalStripList.scrollLeft = nextScrollLeft;
   scheduleTerminalStripOverflowControlsSync();
 }
 

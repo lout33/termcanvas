@@ -181,3 +181,69 @@ test("getViewportOffsetToCenterNode centers a node using the current canvas scal
     y: 100
   });
 });
+
+test("getStripScrollTarget computes a clamped next scroll position for overflow buttons", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { getStripScrollTarget } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.equal(getStripScrollTarget({
+    scrollLeft: 0,
+    clientWidth: 300,
+    scrollWidth: 900,
+    direction: "forward"
+  }), 216);
+
+  assert.equal(getStripScrollTarget({
+    scrollLeft: 216,
+    clientWidth: 300,
+    scrollWidth: 900,
+    direction: "forward"
+  }), 432);
+
+  assert.equal(getStripScrollTarget({
+    scrollLeft: 500,
+    clientWidth: 300,
+    scrollWidth: 900,
+    direction: "forward"
+  }), 600);
+
+  assert.equal(getStripScrollTarget({
+    scrollLeft: 200,
+    clientWidth: 300,
+    scrollWidth: 900,
+    direction: "backward"
+  }), 0);
+});
+
+test("getStripOverflowTargetIndex finds the next hidden item in either direction", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { getStripOverflowTargetIndex } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  const itemOffsets = [
+    { start: 0, end: 100 },
+    { start: 110, end: 210 },
+    { start: 220, end: 320 },
+    { start: 330, end: 430 }
+  ];
+
+  assert.equal(getStripOverflowTargetIndex({
+    itemOffsets,
+    scrollLeft: 0,
+    clientWidth: 250,
+    direction: "forward"
+  }), 2);
+
+  assert.equal(getStripOverflowTargetIndex({
+    itemOffsets,
+    scrollLeft: 180,
+    clientWidth: 250,
+    direction: "backward"
+  }), 1);
+
+  assert.equal(getStripOverflowTargetIndex({
+    itemOffsets,
+    scrollLeft: 180,
+    clientWidth: 250,
+    direction: "forward"
+  }), -1);
+});

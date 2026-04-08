@@ -16,11 +16,13 @@ test("quiet phosphor theme defines dedicated accent tokens", () => {
   assert.match(styles, /--color-topbar-shell:/);
 });
 
-test("active navigation and focused terminals use quiet phosphor accents", () => {
+test("active navigation and focused terminals use the premium topbar emphasis", () => {
   const styles = readStyles();
 
-  assert.match(styles, /\.canvas-strip-item\.is-active\s*\{[\s\S]*background:\s*var\(--color-phosphor-accent\);/);
-  assert.match(styles, /\.canvas-strip-item\.is-active\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+  assert.match(styles, /\.canvas-strip-item\.is-active\s*\{[\s\S]*background:\s*rgba\(22, 29, 36, 0\.96\);/);
+  assert.match(styles, /\.canvas-strip-item\.is-active\s*\{[\s\S]*border-color:\s*rgba\(143, 220, 255, 0\.34\);/);
+  assert.match(styles, /\.terminal-strip-item\.is-active\s*\{[\s\S]*background:\s*rgba\(18, 26, 32, 0\.98\);/);
+  assert.match(styles, /\.terminal-strip-item\.is-active\s*\{[\s\S]*color:\s*#dff4ff;/);
   assert.match(styles, /\.terminal-node\.is-active,\s*\.terminal-node:focus-within\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
 });
 
@@ -82,6 +84,25 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
   assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.5rem 0\.6875rem;/);
   assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*font-size:\s*0\.9rem;/);
   assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*gap:\s*0;/);
+});
+
+test("topbar rows use a clearer premium hierarchy with an unlabeled terminal strip", () => {
+  const styles = readStyles();
+
+  assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*border-radius:\s*1\.05rem;/);
+  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*3\.2rem;/);
+  assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*border-radius:\s*0\.85rem;/);
+  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\);/);
+  assert.match(styles, /\.terminal-strip-shell\s*\{[\s\S]*background:\s*rgba\(8, 11, 15, 0\.34\);/);
+  assert.match(styles, /\.terminal-strip-item\.is-active\s*\{[\s\S]*background:\s*rgba\(18, 26, 32, 0\.98\);/);
+});
+
+test("inactive topbar controls use darker charcoal surfaces", () => {
+  const styles = readStyles();
+
+  assert.match(styles, /\.canvas-topbar-action,[\s\S]*rgba\(7, 9, 12, 0\.78\);/);
+  assert.match(styles, /\.canvas-strip-item,[\s\S]*background:\s*rgba\(11, 14, 18, 0\.72\);/);
+  assert.match(styles, /\.terminal-strip-item\s*\{[\s\S]*background:\s*rgba\(10, 13, 17, 0\.76\);/);
 });
 
 test("board hints and sidebar utility text use more disciplined spacing", () => {
