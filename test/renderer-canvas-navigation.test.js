@@ -107,3 +107,13 @@ test("shouldEnableTerminalInteractionOverlay keeps terminal content covered unti
   assert.equal(shouldEnableTerminalInteractionOverlay({ terminalNodeElement: activeTerminal, activeNodeElement: activeTerminal }), false);
   assert.equal(shouldEnableTerminalInteractionOverlay({ terminalNodeElement: inactiveTerminal, activeNodeElement: null }), true);
 });
+
+test("shouldDisableTerminalAnimations keeps terminal hot paths in no-animation mode", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { shouldDisableTerminalAnimations } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.equal(shouldDisableTerminalAnimations({ interaction: "drag" }), true);
+  assert.equal(shouldDisableTerminalAnimations({ interaction: "maximize" }), true);
+  assert.equal(shouldDisableTerminalAnimations({ interaction: "restore" }), true);
+  assert.equal(shouldDisableTerminalAnimations({ interaction: "pointer" }), false);
+});

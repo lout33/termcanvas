@@ -1505,9 +1505,7 @@ button {
 .board-fullscreen-exit,
 .board-hints,
 .empty-state {
-  transition:
-    opacity var(--transition-base),
-    transform var(--transition-base);
+  transition: none;
 }
 
 .board.has-maximized-node .board-grid,
@@ -1668,13 +1666,8 @@ button {
   background: rgba(9, 11, 15, 0.94);
   box-shadow: 0 0.875rem 2rem rgba(0, 0, 0, 0.24);
   transform: translate(-50%, -50%) scale(var(--viewport-scale));
-  transition:
-    box-shadow var(--transition-base),
-    transform var(--transition-base),
-    border-color var(--transition-base),
-    opacity var(--transition-base),
-    filter var(--transition-base);
-  will-change: left, top, transform;
+  transition: none;
+  will-change: left, top;
 }
 
 .terminal-node[hidden] {
@@ -1684,22 +1677,19 @@ button {
 .terminal-node.is-active,
 .terminal-node:focus-within {
   border-color: rgba(226, 232, 240, 0.22);
-  box-shadow: 0 1.25rem 2.5rem rgba(0, 0, 0, 0.34);
+  box-shadow: 0 0.875rem 2rem rgba(0, 0, 0, 0.24);
 }
 
-.terminal-node.is-dragging {
-  box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, 0.4);
-}
-
+.terminal-node.is-dragging,
 .terminal-node.is-resizing {
-  box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0.875rem 2rem rgba(0, 0, 0, 0.24);
 }
 
 .terminal-node.is-muted-by-maximized-node {
   opacity: 0;
   pointer-events: none;
   filter: none;
-  transform: translate(-50%, -50%) scale(calc(var(--viewport-scale) * 0.995));
+  transform: translate(-50%, -50%) scale(var(--viewport-scale));
 }
 
 .terminal-node.is-maximized {
@@ -1711,9 +1701,7 @@ button {
   height: auto;
   border-color: rgba(255, 255, 255, 0.12);
   border-radius: calc(var(--radius-md) + 0.125rem);
-  box-shadow:
-    0 1rem 3rem rgba(0, 0, 0, 0.32),
-    0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0.875rem 2rem rgba(0, 0, 0, 0.24);
   transform: none;
 }
 

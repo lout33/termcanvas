@@ -55,11 +55,18 @@
     return terminalNodeElement !== activeNodeElement;
   }
 
+  function shouldDisableTerminalAnimations({ interaction }) {
+    return interaction === "drag"
+      || interaction === "maximize"
+      || interaction === "restore";
+  }
+
   return {
     shouldHandleCanvasWheel,
     shouldTerminalHandleWheel,
     shouldClearActiveTerminalSelection,
     shouldSelectTerminal,
-    shouldEnableTerminalInteractionOverlay
+    shouldEnableTerminalInteractionOverlay,
+    shouldDisableTerminalAnimations
   };
 });
