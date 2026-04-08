@@ -1350,8 +1350,11 @@ button {
 }
 
 .canvas-topbar-shell {
+  grid-column: 1 / -1;
   display: grid;
   gap: 0.55rem;
+  width: 100%;
+  min-width: 0;
   padding: 0.55rem 0.75rem 0.7rem;
   border: 1px solid rgba(186, 213, 221, 0.12);
   border-radius: 1.05rem;

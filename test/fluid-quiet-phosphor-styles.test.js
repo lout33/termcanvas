@@ -89,6 +89,8 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
 test("topbar rows use a clearer premium hierarchy with an unlabeled terminal strip", () => {
   const styles = readStyles();
 
+  assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*grid-column:\s*1\s*\/\s*-1;/);
+  assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*width:\s*100%;/);
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*border-radius:\s*1\.05rem;/);
   assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*3\.2rem;/);
   assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*border-radius:\s*0\.85rem;/);
