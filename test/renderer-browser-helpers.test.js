@@ -19,6 +19,7 @@ test("renderer helper modules expose browser-safe globals without require", () =
   const workspaceWindow = runHelperInBrowserContext("renderer_workspace.js");
   const actionDialogWindow = runHelperInBrowserContext("renderer_action_dialog.js");
   const switcherWindow = runHelperInBrowserContext("renderer_canvas_switcher.js");
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
   const previewWindow = runHelperInBrowserContext("renderer_workspace_preview.js");
 
   assert.equal(typeof workspaceWindow.noteCanvasRendererWorkspace?.normalizeCanvasWorkspaceRecord, "function");
@@ -26,5 +27,10 @@ test("renderer helper modules expose browser-safe globals without require", () =
   assert.equal(typeof actionDialogWindow.noteCanvasRendererActionDialog?.openWorkspaceActionDialog, "function");
   assert.equal(typeof switcherWindow.noteCanvasRendererCanvasSwitcher?.deriveCanvasSwitcherViewModel, "function");
   assert.equal(typeof switcherWindow.noteCanvasRendererCanvasSwitcher?.deriveCanvasStripOverflowState, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.shouldHandleCanvasWheel, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.shouldTerminalHandleWheel, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.shouldClearActiveTerminalSelection, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.shouldSelectTerminal, "function");
+  assert.equal(typeof navigationWindow.noteCanvasRendererCanvasNavigation?.shouldEnableTerminalInteractionOverlay, "function");
   assert.equal(typeof previewWindow.noteCanvasRendererWorkspacePreview?.deriveWorkspacePreviewViewModel, "function");
 });

@@ -19,6 +19,13 @@ const {
   deriveCanvasStripOverflowState
 } = window.noteCanvasRendererCanvasSwitcher;
 const {
+  shouldHandleCanvasWheel,
+  shouldTerminalHandleWheel,
+  shouldClearActiveTerminalSelection,
+  shouldSelectTerminal,
+  shouldEnableTerminalInteractionOverlay
+} = window.noteCanvasRendererCanvasNavigation;
+const {
   deriveWorkspacePreviewViewModel,
   shouldApplyWorkspacePreviewActionError
 } = window.noteCanvasRendererWorkspacePreview;
@@ -409,7 +416,8 @@ function syncMaximizeButton(nodeRecord) {
   nodeRecord.maximizeButton.setAttribute("aria-pressed", String(isMaximized));
 }
 
-function setNodeMaximized(nodeRecord, shouldMaximize) {
+function setNodeMaximized(nodeRecord, shouldMaximize, options = {}) {
+  const shouldSelect = options.shouldSelect !== false;
   resetPointerInteractions();
 
   if (shouldMaximize) {
@@ -421,7 +429,9 @@ function setNodeMaximized(nodeRecord, shouldMaximize) {
       }
     });
 
-    setActiveNode(nodeRecord);
+    if (shouldSelect && shouldSelectTerminal({ reason: "maximize" })) {
+      setActiveNode(nodeRecord);
+    }
     nodeRecord.isMaximized = true;
     nodeRecord.element?.classList.add("is-maximized");
   } else {
@@ -546,6 +556,12 @@ async function bindTerminalSession(nodeRecord, options = {}) {
 
   terminal.loadAddon(fitAddon);
   terminal.open(nodeRecord.terminalMount);
+  terminal.attachCustomWheelEventHandler((event) => {
+    return shouldTerminalHandleWheel({
+      terminalNodeElement: nodeRecord.element,
+      activeNodeElement: activeNodeRecord?.element ?? null
+    });
+  });
   fitAddon.fit();
 
   nodeRecord.terminalId = terminalId;
@@ -1286,12 +1302,14 @@ function setActiveNode(nodeRecord) {
     activeNodeRecord?.element.classList.remove("is-active");
     activeNodeRecord = null;
     window.noteCanvas.setActiveTerminalShortcutState(false);
+    syncAllTerminalInteractionOverlays();
     return;
   }
 
   if (activeNodeRecord === nodeRecord) {
     bringNodeToFront(nodeRecord);
     window.noteCanvas.setActiveTerminalShortcutState(true);
+    syncAllTerminalInteractionOverlays();
     return;
   }
 
@@ -1300,6 +1318,29 @@ function setActiveNode(nodeRecord) {
   activeNodeRecord.element.classList.add("is-active");
   bringNodeToFront(activeNodeRecord);
   window.noteCanvas.setActiveTerminalShortcutState(true);
+  syncAllTerminalInteractionOverlays();
+}
+
+function syncTerminalInteractionOverlay(nodeRecord) {
+  if (!(nodeRecord?.interactionOverlay instanceof HTMLElement)) {
+    return;
+  }
+
+  nodeRecord.interactionOverlay.classList.toggle(
+    "is-enabled",
+    shouldEnableTerminalInteractionOverlay({
+      terminalNodeElement: nodeRecord.element,
+      activeNodeElement: activeNodeRecord?.element ?? null
+    })
+  );
+}
+
+function syncAllTerminalInteractionOverlays() {
+  canvases.forEach((canvasRecord) => {
+    canvasRecord.nodes.forEach((nodeRecord) => {
+      syncTerminalInteractionOverlay(nodeRecord);
+    });
+  });
 }
 
 function updateEmptyState() {
@@ -3893,6 +3934,10 @@ function createTerminalElement(nodeRecord) {
   const terminalMount = document.createElement("div");
   terminalMount.className = "terminal-node-terminal";
 
+  const interactionOverlay = document.createElement("div");
+  interactionOverlay.className = "terminal-node-interaction-overlay";
+  interactionOverlay.setAttribute("aria-hidden", "true");
+
   const overlay = document.createElement("div");
   overlay.className = "terminal-node-overlay";
   overlay.hidden = true;
@@ -3913,7 +3958,7 @@ function createTerminalElement(nodeRecord) {
 
   overlayCard.append(overlayTitle, overlayMeta, reopenButton);
   overlay.append(overlayCard);
-  surface.append(terminalMount, overlay);
+  surface.append(terminalMount, interactionOverlay, overlay);
 
   const resizeHandles = RESIZE_HANDLE_DIRECTIONS.map((direction) => {
     const handle = document.createElement("div");
@@ -3929,6 +3974,7 @@ function createTerminalElement(nodeRecord) {
     node,
     surface,
     terminalMount,
+    interactionOverlay,
     meta,
     status,
     titleInput,
@@ -3975,6 +4021,7 @@ async function createTerminalNode(options) {
     element: null,
     surface: null,
     terminalMount: null,
+    interactionOverlay: null,
     overlay: null,
     overlayTitle: null,
     overlayMeta: null,
@@ -3996,6 +4043,7 @@ async function createTerminalNode(options) {
   nodeRecord.element = elements.node;
   nodeRecord.surface = elements.surface;
   nodeRecord.terminalMount = elements.terminalMount;
+  nodeRecord.interactionOverlay = elements.interactionOverlay;
   nodeRecord.overlay = elements.overlay;
   nodeRecord.overlayTitle = elements.overlayTitle;
   nodeRecord.overlayMeta = elements.overlayMeta;
@@ -4035,12 +4083,16 @@ async function createTerminalNode(options) {
     }
 
     event.stopPropagation();
-    setActiveNode(nodeRecord);
+    if (shouldSelectTerminal({ reason: "pointer" })) {
+      setActiveNode(nodeRecord);
+    }
   });
 
   elements.titleInput.addEventListener("focus", () => {
     activeTitleEditorRecord = nodeRecord;
-    setActiveNode(nodeRecord);
+    if (shouldSelectTerminal({ reason: "title-focus" })) {
+      setActiveNode(nodeRecord);
+    }
     elements.titleInput.select();
   });
 
@@ -4070,8 +4122,22 @@ async function createTerminalNode(options) {
   });
 
   elements.node.addEventListener("pointerdown", (event) => {
-    if (event.button === 0) {
+    if (event.button === 0 && shouldSelectTerminal({ reason: "pointer" })) {
       setActiveNode(nodeRecord);
+    }
+  });
+
+  elements.interactionOverlay.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (shouldSelectTerminal({ reason: "pointer" })) {
+      setActiveNode(nodeRecord);
+      nodeRecord.terminal?.focus();
     }
   });
 
@@ -4102,8 +4168,8 @@ async function createTerminalNode(options) {
     nodesLayer.append(elements.node);
   }
 
-  setActiveNode(nodeRecord);
   positionNode(nodeRecord);
+  syncTerminalInteractionOverlay(nodeRecord);
   updateEmptyState();
 
   try {
@@ -4114,7 +4180,7 @@ async function createTerminalNode(options) {
     }
 
     if (nodeRecord.isMaximized) {
-      setNodeMaximized(nodeRecord, true);
+      setNodeMaximized(nodeRecord, true, { shouldSelect: false });
     }
   } catch (error) {
     await destroyTerminalNode(nodeRecord, { shouldDestroySession: false });
@@ -4217,6 +4283,10 @@ function handleBoardPointerDown(event) {
     return;
   }
 
+  if (shouldClearActiveTerminalSelection({ target: event.target, board, nodesLayer })) {
+    setActiveNode(null);
+  }
+
   if (!isSidebarCollapsed) {
     setSidebarCollapsed(true);
   }
@@ -4291,7 +4361,15 @@ function handleBoardPointerCancel(event) {
 }
 
 function handleBoardWheel(event) {
-  if (getVisibleMaximizedNode() !== null || !isBoardBackgroundTarget(event.target)) {
+  if (
+    getVisibleMaximizedNode() !== null
+    || !shouldHandleCanvasWheel({
+      target: event.target,
+      board,
+      nodesLayer,
+      activeNodeElement: activeNodeRecord?.element ?? null
+    })
+  ) {
     return;
   }
 
