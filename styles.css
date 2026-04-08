@@ -1598,6 +1598,10 @@ button {
   pointer-events: none;
 }
 
+.board-hints[hidden] {
+  display: none;
+}
+
 .board-hint-chip,
 .empty-state-copy {
   color: var(--color-muted);
@@ -1616,10 +1620,6 @@ button {
   background: rgba(12, 14, 19, 0.72);
   box-shadow: 0 0.75rem 1.5rem rgba(0, 0, 0, 0.16);
   backdrop-filter: blur(0.75rem);
-}
-
-.app-shell.has-dismissed-board-intro .board-hints {
-  opacity: 0.72;
 }
 
 .empty-state {

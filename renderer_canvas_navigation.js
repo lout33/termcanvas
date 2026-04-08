@@ -61,12 +61,17 @@
       || interaction === "restore";
   }
 
+  function shouldShowBoardHintsForCanvas(canvasRecord) {
+    return Array.isArray(canvasRecord?.nodes) && canvasRecord.nodes.length === 0;
+  }
+
   return {
     shouldHandleCanvasWheel,
     shouldTerminalHandleWheel,
     shouldClearActiveTerminalSelection,
     shouldSelectTerminal,
     shouldEnableTerminalInteractionOverlay,
-    shouldDisableTerminalAnimations
+    shouldDisableTerminalAnimations,
+    shouldShowBoardHintsForCanvas
   };
 });

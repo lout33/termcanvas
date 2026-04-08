@@ -117,3 +117,13 @@ test("shouldDisableTerminalAnimations keeps terminal hot paths in no-animation m
   assert.equal(shouldDisableTerminalAnimations({ interaction: "restore" }), true);
   assert.equal(shouldDisableTerminalAnimations({ interaction: "pointer" }), false);
 });
+
+test("shouldShowBoardHintsForCanvas only shows hints on empty canvases", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { shouldShowBoardHintsForCanvas } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.equal(shouldShowBoardHintsForCanvas({ nodes: [] }), true);
+  assert.equal(shouldShowBoardHintsForCanvas({ nodes: [{}] }), false);
+  assert.equal(shouldShowBoardHintsForCanvas({ nodes: [{}, {}] }), false);
+  assert.equal(shouldShowBoardHintsForCanvas(null), false);
+});

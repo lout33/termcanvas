@@ -23,7 +23,8 @@ const {
   shouldTerminalHandleWheel,
   shouldClearActiveTerminalSelection,
   shouldSelectTerminal,
-  shouldEnableTerminalInteractionOverlay
+  shouldEnableTerminalInteractionOverlay,
+  shouldShowBoardHintsForCanvas
 } = window.noteCanvasRendererCanvasNavigation;
 const {
   deriveWorkspacePreviewViewModel,
@@ -44,6 +45,7 @@ const appShell = document.querySelector(".app-shell");
 const board = document.getElementById("board");
 const nodesLayer = document.getElementById("nodes-layer");
 const emptyState = document.getElementById("empty-state");
+const boardHints = document.getElementById("board-hints");
 const boardZoomIndicator = document.getElementById("board-zoom-indicator");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
@@ -1345,7 +1347,12 @@ function syncAllTerminalInteractionOverlays() {
 
 function updateEmptyState() {
   const activeCanvas = getActiveCanvas();
-  emptyState.hidden = activeCanvas !== null && activeCanvas.nodes.length > 0;
+  const shouldShowEmptyCanvasOnboarding = shouldShowBoardHintsForCanvas(activeCanvas);
+  emptyState.hidden = !shouldShowEmptyCanvasOnboarding;
+
+  if (boardHints instanceof HTMLElement) {
+    boardHints.hidden = !shouldShowEmptyCanvasOnboarding;
+  }
 }
 
 function scheduleTerminalSizeSync(nodeRecords) {
@@ -1447,7 +1454,7 @@ function renderCanvas(options = {}) {
     syncMountedCanvasNodes(null);
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
-    emptyState.hidden = false;
+    updateEmptyState();
     return;
   }
 
