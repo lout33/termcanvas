@@ -15,3 +15,12 @@ test("app icon artwork uses a full-bleed background without rounded transparent 
     "the app icon background should stay square so rasterization does not add light edges"
   );
 });
+
+test("mac packaging uses the branded icns app icon asset", () => {
+  const builderConfigPath = path.join(__dirname, "..", "electron-builder.yml");
+  const builderConfig = fs.readFileSync(builderConfigPath, "utf8");
+  const icnsPath = path.join(__dirname, "..", "assets", "branding", "termcanvas.icns");
+
+  assert.match(builderConfig, /icon:\s*assets\/branding\/termcanvas\.icns/);
+  assert.ok(fs.existsSync(icnsPath), "expected the branded termcanvas.icns file to exist");
+});
