@@ -46,8 +46,26 @@ test("workspace selection and chrome controls use restrained phosphor focus cues
 
   assert.match(styles, /\.workspace-browser-entry\.is-selected\s*\{[\s\S]*background:\s*var\(--color-phosphor-accent\);/);
   assert.match(styles, /\.workspace-browser-entry\.is-selected\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
-  assert.match(styles, /\.panel-resize-handle:hover,\s*\.panel-resize-handle\.is-active\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+  assert.match(styles, /\.panel-resize-handle\s*\{[\s\S]*width:\s*0\.75rem;/);
+  assert.match(styles, /\.panel-resize-handle\s*\{[\s\S]*background:\s*transparent;/);
+  assert.match(styles, /\.panel-resize-handle::before\s*\{[\s\S]*width:\s*1px;/);
+  assert.match(styles, /\.panel-resize-handle::before\s*\{[\s\S]*opacity:\s*0;/);
+  assert.match(styles, /\.panel-resize-handle:hover::before,\s*\.panel-resize-handle:focus-visible::before,\s*\.panel-resize-handle\.is-active::before\s*\{[\s\S]*opacity:\s*1;/);
+  assert.match(styles, /\.panel-resize-handle:hover::before,\s*\.panel-resize-handle:focus-visible::before,\s*\.panel-resize-handle\.is-active::before\s*\{[\s\S]*background:\s*var\(--color-phosphor-accent-strong\);/);
   assert.match(styles, /\.canvas-switcher-trigger:hover,\s*\.canvas-switcher-trigger\.is-open\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+});
+
+test("collapsed sidebar toggle lives in the topbar as a compact control", () => {
+  const styles = readStyles();
+
+  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*position:\s*relative;/);
+  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*width:\s*2\.35rem;/);
+  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*height:\s*2\.35rem;/);
+  assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*width:\s*0\.875rem;/);
+  assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*height:\s*2px;/);
+  assert.match(styles, /\.sidebar-edge-handle-lines::before,\s*\.sidebar-edge-handle-lines::after\s*\{[\s\S]*height:\s*2px;/);
+  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[\s\S]*visibility:\s*hidden;/);
+  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[\s\S]*pointer-events:\s*none;/);
 });
 
 test("topbar and terminal typography gain a calmer hierarchy and tighter spacing", () => {
