@@ -153,11 +153,25 @@ button {
   position: relative;
   min-height: 100vh;
   background: var(--color-board-deep);
+  --workspace-left-inset: var(--measure-board-gap);
+  --workspace-right-inset: var(--measure-board-gap);
 }
 
 .app-shell.is-resizing-panel {
   cursor: ew-resize;
   user-select: none;
+}
+
+.app-shell:not(.is-sidebar-collapsed) {
+  --workspace-left-inset: calc(
+    var(--drawer-offset) + var(--drawer-panel-rendered-width) + var(--measure-board-gap)
+  );
+}
+
+.app-shell.has-file-inspector {
+  --workspace-right-inset: calc(
+    var(--drawer-offset) + var(--inspector-rendered-width) + var(--measure-board-gap)
+  );
 }
 
 .canvas-sidebar {
@@ -265,6 +279,9 @@ button {
   height: 2px;
   border-radius: 999px;
   background: rgba(238, 242, 255, 0.42);
+  transition:
+    background var(--transition-base),
+    transform var(--transition-base);
 }
 
 .sidebar-edge-handle-lines::before,
@@ -276,6 +293,11 @@ button {
   height: 2px;
   border-radius: 999px;
   background: rgba(238, 242, 255, 0.42);
+  transition:
+    transform var(--transition-base),
+    top var(--transition-base),
+    opacity var(--transition-base),
+    background var(--transition-base);
 }
 
 .sidebar-edge-handle-lines::before {
@@ -285,6 +307,22 @@ button {
 .sidebar-edge-handle-lines::after {
   top: 0.3125rem;
   background: rgba(238, 242, 255, 0.2);
+}
+
+.sidebar-edge-handle[aria-pressed="true"] .sidebar-edge-handle-lines {
+  background: transparent;
+}
+
+.sidebar-edge-handle[aria-pressed="true"] .sidebar-edge-handle-lines::before {
+  top: 0;
+  transform: rotate(45deg);
+}
+
+.sidebar-edge-handle[aria-pressed="true"] .sidebar-edge-handle-lines::after {
+  top: 0;
+  opacity: 1;
+  background: rgba(238, 242, 255, 0.42);
+  transform: rotate(-45deg);
 }
 
 .canvas-sidebar-panel {
@@ -330,28 +368,11 @@ button {
 }
 
 .app-shell:not(.is-sidebar-collapsed) .sidebar-edge-handle {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition-delay: 0s;
-}
-
-.app-shell.has-maximized-node .canvas-sidebar-panel {
-  opacity: 0;
-  transform: translateX(calc(-100% - 1.5rem));
-  pointer-events: none;
-}
-
-.app-shell.has-maximized-node .sidebar-edge-handle {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.app-shell.has-maximized-node .sidebar-resize-handle {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-50%) translateX(-0.5rem);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012)),
+    rgba(10, 13, 18, 0.68);
+  border-color: var(--color-phosphor-accent-strong);
+  color: var(--color-ink);
 }
 
 .app-shell.is-resizing-panel .canvas-sidebar-panel,
@@ -1314,7 +1335,7 @@ button {
 
 .canvas-topbar {
   position: relative;
-  z-index: 4;
+  z-index: 11;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -1566,7 +1587,7 @@ button {
 .board-fullscreen-exit {
   position: absolute;
   top: calc(var(--measure-board-gap) + var(--space-2));
-  right: calc(var(--measure-board-gap) + var(--space-2));
+  right: calc(var(--workspace-right-inset) + var(--space-2));
   z-index: 5;
   display: inline-flex;
   align-items: center;
@@ -1719,8 +1740,8 @@ button {
 
 .terminal-node.is-maximized {
   top: var(--measure-board-gap);
-  left: var(--measure-board-gap);
-  right: var(--measure-board-gap);
+  left: var(--workspace-left-inset);
+  right: var(--workspace-right-inset);
   bottom: var(--measure-board-gap);
   width: auto;
   height: auto;

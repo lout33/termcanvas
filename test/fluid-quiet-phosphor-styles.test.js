@@ -64,8 +64,13 @@ test("collapsed sidebar toggle lives in the topbar as a compact control", () => 
   assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*width:\s*0\.875rem;/);
   assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*height:\s*2px;/);
   assert.match(styles, /\.sidebar-edge-handle-lines::before,\s*\.sidebar-edge-handle-lines::after\s*\{[\s\S]*height:\s*2px;/);
-  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[\s\S]*visibility:\s*hidden;/);
-  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[\s\S]*pointer-events:\s*none;/);
+  assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines\s*\{[^}]*background:\s*transparent;/);
+  assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines::before\s*\{[^}]*rotate\(45deg\);/);
+  assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines::after\s*\{[^}]*rotate\(-45deg\);/);
+  assert.match(styles, /\.canvas-topbar\s*\{[^}]*z-index:\s*11;/);
+  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+  assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*visibility:\s*hidden;/);
+  assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*pointer-events:\s*none;/);
 });
 
 test("topbar and terminal typography gain a calmer hierarchy and tighter spacing", () => {

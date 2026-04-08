@@ -58,3 +58,20 @@ test("panel edge controls keep toggle and resize handles separate", () => {
   assertHasClasses(rightResizeTag, ["panel-resize-handle", "inspector-resize-handle"]);
   assertLacksClasses(rightResizeTag, ["sidebar-edge-handle"]);
 });
+
+test("file inspector lives inside the board so it does not occupy the header", () => {
+  const html = readIndexHtml();
+  const boardOpenIndex = html.indexOf('<section class="board" id="board">');
+  const mainCloseIndex = html.indexOf("</main>", boardOpenIndex);
+  const boardCloseIndex = html.lastIndexOf("</section>", mainCloseIndex);
+
+  assert.notEqual(boardOpenIndex, -1, "Expected board section");
+  assert.notEqual(mainCloseIndex, -1, "Expected main closing tag");
+  assert.notEqual(boardCloseIndex, -1, "Expected board closing tag");
+  assert.ok(boardCloseIndex > boardOpenIndex, "Expected board closing tag after board open tag");
+
+  const boardHtml = html.slice(boardOpenIndex, boardCloseIndex);
+
+  assert.match(boardHtml, /id="file-inspector-resize-handle"/i);
+  assert.match(boardHtml, /id="file-inspector"/i);
+});
