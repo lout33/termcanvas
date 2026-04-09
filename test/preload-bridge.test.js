@@ -61,16 +61,19 @@ test("preload exposes chooseCanvasWorkspace over the canvas IPC channel", () => 
   delete require.cache[preloadPath];
 });
 
-test("preload exposes workspace file external open and reveal methods", () => {
+test("preload exposes workspace entry and file open/reveal methods", () => {
   const { exposedApi, invokeCalls, preloadPath } = loadPreloadWithMocks();
 
+  assert.equal(typeof exposedApi.revealWorkspaceEntry, "function");
   assert.equal(typeof exposedApi.openWorkspaceFileExternally, "function");
   assert.equal(typeof exposedApi.revealWorkspaceFile, "function");
 
+  exposedApi.revealWorkspaceEntry("folder-0", "");
   exposedApi.openWorkspaceFileExternally("folder-1", "docs/readme.md");
   exposedApi.revealWorkspaceFile("folder-2", "notes/todo.txt");
 
   assert.deepEqual(invokeCalls, [
+    ["workspace-entry:reveal", { folderId: "folder-0", relativePath: "" }],
     ["workspace-file:open-external", { folderId: "folder-1", relativePath: "docs/readme.md" }],
     ["workspace-file:reveal", { folderId: "folder-2", relativePath: "notes/todo.txt" }]
   ]);

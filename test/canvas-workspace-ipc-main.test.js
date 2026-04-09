@@ -421,6 +421,64 @@ test("workspace-file:reveal stays scoped to the caller's workspace registry", as
   }
 });
 
+test("workspace-entry:reveal supports files, directories, and the workspace root", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const directoryPath = path.join(workspacePath, "docs");
+  const filePath = path.join(directoryPath, "notes.md");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(directoryPath, { recursive: true });
+  fs.writeFileSync(filePath, "notes\n", "utf8");
+
+  const { handlers, mainPath, showItemInFolderCalls } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const revealEntryHandler = handlers.get("workspace-entry:reveal");
+  const stateHandler = handlers.get("workspace-directory:state");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  assert.equal(typeof revealEntryHandler, "function");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  await debugOpenHandler({ sender: { id: 66 } }, { directoryPath: workspacePath });
+
+  const folderId = stateHandler({ sender: { id: 66 } }).importedFolders[0].id;
+
+  await revealEntryHandler(
+    { sender: { id: 66 } },
+    { folderId, relativePath: "docs/notes.md" }
+  );
+  await revealEntryHandler(
+    { sender: { id: 66 } },
+    { folderId, relativePath: "docs" }
+  );
+  await revealEntryHandler(
+    { sender: { id: 66 } },
+    { folderId, relativePath: "" }
+  );
+
+  assert.deepEqual(showItemInFolderCalls, [
+    fs.realpathSync(filePath),
+    fs.realpathSync(directoryPath),
+    fs.realpathSync(workspacePath)
+  ]);
+
+  restoreHandler({ sender: { id: 66 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
 test("workspace-file:open-external surfaces shell.openPath errors", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
   const workspacePath = path.join(tempRoot, "workspace");

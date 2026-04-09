@@ -6,6 +6,7 @@ const {
   syncCanvasWorkspaceFromLiveState,
   toggleCanvasWorkspaceExpandedDirectory,
   deriveCanvasWorkspaceAfterRestore,
+  deriveWorkspaceEntryActionState,
   shouldApplyCanvasWorkspaceRestoreResult,
   getCanvasWorkspaceExpandedDirectories,
   getCanvasWorkspacePreviewRelativePath,
@@ -133,4 +134,44 @@ test("shouldApplyCanvasWorkspaceRestoreResult rejects stale async restore result
     activeCanvasId: "canvas-b",
     targetCanvasId: "canvas-b"
   }), true);
+});
+
+test("deriveWorkspaceEntryActionState falls back to workspace-root actions when nothing is selected", () => {
+  assert.deepEqual(deriveWorkspaceEntryActionState(null, null), {
+    targetRelativePath: null,
+    targetLabel: "",
+    canReveal: false,
+    revealLabel: "Reveal in Finder"
+  });
+
+  assert.deepEqual(deriveWorkspaceEntryActionState({ rootPath: "/tmp/project", rootName: "project" }, null), {
+    targetRelativePath: "",
+    targetLabel: "/tmp/project",
+    canReveal: true,
+    revealLabel: "Reveal in Finder"
+  });
+});
+
+test("deriveWorkspaceEntryActionState maps selected files and folders to revealable targets", () => {
+  const activeFolder = { rootPath: "/tmp/project", rootName: "project" };
+
+  assert.deepEqual(deriveWorkspaceEntryActionState(activeFolder, {
+    relativePath: "docs/readme.md",
+    kind: "file"
+  }), {
+    targetRelativePath: "docs/readme.md",
+    targetLabel: "docs/readme.md",
+    canReveal: true,
+    revealLabel: "Reveal in Finder"
+  });
+
+  assert.deepEqual(deriveWorkspaceEntryActionState(activeFolder, {
+    relativePath: "docs",
+    kind: "directory"
+  }), {
+    targetRelativePath: "docs",
+    targetLabel: "docs",
+    canReveal: true,
+    revealLabel: "Reveal in Finder"
+  });
 });

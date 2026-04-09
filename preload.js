@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld(
       textContents,
       expectedLastModifiedMs
     }),
+    revealWorkspaceEntry: (folderId, relativePath) => ipcRenderer.invoke("workspace-entry:reveal", { folderId, relativePath }),
     openWorkspaceFileExternally: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:open-external", { folderId, relativePath }),
     revealWorkspaceFile: (folderId, relativePath) => ipcRenderer.invoke("workspace-file:reveal", { folderId, relativePath }),
     createWorkspaceFile: (folderId, parentRelativePath, name) => ipcRenderer.invoke("workspace-entry:create-file", {

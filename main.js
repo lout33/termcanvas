@@ -343,6 +343,44 @@ function getOwnedWorkspaceDirectoryTarget(ownerWebContentsId, folderId, relative
   return resolvedTarget;
 }
 
+function getExistingOwnedWorkspaceEntryTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  const resolvedTarget = resolveOwnedWorkspaceTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage);
+
+  if (!fs.existsSync(resolvedTarget.filePath)) {
+    throw new Error("Workspace entry was not found.");
+  }
+
+  return resolvedTarget;
+}
+
+async function openOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  const resolvedTarget = getExistingOwnedWorkspaceEntryTarget(
+    ownerWebContentsId,
+    folderId,
+    relativePath,
+    missingFolderMessage
+  );
+  const openError = await shell.openPath(resolvedTarget.filePath);
+
+  if (typeof openError === "string" && openError.length > 0) {
+    throw new Error(openError);
+  }
+
+  return null;
+}
+
+function revealOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
+  const resolvedTarget = getExistingOwnedWorkspaceEntryTarget(
+    ownerWebContentsId,
+    folderId,
+    relativePath,
+    missingFolderMessage
+  );
+
+  shell.showItemInFolder(resolvedTarget.filePath);
+  return null;
+}
+
 function refreshWorkspaceRegistryAfterMutation(ownerWebContentsId, folderId) {
   const nextState = refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId);
   pushWorkspaceRegistryToOwner(ownerWebContentsId);
@@ -1994,31 +2032,30 @@ ipcMain.handle("workspace-file:write", (event, payload) => {
 });
 
 ipcMain.handle("workspace-file:open-external", async (event, payload) => {
-  const resolvedTarget = getOwnedWorkspaceFileTarget(
+  return openOwnedWorkspaceEntry(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.relativePath === "string" ? payload.relativePath : "",
     "Open a workspace folder before opening files externally."
   );
-  const openError = await shell.openPath(resolvedTarget.filePath);
-
-  if (typeof openError === "string" && openError.length > 0) {
-    throw new Error(openError);
-  }
-
-  return null;
 });
 
 ipcMain.handle("workspace-file:reveal", (event, payload) => {
-  const resolvedTarget = getOwnedWorkspaceFileTarget(
+  return revealOwnedWorkspaceEntry(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.relativePath === "string" ? payload.relativePath : "",
     "Open a workspace folder before revealing files."
   );
+});
 
-  shell.showItemInFolder(resolvedTarget.filePath);
-  return null;
+ipcMain.handle("workspace-entry:reveal", (event, payload) => {
+  return revealOwnedWorkspaceEntry(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.relativePath === "string" ? payload.relativePath : "",
+    "Open a workspace folder before revealing entries."
+  );
 });
 
 ipcMain.handle("workspace-entry:create-file", (event, payload) => {

@@ -3,6 +3,7 @@ const {
   syncCanvasWorkspaceFromLiveState,
   toggleCanvasWorkspaceExpandedDirectory,
   deriveCanvasWorkspaceAfterRestore,
+  deriveWorkspaceEntryActionState,
   shouldApplyCanvasWorkspaceRestoreResult,
   getCanvasWorkspaceExpandedDirectories,
   getCanvasWorkspacePreviewRelativePath,
@@ -2189,6 +2190,7 @@ function getWorkspaceActionContext() {
   const selectedEntry = activeFolder === null
     ? null
     : getWorkspaceEntryByRelativePath(activeFolder, workspaceSelectionState.relativePath);
+  const entryActionState = deriveWorkspaceEntryActionState(activeFolder, selectedEntry);
   const parentRelativePath = selectedEntry === null
     ? ""
     : (selectedEntry.kind === "directory"
@@ -2199,6 +2201,7 @@ function getWorkspaceActionContext() {
     activeFolder,
     selectedEntry,
     parentRelativePath,
+    ...entryActionState,
     canRename: selectedEntry !== null,
     canDelete: selectedEntry !== null
   };
@@ -3127,6 +3130,21 @@ function createWorkspaceEntryDecoration(entry) {
   return decoration;
 }
 
+function createWorkspaceBrowserActionButton({ iconMarkup, label, title, onClick }) {
+  const button = document.createElement("button");
+  button.className = "canvas-list-action workspace-browser-summary-action";
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  button.title = title;
+  button.innerHTML = `<svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">${iconMarkup}</svg>`;
+  button.addEventListener("click", () => {
+    void onClick().catch((error) => {
+      void showWorkspaceActionError(error);
+    });
+  });
+  return button;
+}
+
 function renderWorkspaceBrowser() {
   if (!(workspaceBrowser instanceof HTMLElement)) {
     return;
@@ -3138,14 +3156,32 @@ function renderWorkspaceBrowser() {
   const preservedRootPath = existingEntryList instanceof HTMLElement ? existingEntryList.dataset.workspaceRootPath ?? null : null;
   const fragment = document.createDocumentFragment();
   const activeFolder = getActiveWorkspaceFolder();
+  const workspaceActionContext = getWorkspaceActionContext();
 
   if (activeFolder !== null) {
     const summary = document.createElement("div");
     summary.className = "workspace-browser-summary";
 
+    const summaryHeader = document.createElement("div");
+    summaryHeader.className = "workspace-browser-summary-header";
+
     const name = document.createElement("div");
     name.className = "workspace-browser-name";
     name.textContent = activeFolder.rootName;
+
+    const summaryActions = document.createElement("div");
+    summaryActions.className = "workspace-browser-summary-actions";
+
+    if (workspaceActionContext.canReveal) {
+      summaryActions.append(createWorkspaceBrowserActionButton({
+        iconMarkup: '<circle cx="8" cy="8" r="2.25"></circle><path d="M8 3.75v1.25"></path><path d="M8 11v1.25"></path><path d="M3.75 8H5"></path><path d="M11 8h1.25"></path>',
+        label: workspaceActionContext.revealLabel,
+        title: `${workspaceActionContext.revealLabel}: ${workspaceActionContext.targetLabel}`,
+        onClick: () => window.noteCanvas.revealWorkspaceEntry(activeFolder.id, workspaceActionContext.targetRelativePath)
+      }));
+    }
+
+    summaryHeader.append(name, summaryActions);
 
     const currentPath = document.createElement("div");
     currentPath.className = "workspace-browser-path";
@@ -3156,7 +3192,7 @@ function renderWorkspaceBrowser() {
     meta.className = "workspace-browser-meta";
     meta.textContent = `${activeFolder.entries.length} ${activeFolder.entries.length === 1 ? "entry" : "entries"}`;
 
-    summary.append(name, currentPath, meta);
+    summary.append(summaryHeader, currentPath, meta);
     fragment.append(summary);
 
     if (activeFolder.lastError.length > 0) {

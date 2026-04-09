@@ -200,11 +200,39 @@
     return restoreToken === activeRestoreToken && activeCanvasId === targetCanvasId;
   }
 
+  function deriveWorkspaceEntryActionState(activeFolder, selectedEntry) {
+    if (activeFolder === null) {
+      return {
+        targetRelativePath: null,
+        targetLabel: "",
+        canReveal: false,
+        revealLabel: "Reveal in Finder"
+      };
+    }
+
+    if (typeof selectedEntry?.relativePath === "string" && selectedEntry.relativePath.length > 0) {
+      return {
+        targetRelativePath: selectedEntry.relativePath,
+        targetLabel: selectedEntry.relativePath,
+        canReveal: true,
+        revealLabel: "Reveal in Finder"
+      };
+    }
+
+    return {
+      targetRelativePath: "",
+      targetLabel: activeFolder.rootPath,
+      canReveal: true,
+      revealLabel: "Reveal in Finder"
+    };
+  }
+
   return {
     normalizeCanvasWorkspaceRecord,
     syncCanvasWorkspaceFromLiveState,
     toggleCanvasWorkspaceExpandedDirectory,
     deriveCanvasWorkspaceAfterRestore,
+    deriveWorkspaceEntryActionState,
     shouldApplyCanvasWorkspaceRestoreResult,
     getCanvasWorkspaceExpandedDirectories,
     getCanvasWorkspacePreviewRelativePath,
