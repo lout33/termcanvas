@@ -243,8 +243,8 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.35rem;
-  height: 2.35rem;
+  width: 2.1rem;
+  height: 2.1rem;
   padding: 0;
   border: 1px solid rgba(186, 213, 221, 0.08);
   border-radius: var(--radius-sm);
@@ -1342,7 +1342,7 @@ button {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4) var(--space-2);
+  padding: 0.55rem var(--space-4) 0.15rem;
   background: var(--color-topbar-shell);
   border-bottom: 1px solid var(--color-topbar-border);
   box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.015);
@@ -1352,10 +1352,10 @@ button {
 .canvas-topbar-shell {
   grid-column: 1 / -1;
   display: grid;
-  gap: 0.55rem;
+  gap: 0.08rem;
   width: 100%;
   min-width: 0;
-  padding: 0.55rem 0.75rem 0.7rem;
+  padding: 0.34rem 0.58rem 0.36rem;
   border: 1px solid rgba(186, 213, 221, 0.12);
   border-radius: 1.05rem;
   background:
@@ -1369,8 +1369,8 @@ button {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  min-height: 3.2rem;
-  padding: 0.35rem 0.45rem;
+  min-height: 2.72rem;
+  padding: 0.22rem 0.3rem 0.16rem;
   border: 1px solid rgba(186, 213, 221, 0.08);
   border-radius: 0.95rem;
   background: linear-gradient(180deg, rgba(24, 31, 40, 0.92), rgba(18, 24, 31, 0.9));
@@ -1387,15 +1387,15 @@ button {
 .canvas-brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.9rem;
+  gap: 0.62rem;
   min-width: 0;
-  padding-right: 0.35rem;
+  padding-right: 0.2rem;
 }
 
 .canvas-brand-mark {
   display: block;
-  width: 2.55rem;
-  height: 2.55rem;
+  width: 2.05rem;
+  height: 2.05rem;
   flex: 0 0 auto;
   border-radius: 0.8rem;
   box-shadow: 0 0.6rem 1.4rem rgba(0, 0, 0, 0.28);
@@ -1432,8 +1432,8 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 2.15rem;
-  min-height: 2.15rem;
+  min-width: 1.85rem;
+  min-height: 1.85rem;
   padding: 0;
   border: 1px solid var(--color-sidebar-rule);
   border-radius: 0.7rem;
@@ -1476,7 +1476,7 @@ button {
   min-width: 0;
   justify-self: center;
   overflow: visible;
-  padding: 0.2rem;
+  padding: 0.1rem;
   border: 1px solid rgba(186, 213, 221, 0.06);
   border-radius: 0.85rem;
   background: rgba(12, 16, 21, 0.45);
@@ -1493,7 +1493,7 @@ button {
   overflow-y: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  padding: 0.15rem;
+  padding: 0.05rem;
   border-radius: var(--radius-full);
 }
 
@@ -1508,21 +1508,21 @@ button {
   width: min(100%, 56rem);
   min-width: 0;
   justify-self: center;
-  min-height: 2.85rem;
-  padding: 0.35rem 0.45rem;
-  border: 1px solid rgba(186, 213, 221, 0.07);
-  border-radius: 0.9rem;
-  background: linear-gradient(180deg, rgba(13, 17, 22, 0.92), rgba(10, 14, 18, 0.88));
+  min-height: 2.05rem;
+  padding: 0.06rem 0.3rem 0;
+  border: 0;
+  border-radius: 0 0 0.8rem 0.8rem;
+  background: transparent;
 }
 
 .terminal-strip-shell {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.28rem;
   min-width: 0;
-  padding: 0.15rem;
-  border-radius: 0.7rem;
-  background: rgba(8, 11, 15, 0.34);
+  padding: 0.08rem;
+  border-radius: 0.62rem;
+  background: rgba(8, 11, 15, 0.18);
 }
 
 .terminal-strip-list {
@@ -1550,9 +1550,9 @@ button {
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: 2.1rem;
+  min-height: 1.72rem;
   max-width: 14rem;
-  padding: 0.45rem 0.8rem;
+  padding: 0.24rem 0.64rem;
   border-color: transparent;
   border-radius: 0.8rem;
   background: rgba(11, 14, 18, 0.72);
@@ -1572,11 +1572,11 @@ button {
 }
 
 .terminal-strip-item {
-  min-height: 1.9rem;
+  min-height: 1.58rem;
   max-width: 12rem;
-  padding: 0.34rem 0.72rem;
+  padding: 0.18rem 0.56rem;
   color: var(--color-terminal-muted);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   border-radius: 0.62rem;
   background: rgba(10, 13, 17, 0.76);
 }

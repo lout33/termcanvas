@@ -61,8 +61,8 @@ test("collapsed sidebar toggle lives in the topbar as a compact control", () => 
   const styles = readStyles();
 
   assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*position:\s*relative;/);
-  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*width:\s*2\.35rem;/);
-  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*height:\s*2\.35rem;/);
+  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*width:\s*2\.1rem;/);
+  assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*height:\s*2\.1rem;/);
   assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*width:\s*0\.875rem;/);
   assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*height:\s*2px;/);
   assert.match(styles, /\.sidebar-edge-handle-lines::before,\s*\.sidebar-edge-handle-lines::after\s*\{[\s\S]*height:\s*2px;/);
@@ -92,10 +92,12 @@ test("topbar rows use a clearer premium hierarchy with an unlabeled terminal str
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*grid-column:\s*1\s*\/\s*-1;/);
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*width:\s*100%;/);
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*border-radius:\s*1\.05rem;/);
-  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*3\.2rem;/);
+  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*2\.72rem;/);
   assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*border-radius:\s*0\.85rem;/);
   assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\);/);
-  assert.match(styles, /\.terminal-strip-shell\s*\{[\s\S]*background:\s*rgba\(8, 11, 15, 0\.34\);/);
+  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*min-height:\s*2\.05rem;/);
+  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*background:\s*transparent;/);
+  assert.match(styles, /\.terminal-strip-shell\s*\{[\s\S]*background:\s*rgba\(8, 11, 15, 0\.18\);/);
   assert.match(styles, /\.terminal-strip-item\.is-active\s*\{[\s\S]*background:\s*rgba\(18, 26, 32, 0\.98\);/);
 });
 
