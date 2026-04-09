@@ -182,6 +182,41 @@ test("getViewportOffsetToCenterNode centers a node using the current canvas scal
   });
 });
 
+test("getViewportOffsetToCenterBounds centers arbitrary canvas content bounds", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { getViewportOffsetToCenterBounds } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.deepEqual(JSON.parse(JSON.stringify(getViewportOffsetToCenterBounds({
+    boundsX: -120,
+    boundsY: 40,
+    boundsWidth: 960,
+    boundsHeight: 480,
+    viewportScale: 1,
+    viewportWidth: 1280,
+    viewportHeight: 800
+  }))), {
+    x: 280,
+    y: 120
+  });
+});
+
+test("getViewportOffsetForScaleAtPoint keeps the chosen board point anchored while zooming", () => {
+  const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
+  const { getViewportOffsetForScaleAtPoint } = navigationWindow.noteCanvasRendererCanvasNavigation;
+
+  assert.deepEqual(JSON.parse(JSON.stringify(getViewportOffsetForScaleAtPoint({
+    pointX: 600,
+    pointY: 320,
+    viewportOffsetX: 100,
+    viewportOffsetY: 80,
+    currentScale: 1,
+    nextScale: 1.25
+  }))), {
+    x: -25,
+    y: 20
+  });
+});
+
 test("getStripScrollTarget computes a clamped next scroll position for overflow buttons", () => {
   const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
   const { getStripScrollTarget } = navigationWindow.noteCanvasRendererCanvasNavigation;

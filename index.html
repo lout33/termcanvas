@@ -163,7 +163,12 @@
 
           <div class="board-grid" aria-hidden="true"></div>
 
-          <div class="board-zoom-indicator" id="board-zoom-indicator" aria-live="polite" aria-atomic="true">100%</div>
+          <div class="board-navigation" id="board-navigation" role="toolbar" aria-label="Canvas navigation" hidden>
+            <button class="board-nav-button" id="board-zoom-out-button" type="button" aria-label="Zoom out" title="Zoom out (Cmd/Ctrl+-)">-</button>
+            <button class="board-nav-button board-zoom-indicator" id="board-zoom-indicator" type="button" aria-live="polite" aria-atomic="true" aria-label="Reset zoom to 100%" title="Reset zoom to 100% (Cmd/Ctrl+0)">100%</button>
+            <button class="board-nav-button" id="board-zoom-in-button" type="button" aria-label="Zoom in" title="Zoom in (Cmd/Ctrl+=)">+</button>
+            <button class="board-nav-button board-nav-label-button" id="board-center-view-button" type="button" aria-label="Center canvas content" title="Center canvas content">Center</button>
+          </div>
 
           <button class="board-fullscreen-exit" id="board-fullscreen-exit" type="button" aria-label="Exit terminal fullscreen">
             Exit fullscreen

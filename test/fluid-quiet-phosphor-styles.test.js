@@ -39,7 +39,7 @@ test("drawer, inspector, and HUD surfaces share the quiet phosphor chrome langua
 
   assert.match(styles, /\.canvas-sidebar-panel\s*\{[\s\S]*border:\s*1px solid rgba\(186, 213, 221, 0\.08\);/);
   assert.match(styles, /\.file-inspector\s*\{[\s\S]*border:\s*1px solid rgba\(186, 213, 221, 0\.08\);/);
-  assert.match(styles, /\.board-zoom-indicator\s*\{[\s\S]*background:\s*var\(--color-board-hud\);/);
+  assert.match(styles, /\.board-navigation\s*\{[\s\S]*background:\s*var\(--color-board-hud\);/);
   assert.match(styles, /\.board-fullscreen-exit\s*\{[\s\S]*border:\s*1px solid rgba\(186, 213, 221, 0\.1\);/);
 });
 

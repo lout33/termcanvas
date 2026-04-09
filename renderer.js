@@ -27,6 +27,8 @@ const {
   shouldEnableTerminalInteractionOverlay,
   shouldShowBoardHintsForCanvas,
   deriveTerminalStripActivation,
+  getViewportOffsetForScaleAtPoint,
+  getViewportOffsetToCenterBounds,
   getViewportOffsetToCenterNode,
   getStripScrollTarget,
   getStripOverflowTargetIndex
@@ -51,7 +53,11 @@ const board = document.getElementById("board");
 const nodesLayer = document.getElementById("nodes-layer");
 const emptyState = document.getElementById("empty-state");
 const boardHints = document.getElementById("board-hints");
+const boardNavigation = document.getElementById("board-navigation");
 const boardZoomIndicator = document.getElementById("board-zoom-indicator");
+const boardZoomOutButton = document.getElementById("board-zoom-out-button");
+const boardZoomInButton = document.getElementById("board-zoom-in-button");
+const boardCenterViewButton = document.getElementById("board-center-view-button");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
 const canvasSwitcherButton = document.getElementById("canvas-switcher-button");
@@ -97,10 +103,12 @@ const LEGACY_CANVAS_EXPORT_VERSION = 1;
 const MAX_CANVAS_NAME_LENGTH = 80;
 const MAX_TERMINAL_TITLE_LENGTH = 80;
 const WHEEL_LINE_DELTA_PX = 16;
-const CANVAS_SCALE_MIN = 0.55;
+const CANVAS_SCALE_MIN = 0.25;
 const CANVAS_SCALE_MAX = 1.8;
-const CANVAS_SCALE_STEP = 0.0015;
+const CANVAS_SCALE_STEP = 0.0022;
+const CANVAS_SCALE_STEP_FACTOR = 1.22;
 const CANVAS_SCALE_PRECISION = 1000;
+const CANVAS_ZOOM_WHEEL_DELTA_LIMIT = 140;
 const DEFAULT_NODE_WIDTH = 544;
 const DEFAULT_NODE_HEIGHT = 352;
 const MIN_NODE_WIDTH = 320;
@@ -1024,28 +1032,125 @@ function zoomActiveCanvasAtPoint(point, wheelDelta) {
   }
 
   const currentScale = activeCanvas.viewportScale;
-  const nextScale = roundCanvasScale(currentScale * Math.exp(-wheelDelta * CANVAS_SCALE_STEP));
+  const normalizedWheelDelta = Math.max(
+    -CANVAS_ZOOM_WHEEL_DELTA_LIMIT,
+    Math.min(CANVAS_ZOOM_WHEEL_DELTA_LIMIT, wheelDelta)
+  );
+  const nextScale = roundCanvasScale(currentScale * Math.exp(-normalizedWheelDelta * CANVAS_SCALE_STEP));
 
-  if (nextScale === currentScale) {
+  return zoomActiveCanvasToScaleAtPoint(point, nextScale);
+}
+
+function getBoardViewportCenterPoint() {
+  return {
+    x: board.clientWidth / 2,
+    y: board.clientHeight / 2
+  };
+}
+
+function zoomActiveCanvasToScaleAtPoint(point, nextScale) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null || !Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
     return false;
   }
 
-  const worldX = (point.x - activeCanvas.viewportOffset.x) / currentScale;
-  const worldY = (point.y - activeCanvas.viewportOffset.y) / currentScale;
-  const nextOffsetX = point.x - worldX * nextScale;
-  const nextOffsetY = point.y - worldY * nextScale;
+  const currentScale = activeCanvas.viewportScale;
+  const resolvedScale = roundCanvasScale(nextScale);
 
-  const didZoom = setActiveCanvasViewport(nextOffsetX, nextOffsetY, nextScale);
+  if (resolvedScale === currentScale) {
+    return false;
+  }
+
+  const nextOffset = getViewportOffsetForScaleAtPoint({
+    pointX: point.x,
+    pointY: point.y,
+    viewportOffsetX: activeCanvas.viewportOffset.x,
+    viewportOffsetY: activeCanvas.viewportOffset.y,
+    currentScale,
+    nextScale: resolvedScale
+  });
+
+  const didZoom = setActiveCanvasViewport(nextOffset.x, nextOffset.y, resolvedScale);
 
   if (didZoom) {
-    showBoardZoomIndicator(nextScale);
+    showBoardZoomIndicator(resolvedScale);
   }
 
   return didZoom;
 }
 
+function zoomActiveCanvasByStep(direction, point = getBoardViewportCenterPoint()) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return false;
+  }
+
+  const nextScale = direction === "out"
+    ? activeCanvas.viewportScale / CANVAS_SCALE_STEP_FACTOR
+    : activeCanvas.viewportScale * CANVAS_SCALE_STEP_FACTOR;
+
+  return zoomActiveCanvasToScaleAtPoint(point, nextScale);
+}
+
+function resetActiveCanvasZoom(point = getBoardViewportCenterPoint()) {
+  return zoomActiveCanvasToScaleAtPoint(point, 1);
+}
+
+function centerActiveCanvasContent() {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return false;
+  }
+
+  if (activeNodeRecord?.canvas === activeCanvas && activeNodeRecord.isRemoved !== true) {
+    return centerViewportOnNode(activeNodeRecord);
+  }
+
+  if (!Array.isArray(activeCanvas.nodes) || activeCanvas.nodes.length === 0) {
+    return setActiveCanvasViewport(0, 0, 1);
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  activeCanvas.nodes.forEach((nodeRecord) => {
+    minX = Math.min(minX, nodeRecord.x);
+    minY = Math.min(minY, nodeRecord.y);
+    maxX = Math.max(maxX, nodeRecord.x + nodeRecord.width);
+    maxY = Math.max(maxY, nodeRecord.y + nodeRecord.height);
+  });
+
+  const nextOffset = getViewportOffsetToCenterBounds({
+    boundsX: minX,
+    boundsY: minY,
+    boundsWidth: maxX - minX,
+    boundsHeight: maxY - minY,
+    viewportScale: activeCanvas.viewportScale,
+    viewportWidth: board.clientWidth,
+    viewportHeight: board.clientHeight
+  });
+
+  return setActiveCanvasViewportOffset(nextOffset.x, nextOffset.y);
+}
+
 function isViewportZoomModifierPressed(event) {
   return event.metaKey || event.ctrlKey;
+}
+
+function isTypingTarget(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable;
 }
 
 function updateSidebarToggleButton() {
@@ -1516,9 +1621,17 @@ function positionNode(nodeRecord) {
     return;
   }
 
-  const { viewportOffset, viewportScale } = nodeRecord.canvas;
-  nodeRecord.element.style.left = `${viewportOffset.x + (nodeRecord.x * viewportScale)}px`;
-  nodeRecord.element.style.top = `${viewportOffset.y + (nodeRecord.y * viewportScale)}px`;
+  const nextLeft = `${nodeRecord.x}px`;
+  const nextTop = `${nodeRecord.y}px`;
+
+  if (nodeRecord.element.style.left !== nextLeft) {
+    nodeRecord.element.style.left = nextLeft;
+  }
+
+  if (nodeRecord.element.style.top !== nextTop) {
+    nodeRecord.element.style.top = nextTop;
+  }
+
   nodeRecord.element.style.width = `${nodeRecord.width}px`;
   nodeRecord.element.style.height = `${nodeRecord.height}px`;
 }
@@ -1654,7 +1767,7 @@ function flushViewportRender() {
 
   cancelAnimationFrame(viewportRenderFrame);
   viewportRenderFrame = 0;
-  renderCanvas();
+  renderCanvas({ syncNodePositions: false });
 }
 
 function requestViewportRender() {
@@ -1664,12 +1777,12 @@ function requestViewportRender() {
 
   viewportRenderFrame = requestAnimationFrame(() => {
     viewportRenderFrame = 0;
-    renderCanvas();
+    renderCanvas({ syncNodePositions: false });
   });
 }
 
 function renderCanvas(options = {}) {
-  const { syncTerminalSizes = false } = options;
+  const { syncTerminalSizes = false, syncNodePositions = true } = options;
 
   if (viewportRenderFrame !== 0) {
     cancelAnimationFrame(viewportRenderFrame);
@@ -1696,7 +1809,11 @@ function renderCanvas(options = {}) {
   setBoardZoomIndicatorText(activeCanvas.viewportScale);
 
   const didChangeMountedNodes = syncMountedCanvasNodes(activeCanvas);
-  activeCanvas.nodes.forEach(positionNode);
+
+  if (syncNodePositions || didChangeMountedNodes) {
+    activeCanvas.nodes.forEach(positionNode);
+  }
+
   applyCanvasFocusMode();
   updateEmptyState();
 
@@ -4703,6 +4820,27 @@ function handleWindowKeyDown(event) {
 
   const shortcutKey = String(event.key).toLowerCase();
   const isCommandShortcut = event.metaKey && !event.ctrlKey && !event.altKey;
+  const isViewportShortcut = (event.metaKey || event.ctrlKey) && !event.altKey;
+
+  if (isViewportShortcut && !isTypingTarget(event.target)) {
+    if (shortcutKey === "=" || shortcutKey === "+") {
+      event.preventDefault();
+      zoomActiveCanvasByStep("in");
+      return;
+    }
+
+    if (shortcutKey === "-" || shortcutKey === "_") {
+      event.preventDefault();
+      zoomActiveCanvasByStep("out");
+      return;
+    }
+
+    if (shortcutKey === "0") {
+      event.preventDefault();
+      resetActiveCanvasZoom();
+      return;
+    }
+  }
 
   if (isCommandShortcut && shortcutKey === "l" && isWorkspacePreviewOpen()) {
     event.preventDefault();
@@ -5526,6 +5664,22 @@ boardFullscreenExitButton?.addEventListener("click", (event) => {
   if (visibleMaximizedNode !== null) {
     setNodeMaximized(visibleMaximizedNode, false);
   }
+});
+
+boardZoomOutButton?.addEventListener("click", () => {
+  zoomActiveCanvasByStep("out");
+});
+
+boardZoomIndicator?.addEventListener("click", () => {
+  resetActiveCanvasZoom();
+});
+
+boardZoomInButton?.addEventListener("click", () => {
+  zoomActiveCanvasByStep("in");
+});
+
+boardCenterViewButton?.addEventListener("click", () => {
+  centerActiveCanvasContent();
 });
 
 board.addEventListener("pointerdown", handleBoardPointerDown);

@@ -106,6 +106,49 @@
     };
   }
 
+  function getViewportOffsetToCenterBounds({
+    boundsX,
+    boundsY,
+    boundsWidth,
+    boundsHeight,
+    viewportScale,
+    viewportWidth,
+    viewportHeight
+  }) {
+    return getViewportOffsetToCenterNode({
+      nodeX: boundsX,
+      nodeY: boundsY,
+      nodeWidth: boundsWidth,
+      nodeHeight: boundsHeight,
+      viewportScale,
+      viewportWidth,
+      viewportHeight
+    });
+  }
+
+  function getViewportOffsetForScaleAtPoint({
+    pointX,
+    pointY,
+    viewportOffsetX,
+    viewportOffsetY,
+    currentScale,
+    nextScale
+  }) {
+    const safeCurrentScale = Number.isFinite(currentScale) && currentScale > 0 ? currentScale : 1;
+    const safeNextScale = Number.isFinite(nextScale) && nextScale > 0 ? nextScale : safeCurrentScale;
+    const safePointX = Number.isFinite(pointX) ? pointX : 0;
+    const safePointY = Number.isFinite(pointY) ? pointY : 0;
+    const safeOffsetX = Number.isFinite(viewportOffsetX) ? viewportOffsetX : 0;
+    const safeOffsetY = Number.isFinite(viewportOffsetY) ? viewportOffsetY : 0;
+    const worldX = (safePointX - safeOffsetX) / safeCurrentScale;
+    const worldY = (safePointY - safeOffsetY) / safeCurrentScale;
+
+    return {
+      x: safePointX - (worldX * safeNextScale),
+      y: safePointY - (worldY * safeNextScale)
+    };
+  }
+
   function getStripScrollTarget({ scrollLeft, clientWidth, scrollWidth, direction }) {
     const safeScrollLeft = Number.isFinite(scrollLeft) ? Math.max(0, scrollLeft) : 0;
     const safeClientWidth = Number.isFinite(clientWidth) ? Math.max(0, clientWidth) : 0;
@@ -156,6 +199,8 @@
     shouldDisableTerminalAnimations,
     shouldShowBoardHintsForCanvas,
     deriveTerminalStripActivation,
+    getViewportOffsetForScaleAtPoint,
+    getViewportOffsetToCenterBounds,
     getViewportOffsetToCenterNode,
     getStripScrollTarget,
     getStripOverflowTargetIndex
