@@ -6,11 +6,9 @@ It is built for developers who juggle multiple repos, shells, AI agents, and lon
 
 ## Demo
 
-[![TermCanvas demo GIF showing live terminal nodes being arranged on the canvas](./docs/termcanvas-demo.gif)](https://www.youtube.com/watch?v=4XN5jvk9P1U)
+![TermCanvas demo GIF showing live terminal nodes being arranged on the canvas](./docs/termcanvas-demo.gif)
 
-Watch the full walkthrough on YouTube:
-
-https://www.youtube.com/watch?v=4XN5jvk9P1U
+Demo video: https://www.youtube.com/watch?v=4XN5jvk9P1U
 
 ## What It Is
 
