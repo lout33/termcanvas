@@ -127,6 +127,26 @@ Current outputs include:
 - `.zip`
 - packaged `.app`
 
+## Opening The Downloaded App On macOS
+
+Current macOS builds are unsigned, so macOS may block the app the first time you open it.
+
+After downloading:
+
+1. Open the downloaded `.dmg` or `.zip`.
+2. Move `TermCanvas.app` into your `Applications` folder.
+3. In Finder, right-click `TermCanvas.app` and choose `Open`.
+4. When macOS shows the warning dialog, click `Open` again.
+
+If macOS still blocks the app:
+
+1. Open `System Settings`.
+2. Go to `Privacy & Security`.
+3. Scroll to the security section and click `Open Anyway` for `TermCanvas`.
+4. Open the app again and confirm the final prompt.
+
+After the first successful launch, you can open `TermCanvas` normally like any other app.
+
 ## GitHub Releases
 
 TermCanvas uses a tag-driven GitHub release flow for macOS builds.
