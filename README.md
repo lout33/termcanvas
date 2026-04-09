@@ -4,7 +4,17 @@ TermCanvas is a desktop app that lets you arrange real terminal sessions on an i
 
 It is built for developers who juggle multiple repos, shells, AI agents, and long-running tasks and want something more spatial than tabs or split panes.
 
-![TermCanvas screenshot showing multiple terminal sessions arranged on a dark infinite canvas workspace](./demo.png)
+[![TermCanvas screenshot showing multiple terminal sessions arranged on a dark infinite canvas workspace](./demo.png)](https://www.youtube.com/watch?v=4XN5jvk9P1U)
+
+## Demo
+
+Watch the full walkthrough on YouTube:
+
+https://www.youtube.com/watch?v=4XN5jvk9P1U
+
+Click the preview below to open the full video:
+
+[![TermCanvas demo GIF showing live terminal nodes being arranged on the canvas](./docs/termcanvas-demo.gif)](https://www.youtube.com/watch?v=4XN5jvk9P1U)
 
 ## What It Is
 
