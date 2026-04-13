@@ -199,7 +199,7 @@ function savePersistedAppSession(snapshot) {
 
   const normalizedSnapshot = normalizeAppSessionSnapshot(snapshot);
   const appSessionFilePath = getAppSessionFilePath();
-  const tempFilePath = `${appSessionFilePath}.tmp`;
+  const tempFilePath = `${appSessionFilePath}.tmp.${process.pid}.${Date.now()}`;
 
   fs.mkdirSync(path.dirname(appSessionFilePath), { recursive: true });
   fs.writeFileSync(tempFilePath, JSON.stringify(normalizedSnapshot, null, 2), "utf8");

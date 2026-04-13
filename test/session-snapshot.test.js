@@ -78,6 +78,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
       expandedDirectoryPaths: ["src", "src/components"],
       previewRelativePath: "README.md"
     },
+    activeSessionKey: null,
     terminalNodes: [{
       sessionKey: null,
       x: 10,
@@ -108,6 +109,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     exitCode: null,
     exitSignal: null
   });
+  assert.equal(snapshot.canvases[1].activeSessionKey, null);
 });
 
 test("normalizeAppSessionSnapshot keeps only safe terminal session keys", () => {
@@ -123,6 +125,39 @@ test("normalizeAppSessionSnapshot keeps only safe terminal session keys", () => 
 
   assert.equal(snapshot.canvases[0].terminalNodes[0].sessionKey, "terminal_session-1");
   assert.equal(snapshot.canvases[0].terminalNodes[1].sessionKey, null);
+});
+
+test("normalizeAppSessionSnapshot keeps a canvas active session key only when it matches a saved terminal", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    canvases: [
+      {
+        id: "canvas-1",
+        activeSessionKey: "terminal_session-1",
+        terminalNodes: [
+          { sessionKey: "terminal_session-1" },
+          { sessionKey: "terminal_session-2" }
+        ]
+      },
+      {
+        id: "canvas-2",
+        activeSessionKey: "../../bad",
+        terminalNodes: [
+          { sessionKey: "terminal_session-3" }
+        ]
+      },
+      {
+        id: "canvas-3",
+        activeSessionKey: "terminal_session-missing",
+        terminalNodes: [
+          { sessionKey: "terminal_session-4" }
+        ]
+      }
+    ]
+  });
+
+  assert.equal(snapshot.canvases[0].activeSessionKey, "terminal_session-1");
+  assert.equal(snapshot.canvases[1].activeSessionKey, null);
+  assert.equal(snapshot.canvases[2].activeSessionKey, null);
 });
 
 test("normalizeAppSessionSnapshot migrates legacy top-level workspace onto the active canvas only", () => {

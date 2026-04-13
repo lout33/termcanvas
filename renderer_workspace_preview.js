@@ -56,6 +56,16 @@
   }
 
   function renderMarkdownToHtml(markdown) {
+    const externalRenderer = globalThis?.window?.noteCanvasRendererWorkspaceMarkdown?.renderMarkdownToHtml;
+
+    if (typeof externalRenderer === "function") {
+      try {
+        return externalRenderer(markdown);
+      } catch {
+        // Fall back to the lightweight local renderer if the bundled renderer fails.
+      }
+    }
+
     const lines = typeof markdown === "string" ? markdown.split(/\r?\n/u) : [];
     const blocks = [];
     let paragraphLines = [];
@@ -177,7 +187,7 @@
 
   function canEditPreview(data) {
     const kind = typeof data?.kind === "string" ? data.kind : null;
-    return kind === "text" || kind === "json" || kind === "svg";
+    return kind === "text" || kind === "json" || kind === "svg" || data?.language === "markdown";
   }
 
   function resolveWorkspacePreviewViewMode(previewState) {
@@ -195,6 +205,12 @@
   function createBaseViewModel(previewState) {
     const relativePath = typeof previewState?.relativePath === "string" ? previewState.relativePath : "";
     const data = previewState?.data ?? null;
+    const isMarkdown = data?.language === "markdown";
+    const textContents = isMarkdown && typeof previewState?.draftText === "string"
+      ? previewState.draftText
+      : (typeof data?.textContents === "string"
+          ? data.textContents
+          : (typeof data?.contents === "string" ? data.contents : ""));
 
     return {
       mode: "empty",
@@ -202,9 +218,7 @@
       relativePath,
       typeLabel: getTypeLabel(data),
       message: "",
-      textContents: typeof data?.textContents === "string"
-        ? data.textContents
-        : (typeof data?.contents === "string" ? data.contents : ""),
+      textContents,
       renderedContentsHtml: "",
       binaryContentsBase64: typeof data?.binaryContentsBase64 === "string" ? data.binaryContentsBase64 : "",
       mimeType: typeof data?.mimeType === "string" ? data.mimeType : "",

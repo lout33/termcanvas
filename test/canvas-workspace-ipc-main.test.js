@@ -21,7 +21,14 @@ function createMockContents(id, contentsEventHandlers, sentMessages) {
   };
 }
 
-function loadMainWithMocks({ smokeTest = false, showOpenDialog, showSaveDialog, openPathResult = "", resolveWhenReady = false }) {
+function loadMainWithMocks({
+  smokeTest = false,
+  showOpenDialog,
+  showSaveDialog,
+  openPathResult = "",
+  resolveWhenReady = false,
+  getPath = () => os.homedir()
+}) {
   const handlers = new Map();
   const openPathCalls = [];
   const openExternalCalls = [];
@@ -65,7 +72,7 @@ function loadMainWithMocks({ smokeTest = false, showOpenDialog, showSaveDialog, 
       },
       quit: () => {},
       exit: () => {},
-      getPath: () => os.homedir()
+      getPath
     },
     BrowserWindow: MockBrowserWindow,
     dialog: {
@@ -812,6 +819,51 @@ test("app-session:save-file writes exported app data to a chosen JSON file", asy
 
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("app-session:save writes through a unique temp file path", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-app-session-save-"));
+  const renameCalls = [];
+  const originalWriteFileSync = fs.writeFileSync;
+  const originalRenameSync = fs.renameSync;
+
+  fs.writeFileSync = (filePath, contents, encoding) => {
+    originalWriteFileSync(filePath, contents, encoding);
+  };
+
+  fs.renameSync = (sourcePath, destinationPath) => {
+    renameCalls.push({ sourcePath, destinationPath });
+    originalRenameSync(sourcePath, destinationPath);
+  };
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showSaveDialog: async () => ({ canceled: true, filePath: undefined }),
+    getPath: (name) => {
+      assert.equal(name, "userData");
+      return tempRoot;
+    }
+  });
+
+  try {
+    const saveAppSession = handlers.get("app-session:save");
+
+    assert.equal(typeof saveAppSession, "function");
+
+    saveAppSession({ sender: { id: 103 } }, {
+      canvases: [],
+      activeCanvasId: null
+    });
+
+    assert.equal(renameCalls.length, 1);
+    assert.equal(renameCalls[0].destinationPath, path.join(tempRoot, "app-session.json"));
+    assert.match(renameCalls[0].sourcePath, /app-session\.json\.tmp\..+$/);
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+    fs.renameSync = originalRenameSync;
+    delete require.cache[mainPath];
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("app-session:open-file reads and normalizes imported app data JSON", async () => {

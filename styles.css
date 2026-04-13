@@ -888,6 +888,7 @@ button {
     opacity var(--transition-base),
     transform 220ms ease,
     border-color var(--transition-base);
+  cursor: default;
 }
 
 .app-shell.has-file-inspector .file-inspector {
@@ -952,11 +953,14 @@ button {
 
 .file-inspector-actions {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--space-2);
 }
 
 .file-inspector-button {
   min-width: 4.5rem;
+  cursor: pointer;
 }
 
 .file-inspector-body {
@@ -964,6 +968,11 @@ button {
   min-height: 0;
   padding: var(--space-4);
   overflow: auto;
+  cursor: default;
+}
+
+.file-inspector-banner {
+  margin-bottom: var(--space-3);
 }
 
 .file-inspector-fallback {
@@ -1005,6 +1014,29 @@ button {
   outline: none;
   border-color: var(--color-phosphor-accent-strong);
   box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
+}
+
+.file-inspector-markdown-editor {
+  min-height: 30rem;
+  cursor: text;
+}
+
+.file-inspector-markdown-editor .cm-editor {
+  min-height: 30rem;
+  cursor: text;
+}
+
+.file-inspector-markdown-editor .cm-scroller,
+.file-inspector-markdown-editor .cm-content,
+.file-inspector-markdown-editor .cm-line,
+.file-inspector-markdown-editor .cm-selectionLayer,
+.file-inspector-markdown-editor .cm-cursorLayer {
+  cursor: text;
+}
+
+.file-inspector-markdown-editor .cm-gutters,
+.file-inspector-markdown-editor .cm-activeLineGutter {
+  cursor: default;
 }
 
 .file-inspector-markdown {

@@ -29,6 +29,7 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
         canvasRecord: {
           id: "canvas-1",
           workspace: firstWorkspace,
+          activeSessionKey: null,
           nodes: [{
             sessionKey: "terminal-1",
             isExited: false,
@@ -56,6 +57,7 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
         canvasRecord: {
           id: "canvas-2",
           workspace: secondWorkspace,
+          activeSessionKey: "terminal-2",
           nodes: [{
             sessionKey: "terminal-2",
             isExited: true,
@@ -84,6 +86,7 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
 
   assert.deepEqual(snapshot.canvases.map((canvas) => canvas.workspace), [firstWorkspace, secondWorkspace]);
   assert.deepEqual(snapshot.canvases[0].terminalNodes[0].sessionKey, "terminal-1");
+  assert.equal(snapshot.canvases[0].activeSessionKey, null);
   assert.deepEqual(snapshot.canvases[1].terminalNodes[0], {
     x: 30,
     y: 40,
@@ -98,4 +101,5 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
     exitCode: 1,
     exitSignal: "SIGTERM"
   });
+  assert.equal(snapshot.canvases[1].activeSessionKey, "terminal-2");
 });

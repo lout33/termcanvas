@@ -178,6 +178,21 @@ function normalizeCanvasSnapshots(canvases) {
     }
 
     seenCanvasIds.add(canvasId);
+    const terminalNodes = Array.isArray(canvasSnapshot?.terminalNodes)
+      ? canvasSnapshot.terminalNodes.map(normalizeTerminalNodeSnapshot)
+      : [];
+    const terminalSessionKeys = new Set(
+      terminalNodes
+        .map((nodeSnapshot) => nodeSnapshot.sessionKey)
+        .filter((sessionKey) => sessionKey !== null)
+    );
+    const activeSessionKey = (() => {
+      const normalizedSessionKey = normalizeSessionKey(canvasSnapshot?.activeSessionKey);
+      return normalizedSessionKey !== null && terminalSessionKeys.has(normalizedSessionKey)
+        ? normalizedSessionKey
+        : null;
+    })();
+
     normalizedCanvases.push({
       id: canvasId,
       name: normalizeString(canvasSnapshot?.name) ?? `Canvas ${index + 1}`,
@@ -187,9 +202,8 @@ function normalizeCanvasSnapshots(canvases) {
       },
       viewportScale: normalizeNumber(canvasSnapshot?.viewportScale, 1),
       workspace: normalizeCanvasWorkspaceSnapshot(canvasSnapshot?.workspace),
-      terminalNodes: Array.isArray(canvasSnapshot?.terminalNodes)
-        ? canvasSnapshot.terminalNodes.map(normalizeTerminalNodeSnapshot)
-        : []
+      activeSessionKey,
+      terminalNodes
     });
   });
 

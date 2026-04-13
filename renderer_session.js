@@ -5,6 +5,7 @@ function serializeCanvasSessionRecord(canvasRecord, exportedCanvas) {
     viewportOffset: exportedCanvas.viewportOffset,
     viewportScale: exportedCanvas.viewportScale,
     workspace: canvasRecord.workspace ?? null,
+    activeSessionKey: canvasRecord.activeSessionKey ?? null,
     terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
       ...exportedCanvas.terminalNodes[index],
       sessionKey: nodeRecord.sessionKey,
