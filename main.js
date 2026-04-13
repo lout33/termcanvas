@@ -4,25 +4,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const pty = require("node-pty");
-const { createDirectorySnapshot } = require("./directory_snapshot");
+const { createDirectorySnapshotAsync } = require("./directory_snapshot");
 const { getNodePtyHelperPaths } = require("./node_pty_runtime");
-const {
-  activateWorkspaceFolder,
-  createWorkspaceRegistry,
-  getWorkspaceFolder,
-  importWorkspaceFolder,
-  reorderWorkspaceFolder,
-  removeWorkspaceFolder,
-  serializeWorkspaceRegistry,
-  setWorkspaceFolderError,
-  updateWorkspaceFolderSnapshot
-} = require("./workspace_registry");
-const { readWorkspaceFilePreview, resolveWorkspaceFilePath } = require("./workspace_file_preview");
+const { readWorkspaceFilePreviewAsync, resolveWorkspaceFilePath } = require("./workspace_file_preview");
+const { createWorkspaceService } = require("./main_workspace_service");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessions = new Map();
-const workspaceRegistries = new Map();
-const workspaceWatchers = new Map();
 const activeTerminalShortcutStates = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
@@ -220,518 +208,6 @@ function savePersistedAppSession(snapshot) {
   return normalizedSnapshot;
 }
 
-function getOwnerWorkspaceRegistry(ownerWebContentsId) {
-  let workspaceRegistry = workspaceRegistries.get(ownerWebContentsId);
-
-  if (workspaceRegistry == null) {
-    workspaceRegistry = createWorkspaceRegistry();
-    workspaceRegistries.set(ownerWebContentsId, workspaceRegistry);
-  }
-
-  return workspaceRegistry;
-}
-
-function getExistingOwnerWorkspaceRegistry(ownerWebContentsId) {
-  return workspaceRegistries.get(ownerWebContentsId) ?? null;
-}
-
-function getActiveWorkspaceFolderForOwner(ownerWebContentsId) {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
-
-  if (workspaceRegistry == null || workspaceRegistry.activeFolderId === null) {
-    return null;
-  }
-
-  return getWorkspaceFolder(workspaceRegistry, workspaceRegistry.activeFolderId);
-}
-
-function isPathWithinDirectory(rootPath, targetPath) {
-  const relativePath = path.relative(rootPath, targetPath);
-  return relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath);
-}
-
-function normalizeWorkspaceEntryName(value) {
-  if (typeof value !== "string") {
-    throw new Error("A workspace entry name is required.");
-  }
-
-  const trimmedValue = value.trim();
-
-  if (trimmedValue.length === 0) {
-    throw new Error("A workspace entry name is required.");
-  }
-
-  if (trimmedValue === "." || trimmedValue === ".." || /[\\/]/u.test(trimmedValue)) {
-    throw new Error("Workspace entry names cannot contain path separators.");
-  }
-
-  return trimmedValue;
-}
-
-function getOwnedWorkspaceFolderRecord(ownerWebContentsId, folderId, missingFolderMessage) {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
-
-  if (workspaceRegistry === null) {
-    throw new Error(missingFolderMessage);
-  }
-
-  const workspaceFolder = getWorkspaceFolder(workspaceRegistry, folderId);
-
-  if (workspaceFolder === null) {
-    throw new Error(missingFolderMessage);
-  }
-
-  const resolvedRootPath = resolveExistingDirectoryPath(workspaceFolder.rootPath);
-
-  if (resolvedRootPath === null) {
-    throw new Error("Workspace folder is unavailable.");
-  }
-
-  return {
-    workspaceFolder,
-    rootPath: fs.realpathSync(resolvedRootPath)
-  };
-}
-
-function resolveOwnedWorkspaceTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
-  const { workspaceFolder, rootPath } = getOwnedWorkspaceFolderRecord(ownerWebContentsId, folderId, missingFolderMessage);
-  const normalizedRelativePath = typeof relativePath === "string" ? relativePath : "";
-  const candidatePath = path.resolve(rootPath, normalizedRelativePath);
-
-  if (!isPathWithinDirectory(rootPath, candidatePath)) {
-    throw new Error("Workspace file preview must stay inside the workspace root.");
-  }
-
-  if (fs.existsSync(candidatePath)) {
-    const realCandidatePath = fs.realpathSync(candidatePath);
-
-    if (!isPathWithinDirectory(rootPath, realCandidatePath)) {
-      throw new Error("Workspace file preview must stay inside the workspace root.");
-    }
-
-    return {
-      workspaceFolder,
-      rootPath,
-      filePath: realCandidatePath,
-      relativePath: path.relative(rootPath, realCandidatePath).split(path.sep).join("/")
-    };
-  }
-
-  return {
-    workspaceFolder,
-    rootPath,
-    filePath: candidatePath,
-    relativePath: path.relative(rootPath, candidatePath).split(path.sep).join("/")
-  };
-}
-
-function getOwnedWorkspaceFileTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
-  return resolveWorkspaceFilePath(
-    getOwnedWorkspaceFolderRecord(ownerWebContentsId, folderId, missingFolderMessage).rootPath,
-    relativePath
-  );
-}
-
-function getOwnedWorkspaceDirectoryTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
-  const resolvedTarget = resolveOwnedWorkspaceTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage);
-  const targetStats = fs.statSync(resolvedTarget.filePath);
-
-  if (!targetStats.isDirectory()) {
-    throw new Error("Workspace target must be a directory.");
-  }
-
-  return resolvedTarget;
-}
-
-function getExistingOwnedWorkspaceEntryTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
-  const resolvedTarget = resolveOwnedWorkspaceTarget(ownerWebContentsId, folderId, relativePath, missingFolderMessage);
-
-  if (!fs.existsSync(resolvedTarget.filePath)) {
-    throw new Error("Workspace entry was not found.");
-  }
-
-  return resolvedTarget;
-}
-
-async function openOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
-  const resolvedTarget = getExistingOwnedWorkspaceEntryTarget(
-    ownerWebContentsId,
-    folderId,
-    relativePath,
-    missingFolderMessage
-  );
-  const openError = await shell.openPath(resolvedTarget.filePath);
-
-  if (typeof openError === "string" && openError.length > 0) {
-    throw new Error(openError);
-  }
-
-  return null;
-}
-
-function revealOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath, missingFolderMessage) {
-  const resolvedTarget = getExistingOwnedWorkspaceEntryTarget(
-    ownerWebContentsId,
-    folderId,
-    relativePath,
-    missingFolderMessage
-  );
-
-  shell.showItemInFolder(resolvedTarget.filePath);
-  return null;
-}
-
-function refreshWorkspaceRegistryAfterMutation(ownerWebContentsId, folderId) {
-  const nextState = refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId);
-  pushWorkspaceRegistryToOwner(ownerWebContentsId);
-  return nextState;
-}
-
-function createOwnedWorkspaceEntry(ownerWebContentsId, folderId, parentRelativePath, name, kind) {
-  const parentTarget = getOwnedWorkspaceDirectoryTarget(
-    ownerWebContentsId,
-    folderId,
-    parentRelativePath,
-    "Open a workspace folder before managing files."
-  );
-  const entryName = normalizeWorkspaceEntryName(name);
-  const nextPath = path.resolve(parentTarget.filePath, entryName);
-
-  if (!isPathWithinDirectory(parentTarget.rootPath, nextPath)) {
-    throw new Error("Workspace file preview must stay inside the workspace root.");
-  }
-
-  if (fs.existsSync(nextPath)) {
-    throw new Error("A file or folder with that name already exists.");
-  }
-
-  if (kind === "directory") {
-    fs.mkdirSync(nextPath, { recursive: false });
-  } else {
-    fs.writeFileSync(nextPath, "", "utf8");
-  }
-
-  return {
-    filePath: nextPath,
-    relativePath: path.relative(parentTarget.rootPath, nextPath).split(path.sep).join("/")
-  };
-}
-
-function renameOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath, nextName) {
-  const currentTarget = resolveOwnedWorkspaceTarget(
-    ownerWebContentsId,
-    folderId,
-    relativePath,
-    "Open a workspace folder before managing files."
-  );
-  const resolvedNextName = normalizeWorkspaceEntryName(nextName);
-  const renamedPath = path.resolve(path.dirname(currentTarget.filePath), resolvedNextName);
-
-  if (!fs.existsSync(currentTarget.filePath)) {
-    throw new Error("Workspace entry was not found.");
-  }
-
-  if (!isPathWithinDirectory(currentTarget.rootPath, renamedPath)) {
-    throw new Error("Workspace file preview must stay inside the workspace root.");
-  }
-
-  if (renamedPath !== currentTarget.filePath && fs.existsSync(renamedPath)) {
-    throw new Error("A file or folder with that name already exists.");
-  }
-
-  fs.renameSync(currentTarget.filePath, renamedPath);
-
-  return {
-    filePath: renamedPath,
-    relativePath: path.relative(currentTarget.rootPath, renamedPath).split(path.sep).join("/")
-  };
-}
-
-function deleteOwnedWorkspaceEntry(ownerWebContentsId, folderId, relativePath) {
-  const currentTarget = resolveOwnedWorkspaceTarget(
-    ownerWebContentsId,
-    folderId,
-    relativePath,
-    "Open a workspace folder before managing files."
-  );
-
-  if (!fs.existsSync(currentTarget.filePath)) {
-    throw new Error("Workspace entry was not found.");
-  }
-
-  if (currentTarget.relativePath.length === 0) {
-    throw new Error("The workspace root cannot be deleted.");
-  }
-
-  fs.rmSync(currentTarget.filePath, { recursive: true, force: false });
-  return currentTarget.relativePath;
-}
-
-function isEditableWorkspacePreview(preview) {
-  return preview?.kind === "text" || preview?.kind === "json" || preview?.kind === "svg";
-}
-
-function getOwnerWorkspaceWatchers(ownerWebContentsId) {
-  let ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
-
-  if (ownerWatchers == null) {
-    ownerWatchers = new Map();
-    workspaceWatchers.set(ownerWebContentsId, ownerWatchers);
-  }
-
-  return ownerWatchers;
-}
-
-function destroyWorkspaceWatcher(ownerWebContentsId, folderId) {
-  const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
-
-  if (ownerWatchers == null) {
-    return;
-  }
-
-  const workspaceWatcher = ownerWatchers.get(folderId);
-
-  if (workspaceWatcher === undefined) {
-    return;
-  }
-
-  if (workspaceWatcher.refreshTimeout !== 0) {
-    clearTimeout(workspaceWatcher.refreshTimeout);
-  }
-
-  workspaceWatcher.watcher?.close();
-  ownerWatchers.delete(folderId);
-
-  if (ownerWatchers.size === 0) {
-    workspaceWatchers.delete(ownerWebContentsId);
-  }
-}
-
-function destroyOwnedWorkspaceWatchers(ownerWebContentsId) {
-  const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
-
-  if (ownerWatchers == null) {
-    return;
-  }
-
-  ownerWatchers.forEach((workspaceWatcher) => {
-    if (workspaceWatcher.refreshTimeout !== 0) {
-      clearTimeout(workspaceWatcher.refreshTimeout);
-    }
-
-    workspaceWatcher.watcher?.close();
-  });
-
-  workspaceWatchers.delete(ownerWebContentsId);
-}
-
-function pushWorkspaceRegistryToOwner(ownerWebContentsId) {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
-
-  if (workspaceRegistry === null) {
-    sendToOwner(ownerWebContentsId, "workspace-directory:data", {
-      importedFolders: [],
-      activeFolderId: null
-    });
-    return;
-  }
-
-  sendToOwner(ownerWebContentsId, "workspace-directory:data", serializeWorkspaceRegistry(workspaceRegistry));
-}
-
-function refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId) {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
-
-  if (workspaceRegistry === null) {
-    return {
-      importedFolders: [],
-      activeFolderId: null
-    };
-  }
-
-  const workspaceFolder = getWorkspaceFolder(workspaceRegistry, folderId);
-
-  if (workspaceFolder === null) {
-    destroyWorkspaceWatcher(ownerWebContentsId, folderId);
-    return serializeWorkspaceRegistry(workspaceRegistry);
-  }
-
-  const resolvedDirectoryPath = resolveExistingDirectoryPath(workspaceFolder.rootPath);
-
-  if (resolvedDirectoryPath === null) {
-    setWorkspaceFolderError(workspaceRegistry, folderId, "Workspace folder is unavailable.");
-    return serializeWorkspaceRegistry(workspaceRegistry);
-  }
-
-  try {
-    updateWorkspaceFolderSnapshot(workspaceRegistry, folderId, {
-      ...createDirectorySnapshot(resolvedDirectoryPath),
-      lastError: ""
-    });
-  } catch {
-    setWorkspaceFolderError(workspaceRegistry, folderId, "Workspace folder is unavailable.");
-  }
-
-  return serializeWorkspaceRegistry(workspaceRegistry);
-}
-
-function scheduleWorkspaceSnapshotPush(ownerWebContentsId, folderId) {
-  const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
-
-  if (ownerWatchers == null) {
-    return;
-  }
-
-  const workspaceWatcher = ownerWatchers.get(folderId);
-
-  if (workspaceWatcher === undefined) {
-    return;
-  }
-
-  if (workspaceWatcher.refreshTimeout !== 0) {
-    clearTimeout(workspaceWatcher.refreshTimeout);
-  }
-
-  workspaceWatcher.refreshTimeout = setTimeout(() => {
-    workspaceWatcher.refreshTimeout = 0;
-    refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId);
-    pushWorkspaceRegistryToOwner(ownerWebContentsId);
-  }, WORKSPACE_WATCH_DEBOUNCE_MS);
-}
-
-function watchWorkspaceDirectory(ownerWebContentsId, folderId, directoryPath) {
-  destroyWorkspaceWatcher(ownerWebContentsId, folderId);
-
-  try {
-    const watcher = fs.watch(directoryPath, { recursive: true }, () => {
-      scheduleWorkspaceSnapshotPush(ownerWebContentsId, folderId);
-    });
-
-    watcher.on("error", () => {
-      scheduleWorkspaceSnapshotPush(ownerWebContentsId, folderId);
-    });
-
-    getOwnerWorkspaceWatchers(ownerWebContentsId).set(folderId, {
-      watcher,
-      refreshTimeout: 0
-    });
-  } catch {
-    const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
-
-    if (workspaceRegistry !== null) {
-      setWorkspaceFolderError(workspaceRegistry, folderId, "Workspace folder watch is unavailable.");
-      pushWorkspaceRegistryToOwner(ownerWebContentsId);
-    }
-  }
-}
-
-function resolveDialogDefaultDirectory(ownerWebContentsId) {
-  return resolveExistingDirectoryPath(getActiveWorkspaceFolderForOwner(ownerWebContentsId)?.rootPath) ?? app.getPath("documents");
-}
-
-function openWorkspaceDirectoryForOwner(ownerWebContentsId, directoryPath) {
-  const resolvedDirectoryPath = resolveExistingDirectoryPath(directoryPath);
-
-  if (resolvedDirectoryPath === null) {
-    throw new Error("Selected workspace folder is unavailable.");
-  }
-
-  const canonicalDirectoryPath = fs.realpathSync(resolvedDirectoryPath);
-
-  const workspaceRegistry = getOwnerWorkspaceRegistry(ownerWebContentsId);
-  const snapshot = {
-    ...createDirectorySnapshot(canonicalDirectoryPath),
-    lastError: ""
-  };
-  const importResult = importWorkspaceFolder(workspaceRegistry, snapshot);
-
-  if (importResult.deduplicated) {
-    updateWorkspaceFolderSnapshot(workspaceRegistry, importResult.folderId, snapshot);
-  }
-
-  watchWorkspaceDirectory(ownerWebContentsId, importResult.folderId, canonicalDirectoryPath);
-  return serializeWorkspaceRegistry(workspaceRegistry);
-}
-
-function resetWorkspaceSessionForOwner(ownerWebContentsId) {
-  destroyOwnedWorkspaceWatchers(ownerWebContentsId);
-  workspaceRegistries.delete(ownerWebContentsId);
-}
-
-function chooseCanvasWorkspaceForOwner(ownerWebContentsId, directoryPath) {
-  const resolvedDirectoryPath = resolveExistingDirectoryPath(directoryPath);
-
-  if (resolvedDirectoryPath === null) {
-    throw new Error("Selected workspace folder is unavailable.");
-  }
-
-  const canonicalDirectoryPath = fs.realpathSync(resolvedDirectoryPath);
-  const workspaceRegistry = createWorkspaceRegistry();
-  const snapshot = {
-    ...createDirectorySnapshot(canonicalDirectoryPath),
-    lastError: ""
-  };
-  const importResult = importWorkspaceFolder(workspaceRegistry, snapshot);
-
-  destroyOwnedWorkspaceWatchers(ownerWebContentsId);
-  workspaceRegistries.set(ownerWebContentsId, workspaceRegistry);
-  watchWorkspaceDirectory(ownerWebContentsId, importResult.folderId, canonicalDirectoryPath);
-  return serializeWorkspaceRegistry(workspaceRegistry);
-}
-
-function restoreWorkspaceSessionForOwner(ownerWebContentsId, snapshot) {
-  resetWorkspaceSessionForOwner(ownerWebContentsId);
-
-  const importedRootPaths = Array.isArray(snapshot?.importedRootPaths)
-    ? snapshot.importedRootPaths.filter((rootPath) => typeof rootPath === "string")
-    : [];
-  const activeRootPath = typeof snapshot?.activeRootPath === "string" ? snapshot.activeRootPath : null;
-  let lastState = {
-    importedFolders: [],
-    activeFolderId: null
-  };
-
-  importedRootPaths.forEach((rootPath) => {
-    try {
-      lastState = openWorkspaceDirectoryForOwner(ownerWebContentsId, rootPath);
-    } catch {
-      // Skip missing or inaccessible workspace folders during session restore.
-    }
-  });
-
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
-
-  if (workspaceRegistry === null) {
-    return lastState;
-  }
-
-  if (activeRootPath !== null) {
-    const normalizedActiveRootPath = resolveExistingDirectoryPath(activeRootPath);
-    let canonicalActiveRootPath = null;
-
-    if (normalizedActiveRootPath !== null) {
-      try {
-        canonicalActiveRootPath = fs.realpathSync(normalizedActiveRootPath);
-      } catch {
-        canonicalActiveRootPath = null;
-      }
-    }
-
-    const matchingFolder = canonicalActiveRootPath === null
-      ? null
-      : [...workspaceRegistry.importedFolders.values()].find((folderRecord) => folderRecord.rootPath === canonicalActiveRootPath) ?? null;
-
-    if (matchingFolder !== null) {
-      activateWorkspaceFolder(workspaceRegistry, matchingFolder.id);
-      return refreshWorkspaceFolderForOwner(ownerWebContentsId, matchingFolder.id);
-    }
-  }
-
-  return workspaceRegistry.activeFolderId === null
-    ? serializeWorkspaceRegistry(workspaceRegistry)
-    : refreshWorkspaceFolderForOwner(ownerWebContentsId, workspaceRegistry.activeFolderId);
-}
-
 function escapeShellPathForSingleQuotes(targetPath) {
   return targetPath.replace(/'/g, "'\\''");
 }
@@ -821,6 +297,21 @@ function sendToOwner(ownerWebContentsId, channel, payload) {
   }
 }
 
+const workspaceService = createWorkspaceService({
+  app,
+  shell,
+  sendToOwner,
+  createDirectorySnapshotAsync,
+  readWorkspaceFilePreviewAsync,
+  resolveWorkspaceFilePath,
+  resolveExistingDirectoryPath,
+  workspaceWatchDebounceMs: WORKSPACE_WATCH_DEBOUNCE_MS
+});
+
+function resolveDialogDefaultDirectory(ownerWebContentsId) {
+  return workspaceService.getActiveFolderRootPath(ownerWebContentsId) ?? app.getPath("documents");
+}
+
 function isToggleActiveTerminalMaximizeShortcut(input) {
   return process.platform === "darwin"
     && input?.type === "keyDown"
@@ -865,8 +356,7 @@ function destroyOwnedWindowState(ownerWebContentsId) {
   destroyOwnedTerminalSessions(ownerWebContentsId, {
     preserveSession: shouldPreserveTerminalSessionsOnWindowClose()
   });
-  destroyOwnedWorkspaceWatchers(ownerWebContentsId);
-  workspaceRegistries.delete(ownerWebContentsId);
+  workspaceService.destroyOwner(ownerWebContentsId);
   activeTerminalShortcutStates.delete(ownerWebContentsId);
 }
 
@@ -1751,7 +1241,7 @@ app.on("web-contents-created", (_event, contents) => {
   });
 
   contents.on("did-finish-load", () => {
-    pushWorkspaceRegistryToOwner(contents.id);
+    workspaceService.pushState(contents.id);
   });
 
   contents.on("destroyed", () => {
@@ -1832,8 +1322,8 @@ ipcMain.on("terminal:active-state", (event, payload) => {
   activeTerminalShortcutStates.set(event.sender.id, payload?.hasActiveTerminal === true);
 });
 
-ipcMain.handle("workspace-session:restore", (event, payload) => {
-  return restoreWorkspaceSessionForOwner(event.sender.id, payload);
+ipcMain.handle("workspace-session:restore", async (event, payload) => {
+  return workspaceService.restoreSession(event.sender.id, payload);
 });
 
 ipcMain.handle("workspace-directory:open", async (event) => {
@@ -1855,7 +1345,7 @@ ipcMain.handle("workspace-directory:open", async (event) => {
     return { canceled: true };
   }
 
-  const snapshot = openWorkspaceDirectoryForOwner(event.sender.id, selectedPath);
+  const snapshot = await workspaceService.openDirectory(event.sender.id, selectedPath);
 
   return {
     canceled: false,
@@ -1884,235 +1374,124 @@ ipcMain.handle("workspace-directory:choose-canvas", async (event) => {
 
   return {
     canceled: false,
-    state: chooseCanvasWorkspaceForOwner(event.sender.id, selectedPath)
+    state: await workspaceService.chooseCanvasWorkspace(event.sender.id, selectedPath)
   };
 });
 
 ipcMain.handle("workspace-directory:state", (event) => {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
-
-  return workspaceRegistry === null
-    ? { importedFolders: [], activeFolderId: null }
-    : serializeWorkspaceRegistry(workspaceRegistry);
+  return workspaceService.getState(event.sender.id);
 });
 
-ipcMain.handle("workspace-directory:debug-open", (event, payload) => {
+ipcMain.handle("workspace-directory:debug-open", async (event, payload) => {
   if (process.env.CANVAS_SMOKE_TEST !== "1") {
     throw new Error("Workspace debug open is only available during smoke tests.");
   }
 
-  return chooseCanvasWorkspaceForOwner(
+  return workspaceService.chooseCanvasWorkspace(
     event.sender.id,
     typeof payload?.directoryPath === "string" ? payload.directoryPath : ""
   );
 });
 
-ipcMain.handle("workspace-folder:activate", (event, payload) => {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
-
-  if (workspaceRegistry === null) {
-    return {
-      importedFolders: [],
-      activeFolderId: null
-    };
-  }
-
-  activateWorkspaceFolder(
-    workspaceRegistry,
-    typeof payload?.folderId === "string" ? payload.folderId : ""
-  );
-
-  return refreshWorkspaceFolderForOwner(
+ipcMain.handle("workspace-folder:activate", async (event, payload) => {
+  return workspaceService.activateFolder(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : ""
   );
 });
 
-ipcMain.handle("workspace-folder:remove", (event, payload) => {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
-
-  if (workspaceRegistry === null) {
-    return {
-      importedFolders: [],
-      activeFolderId: null
-    };
-  }
-
+ipcMain.handle("workspace-folder:remove", async (event, payload) => {
   const folderId = typeof payload?.folderId === "string" ? payload.folderId : "";
-  destroyWorkspaceWatcher(event.sender.id, folderId);
-  removeWorkspaceFolder(workspaceRegistry, folderId);
-
-  if (workspaceRegistry.importedFolders.size === 0) {
-    workspaceRegistries.delete(event.sender.id);
-    return {
-      importedFolders: [],
-      activeFolderId: null
-    };
-  }
-
-  return workspaceRegistry.activeFolderId === null
-    ? serializeWorkspaceRegistry(workspaceRegistry)
-    : refreshWorkspaceFolderForOwner(event.sender.id, workspaceRegistry.activeFolderId);
+  return workspaceService.removeFolder(event.sender.id, folderId);
 });
 
 ipcMain.handle("workspace-folder:reorder", (event, payload) => {
-  const workspaceRegistry = getExistingOwnerWorkspaceRegistry(event.sender.id);
-
-  if (workspaceRegistry === null) {
-    return {
-      importedFolders: [],
-      activeFolderId: null
-    };
-  }
-
-  return reorderWorkspaceFolder(
-    workspaceRegistry,
+  return workspaceService.reorderFolder(
+    event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     Number.isFinite(payload?.targetIndex) ? payload.targetIndex : 0
-  ).state;
+  );
 });
 
-ipcMain.handle("workspace-directory:refresh", (event) => {
-  const workspaceFolder = getActiveWorkspaceFolderForOwner(event.sender.id);
-
-  if (workspaceFolder === null) {
-    return null;
-  }
-
-  return refreshWorkspaceFolderForOwner(event.sender.id, workspaceFolder.id);
+ipcMain.handle("workspace-directory:refresh", async (event) => {
+  return workspaceService.refreshActiveFolder(event.sender.id);
 });
 
-ipcMain.handle("workspace-file:read", (event, payload) => {
-  return readWorkspaceFilePreview(
-    getOwnedWorkspaceFileTarget(
-      event.sender.id,
-      typeof payload?.folderId === "string" ? payload.folderId : "",
-      typeof payload?.relativePath === "string" ? payload.relativePath : "",
-      "Open a workspace folder before previewing files."
-    ).rootPath,
+ipcMain.handle("workspace-file:read", async (event, payload) => {
+  return workspaceService.readFile(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
 });
 
-ipcMain.handle("workspace-file:write", (event, payload) => {
-  const resolvedTarget = getOwnedWorkspaceFileTarget(
+ipcMain.handle("workspace-file:write", async (event, payload) => {
+  return workspaceService.writeFile(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.relativePath === "string" ? payload.relativePath : "",
-    "Open a workspace folder before saving files."
-  );
-  const currentPreview = readWorkspaceFilePreview(
-    resolvedTarget.rootPath,
-    typeof payload?.relativePath === "string" ? payload.relativePath : ""
-  );
-
-  if (!isEditableWorkspacePreview(currentPreview)) {
-    throw new Error("Only text-like workspace files can be edited.");
-  }
-
-  const currentStats = fs.statSync(resolvedTarget.filePath);
-  const expectedLastModifiedMs = Number.isFinite(payload?.expectedLastModifiedMs)
-    ? Math.trunc(payload.expectedLastModifiedMs)
-    : null;
-
-  if (expectedLastModifiedMs !== null && Math.trunc(currentStats.mtimeMs) !== expectedLastModifiedMs) {
-    throw new Error("File changed on disk. Refresh and try again.");
-  }
-
-  fs.writeFileSync(
-    resolvedTarget.filePath,
     typeof payload?.textContents === "string" ? payload.textContents : "",
-    "utf8"
-  );
-
-  return readWorkspaceFilePreview(
-    resolvedTarget.rootPath,
-    typeof payload?.relativePath === "string" ? payload.relativePath : ""
+    payload?.expectedLastModifiedMs
   );
 });
 
 ipcMain.handle("workspace-file:open-external", async (event, payload) => {
-  return openOwnedWorkspaceEntry(
+  return workspaceService.openFileExternally(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
-    typeof payload?.relativePath === "string" ? payload.relativePath : "",
-    "Open a workspace folder before opening files externally."
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
 });
 
 ipcMain.handle("workspace-file:reveal", (event, payload) => {
-  return revealOwnedWorkspaceEntry(
+  return workspaceService.revealFile(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
-    typeof payload?.relativePath === "string" ? payload.relativePath : "",
-    "Open a workspace folder before revealing files."
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
 });
 
 ipcMain.handle("workspace-entry:reveal", (event, payload) => {
-  return revealOwnedWorkspaceEntry(
+  return workspaceService.revealEntry(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
-    typeof payload?.relativePath === "string" ? payload.relativePath : "",
-    "Open a workspace folder before revealing entries."
+    typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
 });
 
-ipcMain.handle("workspace-entry:create-file", (event, payload) => {
-  const createdEntry = createOwnedWorkspaceEntry(
-    event.sender.id,
-    typeof payload?.folderId === "string" ? payload.folderId : "",
-    typeof payload?.parentRelativePath === "string" ? payload.parentRelativePath : "",
-    payload?.name,
-    "file"
-  );
-
-  return {
-    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
-    relativePath: createdEntry.relativePath
-  };
-});
-
-ipcMain.handle("workspace-entry:create-directory", (event, payload) => {
-  const createdEntry = createOwnedWorkspaceEntry(
+ipcMain.handle("workspace-entry:create-file", async (event, payload) => {
+  return workspaceService.createFileWithRefresh(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.parentRelativePath === "string" ? payload.parentRelativePath : "",
-    payload?.name,
-    "directory"
+    payload?.name
   );
-
-  return {
-    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
-    relativePath: createdEntry.relativePath
-  };
 });
 
-ipcMain.handle("workspace-entry:rename", (event, payload) => {
-  const renamedEntry = renameOwnedWorkspaceEntry(
+ipcMain.handle("workspace-entry:create-directory", async (event, payload) => {
+  return workspaceService.createDirectoryWithRefresh(
+    event.sender.id,
+    typeof payload?.folderId === "string" ? payload.folderId : "",
+    typeof payload?.parentRelativePath === "string" ? payload.parentRelativePath : "",
+    payload?.name
+  );
+});
+
+ipcMain.handle("workspace-entry:rename", async (event, payload) => {
+  return workspaceService.renameEntryWithRefresh(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.relativePath === "string" ? payload.relativePath : "",
     payload?.nextName
   );
-
-  return {
-    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
-    relativePath: renamedEntry.relativePath
-  };
 });
 
-ipcMain.handle("workspace-entry:delete", (event, payload) => {
-  const deletedRelativePath = deleteOwnedWorkspaceEntry(
+ipcMain.handle("workspace-entry:delete", async (event, payload) => {
+  return workspaceService.deleteEntry(
     event.sender.id,
     typeof payload?.folderId === "string" ? payload.folderId : "",
     typeof payload?.relativePath === "string" ? payload.relativePath : ""
   );
-
-  return {
-    state: refreshWorkspaceRegistryAfterMutation(event.sender.id, typeof payload?.folderId === "string" ? payload.folderId : ""),
-    deletedRelativePath
-  };
 });
 
 ipcMain.handle("terminal:create", (event, payload) => {

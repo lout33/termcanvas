@@ -187,7 +187,7 @@ test("workspace-directory:choose-canvas replaces the owner's existing workspace 
     [fs.realpathSync(secondWorkspacePath)]
   );
 
-  restoreHandler({ sender: { id: 17 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 17 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -238,7 +238,7 @@ test("workspace-directory:choose-canvas preserves the current workspace when the
     [fs.realpathSync(firstWorkspacePath)]
   );
 
-  restoreHandler({ sender: { id: 23 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 23 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -296,8 +296,8 @@ test("workspace-file:open-external opens a file inside the owner workspace and r
     /Open a workspace folder before opening files externally\./u
   );
 
-  restoreHandler({ sender: { id: 41 } }, { importedRootPaths: [], activeRootPath: null });
-  restoreHandler({ sender: { id: 42 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 41 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 42 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -352,7 +352,7 @@ test("workspace-file:reveal shows a file in its folder and rejects paths outside
     /Workspace file preview must stay inside the workspace root\./u
   );
 
-  restoreHandler({ sender: { id: 51 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 51 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -409,8 +409,8 @@ test("workspace-file:reveal stays scoped to the caller's workspace registry", as
     fs.realpathSync(otherFilePath)
   ]);
 
-  restoreHandler({ sender: { id: 61 } }, { importedRootPaths: [], activeRootPath: null });
-  restoreHandler({ sender: { id: 62 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 61 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 62 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -468,7 +468,7 @@ test("workspace-entry:reveal supports files, directories, and the workspace root
     fs.realpathSync(workspacePath)
   ]);
 
-  restoreHandler({ sender: { id: 66 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 66 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -513,7 +513,7 @@ test("workspace-file:open-external surfaces shell.openPath errors", async () => 
     /Launch Services failed/u
   );
 
-  restoreHandler({ sender: { id: 71 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 71 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -583,7 +583,7 @@ test("workspace entry create, rename, and delete handlers update the owner works
   assert.equal(currentState.importedFolders[0].entries.some((entry) => entry.relativePath === "drafts"), true);
   assert.equal(currentState.importedFolders[0].entries.some((entry) => entry.relativePath === "drafts/todo-final.md"), false);
 
-  restoreHandler({ sender: { id: 81 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 81 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
@@ -641,7 +641,7 @@ test("workspace-file:write saves text-like files and rejects stale writes", asyn
   const nextMtime = new Date(Math.trunc(savedPreview.lastModifiedMs) + 5000);
   fs.utimesSync(filePath, nextMtime, nextMtime);
 
-  assert.throws(
+  await assert.rejects(
     () => writeHandler(
       { sender: { id: 91 } },
       {
@@ -654,7 +654,7 @@ test("workspace-file:write saves text-like files and rejects stale writes", asyn
     /changed on disk/u
   );
 
-  restoreHandler({ sender: { id: 91 } }, { importedRootPaths: [], activeRootPath: null });
+  await restoreHandler({ sender: { id: 91 } }, { importedRootPaths: [], activeRootPath: null });
   delete require.cache[mainPath];
   fs.rmSync(tempRoot, { recursive: true, force: true });
 

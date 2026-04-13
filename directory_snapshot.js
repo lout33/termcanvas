@@ -160,8 +160,13 @@ function createDirectorySnapshot(rootPath, options = {}) {
   };
 }
 
+async function createDirectorySnapshotAsync(rootPath, options = {}) {
+  return createDirectorySnapshot(rootPath, options);
+}
+
 module.exports = {
   DEFAULT_ENTRY_LIMIT,
   DEFAULT_IGNORED_DIRECTORY_NAMES,
+  createDirectorySnapshotAsync,
   createDirectorySnapshot
 };

@@ -293,9 +293,14 @@ function readWorkspaceFilePreview(rootPath, relativePath) {
   );
 }
 
+async function readWorkspaceFilePreviewAsync(rootPath, relativePath) {
+  return readWorkspaceFilePreview(rootPath, relativePath);
+}
+
 module.exports = {
   MAX_TEXT_PREVIEW_BYTES,
   MAX_BINARY_PREVIEW_BYTES,
   resolveWorkspaceFilePath,
+  readWorkspaceFilePreviewAsync,
   readWorkspaceFilePreview
 };
