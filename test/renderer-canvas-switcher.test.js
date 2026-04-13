@@ -4,7 +4,8 @@ const assert = require("node:assert/strict");
 const {
   deriveCanvasSwitcherViewModel,
   deriveCanvasStripOverflowState,
-  deriveTerminalStripViewModel
+  deriveTerminalStripViewModel,
+  deriveTerminalStripDropTarget
 } = require("../renderer_canvas_switcher.js");
 
 test("deriveCanvasSwitcherViewModel preserves canvas order for the strip and menu models", () => {
@@ -204,5 +205,35 @@ test("deriveTerminalStripViewModel preserves numeric node ids as clickable strin
       { id: "1", label: "server", isActive: false, isEmptyState: false },
       { id: "2", label: "database", isActive: true, isEmptyState: false }
     ]
+  });
+});
+
+test("deriveTerminalStripDropTarget returns a before-target insertion for pointers on the left half", () => {
+  const target = deriveTerminalStripDropTarget({
+    itemOffset: 100,
+    itemSize: 80,
+    pointerOffset: 110,
+    itemIndex: 2,
+    sourceIndex: 0
+  });
+
+  assert.deepEqual(target, {
+    targetIndex: 1,
+    isAfterTarget: false
+  });
+});
+
+test("deriveTerminalStripDropTarget returns an after-target insertion for pointers on the right half", () => {
+  const target = deriveTerminalStripDropTarget({
+    itemOffset: 100,
+    itemSize: 80,
+    pointerOffset: 170,
+    itemIndex: 1,
+    sourceIndex: 3
+  });
+
+  assert.deepEqual(target, {
+    targetIndex: 2,
+    isAfterTarget: true
   });
 });

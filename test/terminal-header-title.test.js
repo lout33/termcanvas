@@ -16,3 +16,10 @@ test("live terminal headers clear shell subtitles", () => {
     /function setNodeLiveState\(nodeRecord, shellName\) \{[\s\S]*nodeRecord\.meta\.textContent = "";/
   );
 });
+
+test("terminal strip items attach reorder handling for active canvas terminals", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /attachReorderableListItem\(stripItem, stripItem, \{/);
+  assert.match(renderer, /onMove: async \(_nodeId, targetIndex\) => reorderTerminalNodeById\(itemView\.id, targetIndex\)/);
+});

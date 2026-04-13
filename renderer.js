@@ -18,7 +18,8 @@ const {
 const {
   deriveCanvasSwitcherViewModel,
   deriveCanvasStripOverflowState,
-  deriveTerminalStripViewModel
+  deriveTerminalStripViewModel,
+  deriveTerminalStripDropTarget
 } = window.noteCanvasRendererCanvasSwitcher;
 const {
   shouldHandleCanvasWheel,
@@ -877,14 +878,26 @@ function attachReorderableListItem(item, handleElement, options) {
       event.dataTransfer.dropEffect = "move";
     }
 
-    const itemRect = item.getBoundingClientRect();
-    const isAfterTarget = (event.clientY - itemRect.top) > (itemRect.height / 2);
-    const rawTargetIndex = options.index + (isAfterTarget ? 1 : 0);
-    const adjustedTargetIndex = rawTargetIndex > listReorderState.sourceIndex
-      ? rawTargetIndex - 1
-      : rawTargetIndex;
+    const nextDropTarget = typeof options.getDropTarget === "function"
+      ? options.getDropTarget({
+        event,
+        item,
+        index: options.index,
+        sourceIndex: listReorderState.sourceIndex
+      })
+      : (() => {
+          const itemRect = item.getBoundingClientRect();
+          const isAfterTarget = (event.clientY - itemRect.top) > (itemRect.height / 2);
+          const rawTargetIndex = options.index + (isAfterTarget ? 1 : 0);
+          return {
+            targetIndex: rawTargetIndex > listReorderState.sourceIndex
+              ? rawTargetIndex - 1
+              : rawTargetIndex,
+            isAfterTarget
+          };
+        })();
 
-    updateListReorderTarget(item, adjustedTargetIndex, isAfterTarget);
+    updateListReorderTarget(item, nextDropTarget.targetIndex, nextDropTarget.isAfterTarget);
   });
 
   item.addEventListener("drop", (event) => {
@@ -919,6 +932,19 @@ function reorderCanvasById(canvasId, targetIndex) {
   const reorderedCanvases = moveArrayItemLocal(canvases, sourceIndex, targetIndex);
   canvases.splice(0, canvases.length, ...reorderedCanvases);
   renderCanvasSwitcher();
+  scheduleAppSessionSave();
+}
+
+function reorderTerminalNodeById(nodeId, targetIndex) {
+  const activeCanvas = getActiveCanvas();
+  const sourceIndex = activeCanvas?.nodes.findIndex((nodeRecord) => String(nodeRecord.id) === String(nodeId)) ?? -1;
+
+  if (activeCanvas === null || sourceIndex < 0 || sourceIndex === targetIndex) {
+    return;
+  }
+
+  activeCanvas.nodes = moveArrayItemLocal(activeCanvas.nodes, sourceIndex, targetIndex);
+  renderTerminalStrip();
   scheduleAppSessionSave();
 }
 
@@ -1508,6 +1534,28 @@ function createTerminalStripItem(itemView) {
     event.stopPropagation();
     activateNodeFromStrip(2);
   });
+
+  const itemIndex = getActiveCanvas()?.nodes.findIndex((nodeRecord) => String(nodeRecord.id) === itemView.id) ?? -1;
+
+  if (itemIndex >= 0) {
+    attachReorderableListItem(stripItem, stripItem, {
+      kind: "terminal-strip",
+      itemId: itemView.id,
+      index: itemIndex,
+      onMove: async (_nodeId, targetIndex) => reorderTerminalNodeById(itemView.id, targetIndex),
+      getDropTarget: ({ event, item, index, sourceIndex }) => {
+        const itemRect = item.getBoundingClientRect();
+
+        return deriveTerminalStripDropTarget({
+          itemOffset: itemRect.left,
+          itemSize: itemRect.width,
+          pointerOffset: event.clientX,
+          itemIndex: index,
+          sourceIndex
+        });
+      }
+    });
+  }
 
   return stripItem;
 }

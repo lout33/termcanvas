@@ -102,9 +102,25 @@
     };
   }
 
+  function deriveTerminalStripDropTarget({ itemOffset, itemSize, pointerOffset, itemIndex, sourceIndex }) {
+    const safeItemOffset = Number.isFinite(itemOffset) ? itemOffset : 0;
+    const safeItemSize = Number.isFinite(itemSize) ? Math.max(0, itemSize) : 0;
+    const safePointerOffset = Number.isFinite(pointerOffset) ? pointerOffset : safeItemOffset;
+    const safeItemIndex = Number.isFinite(itemIndex) ? Math.max(0, Math.trunc(itemIndex)) : 0;
+    const safeSourceIndex = Number.isFinite(sourceIndex) ? Math.max(0, Math.trunc(sourceIndex)) : 0;
+    const isAfterTarget = (safePointerOffset - safeItemOffset) > (safeItemSize / 2);
+    const rawTargetIndex = safeItemIndex + (isAfterTarget ? 1 : 0);
+
+    return {
+      targetIndex: rawTargetIndex > safeSourceIndex ? rawTargetIndex - 1 : rawTargetIndex,
+      isAfterTarget
+    };
+  }
+
   return {
     deriveCanvasSwitcherViewModel,
     deriveCanvasStripOverflowState,
-    deriveTerminalStripViewModel
+    deriveTerminalStripViewModel,
+    deriveTerminalStripDropTarget
   };
 });
