@@ -16,6 +16,7 @@ const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
 const TMUX_SESSION_PREFIX = "termcanvas";
 let cachedTmuxBinary = undefined;
+let cachedTmuxPtyBackendAvailability = null;
 
 function resolveShell() {
   return process.env.SHELL || "/bin/zsh";
@@ -94,6 +95,95 @@ function getTmuxBinary() {
 
 function getTmuxSessionName(sessionKey) {
   return `${TMUX_SESSION_PREFIX}-${sessionKey}`;
+}
+
+function waitForTmuxPtyBackend(tmuxBinary, cwd) {
+  return new Promise((resolve) => {
+    const probeSessionName = `${TMUX_SESSION_PREFIX}-probe-${process.pid}-${Date.now()}`;
+    const probeEnvironment = getTerminalEnvironment();
+    let probePty = null;
+    let isSettled = false;
+    let timeoutId = null;
+
+    const cleanup = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+
+      if (probePty !== null) {
+        try {
+          probePty.kill();
+        } catch {
+          // Best effort cleanup for a short-lived compatibility probe.
+        }
+      }
+
+      try {
+        destroyTmuxSession(probeSessionName);
+      } catch {
+        // The probe may already have crashed the tmux server.
+      }
+    };
+
+    const settle = (isAvailable) => {
+      if (isSettled) {
+        return;
+      }
+
+      isSettled = true;
+      cleanup();
+      resolve(isAvailable);
+    };
+
+    try {
+      createTmuxSession(probeSessionName, cwd);
+      probePty = pty.spawn(tmuxBinary, ["attach-session", "-t", probeSessionName], {
+        name: "xterm-256color",
+        cols: 80,
+        rows: 24,
+        cwd,
+        env: probeEnvironment
+      });
+
+      probePty.onData((data) => {
+        if (/server exited unexpectedly|open terminal failed|not a terminal/iu.test(data)) {
+          settle(false);
+        }
+      });
+
+      probePty.onExit(({ exitCode }) => {
+        settle(exitCode === 0);
+      });
+
+      timeoutId = setTimeout(() => {
+        settle(true);
+      }, 500);
+    } catch {
+      settle(false);
+    }
+  });
+}
+
+function getTmuxPtyBackendAvailability(cwd) {
+  const tmuxBinary = getTmuxBinary();
+
+  if (tmuxBinary === null) {
+    return Promise.resolve(false);
+  }
+
+  if (cachedTmuxPtyBackendAvailability === null) {
+    cachedTmuxPtyBackendAvailability = waitForTmuxPtyBackend(tmuxBinary, cwd).then((isAvailable) => {
+      if (!isAvailable) {
+        cachedTmuxBinary = null;
+        console.warn("tmux is installed but cannot run inside node-pty; falling back to plain shell PTYs.");
+      }
+
+      return isAvailable;
+    });
+  }
+
+  return cachedTmuxPtyBackendAvailability;
 }
 
 function runTmuxCommand(args) {
@@ -374,10 +464,14 @@ function ensureAuthorizedSession(event, terminalId) {
   return session;
 }
 
-function createTmuxClientSession(options) {
+async function createTmuxClientSession(options) {
   const tmuxBinary = getTmuxBinary();
 
   if (tmuxBinary === null) {
+    return null;
+  }
+
+  if (!await getTmuxPtyBackendAvailability(options.cwd)) {
     return null;
   }
 
@@ -564,7 +658,7 @@ async function runSmokeTest(window) {
     );
 
     if (!snapshot.firstTerminalText.includes("smoke-check")) {
-      throw new Error("Smoke test failed: terminal output did not include expected text.");
+      throw new Error(`Smoke test failed: terminal output did not include expected text. Snapshot: ${JSON.stringify(snapshot)}`);
     }
 
     logStep("toggle selected terminal maximize with Command+M");
@@ -1494,7 +1588,7 @@ ipcMain.handle("workspace-entry:delete", async (event, payload) => {
   );
 });
 
-ipcMain.handle("terminal:create", (event, payload) => {
+ipcMain.handle("terminal:create", async (event, payload) => {
   const { terminalId, cols, rows, cwd } = payload;
 
   if (typeof terminalId !== "string" || terminalId.trim().length === 0) {
@@ -1513,7 +1607,7 @@ ipcMain.handle("terminal:create", (event, payload) => {
   const sessionKey = normalizeTerminalSessionKey(payload?.sessionKey) ?? terminalId;
   const shouldEnforceRequestedCwd = typeof cwd === "string" && cwd.trim().length > 0;
 
-  const tmuxSession = createTmuxClientSession({
+  const tmuxSession = await createTmuxClientSession({
     ownerWebContentsId: event.sender.id,
     cols: safeCols,
     rows: safeRows,
@@ -1555,6 +1649,12 @@ ipcMain.handle("terminal:create", (event, payload) => {
 
   terminalPty.onExit(({ exitCode, signal }) => {
     if (!session.isDisposing) {
+      console.warn("Terminal session exited unexpectedly.", {
+        terminalId,
+        backend: session.backend,
+        exitCode,
+        signal
+      });
       sendToOwner(session.ownerWebContentsId, "terminal:exit", {
         terminalId,
         exitCode,
