@@ -158,6 +158,8 @@ let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
 let workspaceActionDialogResolve = null;
 let workspaceMarkdownEditor = null;
+let pendingWorkspacePreviewOwnSave = null;
+let pendingWorkspacePreviewSaveAfterCurrent = false;
 
 const workspacePreviewState = {
   folderId: null,
@@ -455,7 +457,9 @@ function setNodeMaximized(nodeRecord, shouldMaximize, options = {}) {
       if (candidateRecord !== nodeRecord && candidateRecord.isMaximized) {
         candidateRecord.isMaximized = false;
         candidateRecord.element?.classList.remove("is-maximized");
+        positionNode(candidateRecord);
         syncMaximizeButton(candidateRecord);
+        scheduleTerminalSizeSync([candidateRecord]);
       }
     });
 
@@ -2435,6 +2439,11 @@ function isMarkdownWorkspacePreview() {
   return workspacePreviewState.data?.language === "markdown";
 }
 
+function isEditableWorkspacePreviewData(previewData) {
+  const kind = typeof previewData?.kind === "string" ? previewData.kind : null;
+  return kind === "text" || kind === "json" || kind === "svg" || previewData?.language === "markdown";
+}
+
 function destroyWorkspaceMarkdownEditor() {
   if (workspaceMarkdownEditor === null) {
     return;
@@ -2452,6 +2461,82 @@ function updateWorkspacePreviewDraftText(nextText) {
   workspacePreviewState.draftText = typeof nextText === "string" ? nextText : "";
   workspacePreviewState.saveErrorMessage = "";
   syncWorkspacePreviewDirtyState();
+
+  if (workspacePreviewState.isSaving && workspacePreviewState.isDirty) {
+    pendingWorkspacePreviewSaveAfterCurrent = true;
+  }
+}
+
+function updateWorkspacePreviewInlineSaveState() {
+  if (!(fileInspector instanceof HTMLElement)) {
+    return;
+  }
+
+  const liveStatus = fileInspector.querySelector(".file-inspector-status");
+
+  if (liveStatus instanceof HTMLElement) {
+    if (workspacePreviewState.saveErrorMessage.length > 0) {
+      liveStatus.dataset.status = "error";
+      liveStatus.textContent = "Error";
+    } else if (workspacePreviewState.isSaving) {
+      liveStatus.dataset.status = "saving";
+      liveStatus.textContent = "Saving";
+    } else if (workspacePreviewState.isDirty) {
+      liveStatus.dataset.status = "dirty";
+      liveStatus.textContent = "Unsaved";
+    } else {
+      liveStatus.dataset.status = "ready";
+      liveStatus.textContent = "Ready";
+    }
+  }
+
+  const saveBanner = fileInspector.querySelector("[data-file-inspector-save-banner]");
+
+  if (saveBanner instanceof HTMLElement) {
+    if (workspacePreviewState.saveErrorMessage.length > 0) {
+      saveBanner.className = "file-inspector-error file-inspector-banner";
+      saveBanner.textContent = workspacePreviewState.saveErrorMessage;
+    } else if (workspacePreviewState.isSaving) {
+      saveBanner.className = "file-inspector-empty file-inspector-banner";
+      saveBanner.textContent = "Saving changes...";
+    } else if (workspacePreviewState.isDirty) {
+      saveBanner.className = "file-inspector-empty file-inspector-banner";
+      saveBanner.textContent = "Unsaved changes. Changes save when you leave the editor or press Cmd+S.";
+    } else {
+      saveBanner.remove();
+    }
+  }
+}
+
+function setPendingWorkspacePreviewOwnSave(folderId, relativePath) {
+  pendingWorkspacePreviewOwnSave = {
+    folderId,
+    relativePath,
+    expiresAt: Date.now() + 5000
+  };
+}
+
+function clearPendingWorkspacePreviewOwnSave(folderId, relativePath) {
+  if (
+    pendingWorkspacePreviewOwnSave?.folderId === folderId
+    && pendingWorkspacePreviewOwnSave?.relativePath === relativePath
+  ) {
+    pendingWorkspacePreviewOwnSave = null;
+  }
+}
+
+function shouldSuppressWorkspacePreviewOwnSaveRefresh(folderId, relativePath) {
+  if (pendingWorkspacePreviewOwnSave === null) {
+    return false;
+  }
+
+  if (Date.now() > pendingWorkspacePreviewOwnSave.expiresAt) {
+    pendingWorkspacePreviewOwnSave = null;
+    return false;
+  }
+
+  return pendingWorkspacePreviewOwnSave.folderId === folderId
+    && pendingWorkspacePreviewOwnSave.relativePath === relativePath;
 }
 
 function clearWorkspacePreviewObjectUrl() {
@@ -2520,8 +2605,8 @@ function setScopedWorkspacePreviewActionErrorMessage({ folderId, relativePath, m
 
 function setWorkspacePreviewViewMode(viewMode) {
   if (isMarkdownWorkspacePreview()) {
-    workspacePreviewState.viewMode = "source";
-    workspacePreviewState.isEditing = true;
+    workspacePreviewState.viewMode = viewMode === "source" ? "source" : "render";
+    workspacePreviewState.isEditing = viewMode === "source";
     workspacePreviewState.saveErrorMessage = "";
     renderFileInspector();
     return;
@@ -2546,7 +2631,8 @@ function startWorkspacePreviewEdit() {
 }
 
 function cancelWorkspacePreviewEdit() {
-  workspacePreviewState.isEditing = isMarkdownWorkspacePreview() && workspacePreviewState.viewMode === "source";
+  workspacePreviewState.isEditing = false;
+  workspacePreviewState.viewMode = isMarkdownWorkspacePreview() ? "render" : workspacePreviewState.viewMode;
   updateWorkspacePreviewDraftText(
     typeof workspacePreviewState.data?.textContents === "string"
       ? workspacePreviewState.data.textContents
@@ -2561,18 +2647,30 @@ async function saveWorkspacePreviewText() {
     return null;
   }
 
+  if (!workspacePreviewState.isDirty || workspacePreviewState.isSaving) {
+    if (workspacePreviewState.isSaving && workspacePreviewState.isDirty) {
+      pendingWorkspacePreviewSaveAfterCurrent = true;
+    }
+
+    return workspacePreviewState.data;
+  }
+
   const actionFolderId = workspacePreviewState.folderId;
   const actionRelativePath = workspacePreviewState.relativePath;
-  const shouldRemainEditing = isMarkdownWorkspacePreview() || workspacePreviewState.viewMode === "source";
+  const shouldRemainEditing = workspacePreviewState.viewMode === "source";
+  const savedText = workspacePreviewState.draftText;
 
+  pendingWorkspacePreviewSaveAfterCurrent = false;
   workspacePreviewState.isSaving = true;
-  renderFileInspector();
+  workspacePreviewState.saveErrorMessage = "";
+  setPendingWorkspacePreviewOwnSave(actionFolderId, actionRelativePath);
+  updateWorkspacePreviewInlineSaveState();
 
   try {
     const savedPreview = await window.noteCanvas.saveWorkspaceFile(
       actionFolderId,
       actionRelativePath,
-      workspacePreviewState.draftText,
+      savedText,
       workspacePreviewState.data?.lastModifiedMs ?? null
     );
 
@@ -2580,18 +2678,34 @@ async function saveWorkspacePreviewText() {
       return null;
     }
 
-    workspacePreviewState.data = savedPreview;
+    workspacePreviewState.data = {
+      ...savedPreview,
+      textContents: savedText
+    };
     workspacePreviewState.status = "ready";
     workspacePreviewState.errorMessage = "";
     workspacePreviewState.actionErrorMessage = "";
     workspacePreviewState.isEditing = shouldRemainEditing;
-    workspacePreviewState.draftText = savedPreview.textContents ?? "";
     workspacePreviewState.saveErrorMessage = "";
-    workspacePreviewState.isDirty = false;
+    if (workspacePreviewState.draftText === savedText) {
+      workspacePreviewState.draftText = savedText;
+      workspacePreviewState.isDirty = false;
+    } else {
+      workspacePreviewState.isDirty = workspacePreviewState.draftText !== savedText;
+    }
     workspacePreviewState.isSaving = false;
-    renderFileInspector();
+    updateWorkspacePreviewInlineSaveState();
+
+    if (pendingWorkspacePreviewSaveAfterCurrent && workspacePreviewState.isDirty) {
+      window.setTimeout(() => {
+        void saveWorkspacePreviewText();
+      }, 0);
+    }
+
     return savedPreview;
   } catch (error) {
+    clearPendingWorkspacePreviewOwnSave(actionFolderId, actionRelativePath);
+    pendingWorkspacePreviewSaveAfterCurrent = false;
     workspacePreviewState.saveErrorMessage = error instanceof Error ? error.message : String(error);
     workspacePreviewState.isSaving = false;
     renderFileInspector();
@@ -2666,6 +2780,26 @@ function renderFileInspector() {
   destroyWorkspaceMarkdownEditor();
   const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
   const isMarkdownFile = isMarkdownWorkspacePreview();
+  const relativePath = workspacePreviewState.relativePath ?? "";
+  const statusLabel = (() => {
+    if (workspacePreviewState.status === "loading") {
+      return "Loading";
+    }
+
+    if (workspacePreviewState.status === "error") {
+      return "Error";
+    }
+
+    if (workspacePreviewState.isSaving) {
+      return "Saving";
+    }
+
+    if (workspacePreviewState.isDirty) {
+      return "Unsaved";
+    }
+
+    return previewViewModel.mode === "fallback" ? "Limited preview" : "Ready";
+  })();
 
   const fragment = document.createDocumentFragment();
   const header = document.createElement("div");
@@ -2674,110 +2808,52 @@ function renderFileInspector() {
   const heading = document.createElement("div");
   heading.className = "file-inspector-heading";
 
+  const eyebrow = document.createElement("div");
+  eyebrow.className = "file-inspector-eyebrow";
+  eyebrow.textContent = "Document Preview";
+
   const title = document.createElement("div");
   title.className = "file-inspector-title";
   title.textContent = previewViewModel.fileName || getWorkspaceEntryName(workspacePreviewState.relativePath);
   title.title = title.textContent;
 
-  const pathMeta = document.createElement("div");
+  const pathMeta = document.createElement("nav");
   pathMeta.className = "file-inspector-path";
-  pathMeta.textContent = workspacePreviewState.relativePath;
-  pathMeta.title = workspacePreviewState.relativePath;
+  pathMeta.setAttribute("aria-label", "Preview file path");
+  pathMeta.title = relativePath;
 
-  const typeBadge = document.createElement("div");
+  relativePath.split("/").filter(Boolean).forEach((pathPart, index, pathParts) => {
+    const crumb = document.createElement("span");
+    crumb.className = "file-inspector-path-crumb";
+    crumb.textContent = pathPart;
+    pathMeta.append(crumb);
+
+    if (index < pathParts.length - 1) {
+      const separator = document.createElement("span");
+      separator.className = "file-inspector-path-separator";
+      separator.textContent = "/";
+      pathMeta.append(separator);
+    }
+  });
+
+  const metaRow = document.createElement("div");
+  metaRow.className = "file-inspector-meta-row";
+
+  const typeBadge = document.createElement("span");
   typeBadge.className = "file-inspector-type";
   typeBadge.textContent = previewViewModel.typeLabel;
 
-  heading.append(title, pathMeta, typeBadge);
+  const statusBadge = document.createElement("span");
+  statusBadge.className = "file-inspector-status";
+  statusBadge.dataset.status = workspacePreviewState.status === "error"
+    ? "error"
+    : (workspacePreviewState.isSaving ? "saving" : (workspacePreviewState.isDirty ? "dirty" : "ready"));
+  statusBadge.textContent = statusLabel;
 
-  const actions = document.createElement("div");
-  actions.className = "file-inspector-actions";
+  metaRow.append(typeBadge, statusBadge);
+  heading.append(eyebrow, title, pathMeta, metaRow);
 
-  if (!isMarkdownFile && previewViewModel.canRender && workspacePreviewState.isEditing !== true) {
-    const renderButton = document.createElement("button");
-    renderButton.className = "canvas-secondary-button file-inspector-button";
-    renderButton.type = "button";
-    renderButton.textContent = "Render";
-    renderButton.classList.toggle("is-active", previewViewModel.viewMode === "render");
-    renderButton.disabled = previewViewModel.viewMode === "render";
-    renderButton.addEventListener("click", () => {
-      setWorkspacePreviewViewMode("render");
-    });
-
-    const sourceButton = document.createElement("button");
-    sourceButton.className = "canvas-secondary-button file-inspector-button";
-    sourceButton.type = "button";
-    sourceButton.textContent = "Source";
-    sourceButton.classList.toggle("is-active", previewViewModel.viewMode === "source");
-    sourceButton.disabled = previewViewModel.viewMode === "source";
-    sourceButton.addEventListener("click", () => {
-      setWorkspacePreviewViewMode("source");
-    });
-
-    actions.append(renderButton, sourceButton);
-  }
-
-  if (!isMarkdownFile && previewViewModel.canEdit) {
-    if (workspacePreviewState.isEditing) {
-      const saveButton = document.createElement("button");
-      saveButton.className = "canvas-secondary-button file-inspector-button";
-      saveButton.type = "button";
-      saveButton.textContent = "Save";
-      saveButton.addEventListener("click", () => {
-        void saveWorkspacePreviewText();
-      });
-
-      const cancelButton = document.createElement("button");
-      cancelButton.className = "canvas-secondary-button file-inspector-button";
-      cancelButton.type = "button";
-      cancelButton.textContent = "Cancel";
-      cancelButton.addEventListener("click", () => {
-        cancelWorkspacePreviewEdit();
-      });
-
-      actions.append(saveButton, cancelButton);
-    } else {
-      const editButton = document.createElement("button");
-      editButton.className = "canvas-secondary-button file-inspector-button";
-      editButton.type = "button";
-      editButton.textContent = "Edit";
-      editButton.addEventListener("click", () => {
-        startWorkspacePreviewEdit();
-      });
-      actions.append(editButton);
-    }
-  }
-
-  let refreshButton = null;
-
-  if (!isMarkdownFile) {
-    refreshButton = document.createElement("button");
-    refreshButton.className = "canvas-secondary-button file-inspector-button";
-    refreshButton.type = "button";
-    refreshButton.dataset.fileInspectorAction = "refresh";
-    refreshButton.textContent = workspacePreviewState.status === "loading" ? "Loading" : "Refresh";
-    refreshButton.disabled = workspacePreviewState.status === "loading" || workspacePreviewState.isSaving === true;
-    refreshButton.addEventListener("click", () => {
-      void refreshSelectedWorkspaceFilePreview();
-    });
-  }
-
-  const closeButton = document.createElement("button");
-  closeButton.className = "canvas-secondary-button file-inspector-button";
-  closeButton.type = "button";
-  closeButton.dataset.fileInspectorAction = "close";
-  closeButton.setAttribute("aria-label", "Close preview with Command+L");
-  closeButton.textContent = "Close";
-  closeButton.addEventListener("click", () => {
-    closeWorkspacePreview();
-  });
-
-  if (refreshButton !== null) {
-    actions.append(refreshButton);
-  }
-
-  actions.append(closeButton);
-  header.append(heading, actions);
+  header.append(heading);
   fragment.append(header);
 
   const body = document.createElement("div");
@@ -2787,6 +2863,7 @@ function renderFileInspector() {
   if (isMarkdownFile) {
     if (workspacePreviewState.isDirty || workspacePreviewState.saveErrorMessage.length > 0) {
       const banner = document.createElement("div");
+      banner.dataset.fileInspectorSaveBanner = "true";
       banner.className = workspacePreviewState.saveErrorMessage.length > 0
         ? "file-inspector-error file-inspector-banner"
         : "file-inspector-empty file-inspector-banner";
@@ -2809,12 +2886,25 @@ function renderFileInspector() {
       editor.spellcheck = false;
       editor.addEventListener("input", () => {
         updateWorkspacePreviewDraftText(editor.value);
+        updateWorkspacePreviewInlineSaveState();
+      });
+      editor.addEventListener("blur", () => {
+        if (workspacePreviewState.isDirty && workspacePreviewState.isSaving !== true) {
+          void saveWorkspacePreviewText();
+        }
+      });
+      editor.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          void saveWorkspacePreviewText();
+        }
       });
       body.append(editor);
 
       if (workspacePreviewState.saveErrorMessage.length > 0) {
         const saveError = document.createElement("div");
         saveError.className = "file-inspector-error";
+        saveError.dataset.fileInspectorSaveBanner = "true";
         saveError.textContent = workspacePreviewState.saveErrorMessage;
         body.append(saveError);
       }
@@ -2942,6 +3032,7 @@ function renderFileInspector() {
       },
       onChange: (nextText) => {
         updateWorkspacePreviewDraftText(nextText);
+        updateWorkspacePreviewInlineSaveState();
       },
       onSaveShortcut: () => {
         void saveWorkspacePreviewText();
@@ -3005,7 +3096,7 @@ async function loadWorkspaceFilePreview(relativePath, options = {}) {
     workspacePreviewState.isDirty = false;
     workspacePreviewState.isSaving = false;
 
-    if (preview.language === "markdown") {
+    if (isEditableWorkspacePreviewData(preview)) {
       workspacePreviewState.viewMode = "source";
       workspacePreviewState.isEditing = true;
     }
@@ -3491,10 +3582,27 @@ function applyWorkspaceState(nextState, options = {}) {
   }
 
   const previewFolder = workspacePreviewState.folderId === null ? null : getWorkspaceFolderById(workspacePreviewState.folderId);
+  const previewFileStillExists = previewFolder !== null
+    && getWorkspaceFilePaths(previewFolder).has(workspacePreviewState.relativePath);
+  const shouldSuppressOpenPreviewRefresh = previewFileStillExists
+    && shouldSuppressWorkspacePreviewOwnSaveRefresh(
+      workspacePreviewState.folderId,
+      workspacePreviewState.relativePath
+    );
+  const shouldAutoRefreshOpenPreview = options.skipCanvasWorkspaceSync !== true
+    && shouldSuppressOpenPreviewRefresh !== true
+    && previewFolder !== null
+    && isWorkspacePreviewOpen()
+    && previewFileStillExists
+    && workspacePreviewState.isDirty !== true
+    && workspacePreviewState.isSaving !== true
+    && workspacePreviewState.status !== "loading"
+    && typeof workspacePreviewState.relativePath === "string";
+  const autoRefreshRelativePath = shouldAutoRefreshOpenPreview ? workspacePreviewState.relativePath : null;
 
   if (
     previewFolder === null
-    || !getWorkspaceFilePaths(previewFolder).has(workspacePreviewState.relativePath)
+    || !previewFileStillExists
   ) {
     clearWorkspacePreview({
       skipCanvasWorkspaceSync: options.skipCanvasWorkspaceSync,
@@ -3505,13 +3613,37 @@ function applyWorkspaceState(nextState, options = {}) {
   syncWorkspaceSelectionWithState();
 
   renderWorkspaceBrowser();
-  renderFileInspector();
+
+  if (shouldSuppressOpenPreviewRefresh) {
+    if (workspacePreviewState.isSaving !== true) {
+      clearPendingWorkspacePreviewOwnSave(
+        workspacePreviewState.folderId,
+        workspacePreviewState.relativePath
+      );
+    }
+
+    updateWorkspacePreviewInlineSaveState();
+  } else {
+    renderFileInspector();
+  }
 
   if (options.skipCanvasWorkspaceSync !== true) {
     captureActiveCanvasWorkspaceSnapshot();
   }
 
   scheduleAppSessionSave();
+
+  if (typeof autoRefreshRelativePath === "string" && getWorkspaceFilePaths(getActiveWorkspaceFolder()).has(autoRefreshRelativePath)) {
+    window.setTimeout(() => {
+      if (
+        workspacePreviewState.relativePath === autoRefreshRelativePath
+        && workspacePreviewState.isDirty !== true
+        && workspacePreviewState.isSaving !== true
+      ) {
+        void loadWorkspaceFilePreview(autoRefreshRelativePath, { preserveViewMode: true });
+      }
+    }, 0);
+  }
 }
 
 async function refreshWorkspaceDirectory(options = {}) {
@@ -5646,13 +5778,8 @@ if (window.noteCanvas.isSmokeTest) {
       return getCanvasSnapshot();
     },
     refreshSelectedWorkspaceFilePreview: async () => {
-      const refreshButton = fileInspector?.querySelector('[data-file-inspector-action="refresh"]');
-
-      if (refreshButton instanceof HTMLButtonElement) {
-        refreshButton.click();
-        await waitForAnimationFrame();
-      }
-
+      await refreshSelectedWorkspaceFilePreview();
+      await waitForAnimationFrame();
       return getCanvasSnapshot();
     },
     populateWorkspaceEntries: async (count = 120) => {
