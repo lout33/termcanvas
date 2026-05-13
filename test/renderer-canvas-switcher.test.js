@@ -8,7 +8,7 @@ const {
   deriveTerminalStripDropTarget
 } = require("../renderer_canvas_switcher.js");
 
-test("deriveCanvasSwitcherViewModel preserves canvas order for the strip and menu models", () => {
+test("deriveCanvasSwitcherViewModel preserves canvas order for the strip model", () => {
   const viewModel = deriveCanvasSwitcherViewModel({
     canvases: [
       {
@@ -50,28 +50,10 @@ test("deriveCanvasSwitcherViewModel preserves canvas order for the strip and men
       canDelete: true
     }]
   });
-  assert.deepEqual(viewModel.menu, {
-    label: "Manage canvases",
-    isExpanded: true,
-    items: [{
-      id: "canvas-a",
-      name: "Alpha",
-      terminalSummary: "2 terminals",
-      isActive: true,
-      isRenaming: false,
-      canDelete: true
-    }, {
-      id: "canvas-b",
-      name: "Beta",
-      terminalSummary: "0 terminals",
-      isActive: false,
-      isRenaming: false,
-      canDelete: true
-    }]
-  });
+  assert.equal(viewModel.menu, undefined);
 });
 
-test("deriveCanvasSwitcherViewModel keeps active and renaming flags in both strip and menu models", () => {
+test("deriveCanvasSwitcherViewModel keeps active and renaming flags in the strip model", () => {
   const viewModel = deriveCanvasSwitcherViewModel({
     canvases: [{
       id: "canvas-b",
@@ -95,18 +77,7 @@ test("deriveCanvasSwitcherViewModel keeps active and renaming flags in both stri
       canDelete: false
     }]
   });
-  assert.deepEqual(viewModel.menu, {
-    label: "Manage canvases",
-    isExpanded: false,
-    items: [{
-      id: "canvas-b",
-      name: "Beta",
-      terminalSummary: "1 terminal",
-      isActive: true,
-      isRenaming: true,
-      canDelete: false
-    }]
-  });
+  assert.equal(viewModel.menu, undefined);
 });
 
 test("deriveCanvasStripOverflowState reports when a strip can scroll in either direction", () => {

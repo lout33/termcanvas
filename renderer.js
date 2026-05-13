@@ -65,9 +65,6 @@ const boardZoomInButton = document.getElementById("board-zoom-in-button");
 const boardCenterViewButton = document.getElementById("board-center-view-button");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
-const canvasSwitcherButton = document.getElementById("canvas-switcher-button");
-const canvasSwitcherMenu = document.getElementById("canvas-switcher-menu");
-const canvasSwitcherMenuBody = document.getElementById("canvas-switcher-menu-body");
 const canvasStripList = document.getElementById("canvas-strip-list");
 const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
 const canvasStripNextButton = document.getElementById("canvas-strip-next-button");
@@ -78,8 +75,6 @@ const terminalStripNextButton = document.getElementById("terminal-strip-next-but
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
-const exportAppSessionButton = document.getElementById("export-app-session-button");
-const importAppSessionButton = document.getElementById("import-app-session-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
 const createWorkspaceFileButton = document.getElementById("create-workspace-file-button");
@@ -531,13 +526,29 @@ function setNodeExitedState(nodeRecord, exitCode, signal) {
   scheduleAppSessionSave();
 }
 
-function setNodeLiveState(nodeRecord, shellName) {
+function formatTerminalMeta(nodeRecord) {
+  const backendLabel = nodeRecord.backend === "tmux"
+    ? `tmux: ${nodeRecord.tmuxSessionName ?? `termcanvas-${nodeRecord.sessionKey}`}`
+    : `pty: ${nodeRecord.sessionKey}`;
+  return `${nodeRecord.shellName} · ${backendLabel}`;
+}
+
+function syncTerminalMeta(nodeRecord) {
+  const metaText = formatTerminalMeta(nodeRecord);
+  nodeRecord.meta.textContent = metaText;
+  nodeRecord.meta.title = metaText;
+}
+
+function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessionKey) {
   nodeRecord.isExited = false;
   nodeRecord.exitCode = null;
   nodeRecord.exitSignal = null;
   nodeRecord.shellName = shellName;
+  nodeRecord.backend = backend;
+  nodeRecord.tmuxSessionName = tmuxSessionName;
+  nodeRecord.sessionKey = sessionKey;
   nodeRecord.status.textContent = "Live";
-  nodeRecord.meta.textContent = "";
+  syncTerminalMeta(nodeRecord);
   nodeRecord.element.classList.remove("is-exited");
   updateExitedOverlay(nodeRecord);
   scheduleAppSessionSave();
@@ -621,7 +632,13 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       return;
     }
 
-    setNodeLiveState(nodeRecord, created.shellName);
+    setNodeLiveState(
+      nodeRecord,
+      created.shellName,
+      created.backend,
+      typeof created.tmuxSessionName === "string" ? created.tmuxSessionName : null,
+      typeof created.sessionKey === "string" ? created.sessionKey : nodeRecord.sessionKey
+    );
     nodeRecord.cwd = typeof created.cwd === "string" && created.cwd.length > 0 ? created.cwd : nodeRecord.cwd;
 
     const dataDisposable = terminal.onData((data) => {
@@ -712,7 +729,7 @@ function beginCanvasRename(canvasId) {
   }
 
   if (activeCanvasRenameId === canvasId) {
-    const activeRenameInput = canvasSwitcherMenu?.querySelector(`[data-canvas-id="${canvasId}"][data-canvas-part="rename-input"]`);
+    const activeRenameInput = canvasStripList?.querySelector(`[data-canvas-id="${canvasId}"][data-canvas-part="rename-input"]`);
 
     if (activeRenameInput instanceof HTMLInputElement) {
       activeRenameInput.focus();
@@ -722,7 +739,7 @@ function beginCanvasRename(canvasId) {
   }
 
   if (activeCanvasRenameId !== null && activeCanvasRenameId !== canvasId) {
-    const activeRenameInput = canvasSwitcherMenu?.querySelector(`[data-canvas-id="${activeCanvasRenameId}"][data-canvas-part="rename-input"]`);
+    const activeRenameInput = canvasStripList?.querySelector(`[data-canvas-id="${activeCanvasRenameId}"][data-canvas-part="rename-input"]`);
 
     if (activeRenameInput instanceof HTMLInputElement) {
       commitCanvasRename(activeCanvasRenameId, activeRenameInput.value);
@@ -732,7 +749,7 @@ function beginCanvasRename(canvasId) {
   }
 
   activeCanvasRenameId = canvasId;
-  isCanvasSwitcherMenuOpen = true;
+  isCanvasSwitcherMenuOpen = false;
   pendingCanvasListFocus = {
     canvasId,
     part: "rename-input",
@@ -755,7 +772,7 @@ function commitCanvasRename(canvasId, rawName, options = {}) {
   if (options.restoreFocus === true) {
     pendingCanvasListFocus = {
       canvasId,
-      part: "switch"
+      part: "strip-switch"
     };
   }
 
@@ -771,7 +788,7 @@ function cancelCanvasRename(canvasId, options = {}) {
   if (options.restoreFocus === true) {
     pendingCanvasListFocus = {
       canvasId,
-      part: "switch"
+      part: "strip-switch"
     };
   }
 
@@ -779,14 +796,14 @@ function cancelCanvasRename(canvasId, options = {}) {
 }
 
 function focusPendingCanvasListControl() {
-  if (!(canvasSwitcherMenu instanceof HTMLElement) || pendingCanvasListFocus === null) {
+  if (!(canvasStripList instanceof HTMLElement) || pendingCanvasListFocus === null) {
     return;
   }
 
   const { canvasId, part, selectText } = pendingCanvasListFocus;
   pendingCanvasListFocus = null;
   const selector = `[data-canvas-id="${canvasId}"][data-canvas-part="${part}"]`;
-  const target = canvasSwitcherMenu.querySelector(selector);
+  const target = canvasStripList.querySelector(selector);
 
   if (!(target instanceof HTMLElement)) {
     return;
@@ -1265,19 +1282,13 @@ function toggleSidebar() {
 
 function setCanvasSwitcherMenuOpen(nextValue, options = {}) {
   isCanvasSwitcherMenuOpen = nextValue === true;
-  const shouldShowMenu = isCanvasSwitcherMenuOpen || activeCanvasRenameId !== null;
-
-  if (canvasSwitcherButton instanceof HTMLButtonElement) {
-    canvasSwitcherButton.setAttribute("aria-expanded", String(shouldShowMenu));
-    canvasSwitcherButton.classList.toggle("is-open", shouldShowMenu);
-  }
-
-  if (canvasSwitcherMenu instanceof HTMLElement) {
-    canvasSwitcherMenu.hidden = !shouldShowMenu;
-  }
 
   if (options.restoreFocus === true) {
-    canvasSwitcherButton?.focus();
+    const activeCanvas = getActiveCanvas();
+    const activeCanvasButton = activeCanvas === null
+      ? null
+      : canvasStripList?.querySelector(`[data-canvas-id="${activeCanvas.id}"][data-canvas-part="strip-switch"]`);
+    activeCanvasButton?.focus();
   }
 }
 
@@ -1881,28 +1892,27 @@ function renderCanvas(options = {}) {
   }
 }
 
-function createCanvasSwitcherMenuItem(itemView) {
+function createCanvasStripItem(itemView) {
   const canvasRecord = getCanvasById(itemView.id);
 
   if (canvasRecord === null) {
-    return document.createElement("li");
+    return document.createElement("span");
   }
 
-  const item = document.createElement("li");
-  item.className = "canvas-list-item";
-  item.classList.toggle("is-active", itemView.isActive);
-  const isRenaming = itemView.isRenaming;
-  const canvasIndex = canvases.findIndex((candidate) => candidate.id === canvasRecord.id);
-  let reorderHandle = null;
+  const stripItem = document.createElement("div");
+  stripItem.className = "canvas-strip-item";
+  stripItem.title = `${canvasRecord.name} • ${itemView.terminalSummary}`;
+  stripItem.dataset.canvasId = canvasRecord.id;
 
-  if (isRenaming) {
-    const editor = document.createElement("div");
-    editor.className = "canvas-list-editor";
+  if (itemView.isActive) {
+    stripItem.classList.add("is-active");
+  }
+
+  if (itemView.isRenaming) {
     let didCommitFromKeyboard = false;
     let didCancelFromKeyboard = false;
-
     const nameInput = document.createElement("input");
-    nameInput.className = "canvas-list-input";
+    nameInput.className = "canvas-strip-input";
     nameInput.type = "text";
     nameInput.value = canvasRecord.name;
     nameInput.maxLength = MAX_CANVAS_NAME_LENGTH;
@@ -1911,21 +1921,15 @@ function createCanvasSwitcherMenuItem(itemView) {
     nameInput.dataset.canvasId = canvasRecord.id;
     nameInput.dataset.canvasPart = "rename-input";
 
-    const meta = document.createElement("span");
-    meta.className = "canvas-list-meta";
-    meta.textContent = itemView.terminalSummary;
-
     nameInput.addEventListener("blur", () => {
       window.setTimeout(() => {
         if (didCommitFromKeyboard || didCancelFromKeyboard) {
           return;
         }
 
-        if (activeCanvasRenameId !== canvasRecord.id) {
-          return;
+        if (activeCanvasRenameId === canvasRecord.id) {
+          commitCanvasRename(canvasRecord.id, nameInput.value);
         }
-
-        commitCanvasRename(canvasRecord.id, nameInput.value);
       }, 0);
     });
 
@@ -1946,67 +1950,48 @@ function createCanvasSwitcherMenuItem(itemView) {
       }
     });
 
-    editor.append(nameInput, meta);
-    item.append(editor);
-  } else {
-    const switchButton = document.createElement("button");
-    switchButton.className = "canvas-list-button";
-    switchButton.type = "button";
-    switchButton.setAttribute("aria-label", `Open ${canvasRecord.name}`);
-    switchButton.dataset.canvasId = canvasRecord.id;
-    switchButton.dataset.canvasPart = "switch";
-
-    if (itemView.isActive) {
-      switchButton.classList.add("is-active");
-      switchButton.setAttribute("aria-current", "true");
-    }
-
-    const name = document.createElement("span");
-    name.className = "canvas-list-name";
-    name.textContent = canvasRecord.name;
-
-    const meta = document.createElement("span");
-    meta.className = "canvas-list-meta";
-    meta.textContent = itemView.terminalSummary;
-
-    switchButton.append(name, meta);
-    switchButton.addEventListener("click", () => {
-      setActiveCanvas(canvasRecord.id);
-    });
-    switchButton.addEventListener("keydown", (event) => {
-      if (event.key === "F2") {
-        event.preventDefault();
-        beginCanvasRename(canvasRecord.id);
-      }
-    });
-
-    reorderHandle = switchButton;
-    item.append(switchButton);
+    stripItem.append(nameInput);
+    return stripItem;
   }
 
-  const actions = document.createElement("div");
-  actions.className = "canvas-list-actions";
+  const switchButton = document.createElement("button");
+  switchButton.className = "canvas-strip-main";
+  switchButton.type = "button";
+  switchButton.textContent = canvasRecord.name;
+  switchButton.setAttribute("aria-label", `Open ${canvasRecord.name}`);
+  switchButton.dataset.canvasId = canvasRecord.id;
+  switchButton.dataset.canvasPart = "strip-switch";
 
-  if (!isRenaming) {
-    const renameButton = document.createElement("button");
-    renameButton.className = "canvas-list-action";
-    renameButton.type = "button";
-    renameButton.setAttribute("aria-label", `Rename ${canvasRecord.name}`);
-    renameButton.title = `Rename ${canvasRecord.name}`;
-    renameButton.textContent = "✎";
-    renameButton.addEventListener("click", (event) => {
+  if (itemView.isActive) {
+    switchButton.setAttribute("aria-current", "true");
+  }
+
+  switchButton.addEventListener("click", () => {
+    setActiveCanvas(canvasRecord.id);
+  });
+
+  switchButton.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginCanvasRename(canvasRecord.id);
+  });
+
+  switchButton.addEventListener("keydown", (event) => {
+    if (event.key === "F2") {
       event.preventDefault();
-      event.stopPropagation();
       beginCanvasRename(canvasRecord.id);
-    });
-    actions.append(renameButton);
-  }
+    }
+  });
+
+  const actions = document.createElement("span");
+  actions.className = "canvas-strip-actions";
 
   if (itemView.canDelete) {
     const deleteButton = document.createElement("button");
-    deleteButton.className = "canvas-list-delete";
+    deleteButton.className = "canvas-strip-action canvas-strip-delete";
     deleteButton.type = "button";
     deleteButton.setAttribute("aria-label", `Delete ${canvasRecord.name}`);
+    deleteButton.title = `Delete ${canvasRecord.name}`;
     deleteButton.textContent = "×";
     deleteButton.addEventListener("click", (event) => {
       event.preventDefault();
@@ -2016,58 +2001,38 @@ function createCanvasSwitcherMenuItem(itemView) {
     actions.append(deleteButton);
   }
 
-  if (actions.childElementCount > 0) {
-    item.append(actions);
-  }
+  stripItem.append(switchButton, actions);
 
-  if (reorderHandle !== null) {
-    attachReorderableListItem(item, reorderHandle, {
+  const itemIndex = canvases.findIndex((candidate) => candidate.id === canvasRecord.id);
+
+  if (itemIndex >= 0) {
+    attachReorderableListItem(stripItem, switchButton, {
       kind: "canvas",
       itemId: canvasRecord.id,
-      index: canvasIndex,
+      index: itemIndex,
       onMove: async (canvasId, targetIndex) => {
         reorderCanvasById(canvasId, targetIndex);
+      },
+      getDropTarget: ({ event, item, index, sourceIndex }) => {
+        const itemRect = item.getBoundingClientRect();
+
+        return deriveTerminalStripDropTarget({
+          itemOffset: itemRect.left,
+          itemSize: itemRect.width,
+          pointerOffset: event.clientX,
+          itemIndex: index,
+          sourceIndex
+        });
       }
     });
   }
-
-  return item;
-}
-
-function createCanvasStripItem(itemView) {
-  const canvasRecord = getCanvasById(itemView.id);
-
-  if (canvasRecord === null) {
-    return document.createElement("span");
-  }
-
-  const stripItem = document.createElement("button");
-  stripItem.className = "canvas-strip-item";
-  stripItem.type = "button";
-  stripItem.textContent = canvasRecord.name;
-  stripItem.title = `${canvasRecord.name} • ${itemView.terminalSummary}`;
-  stripItem.setAttribute("aria-label", `Open ${canvasRecord.name}`);
-  stripItem.dataset.canvasId = canvasRecord.id;
-  stripItem.dataset.canvasPart = "strip-switch";
-
-  if (itemView.isActive) {
-    stripItem.classList.add("is-active");
-    stripItem.setAttribute("aria-current", "true");
-  }
-
-  stripItem.addEventListener("click", () => {
-    setActiveCanvas(canvasRecord.id);
-  });
 
   return stripItem;
 }
 
 function renderCanvasSwitcher() {
   if (
-    !(canvasSwitcherButton instanceof HTMLButtonElement)
-    || !(canvasSwitcherMenu instanceof HTMLElement)
-    || !(canvasSwitcherMenuBody instanceof HTMLElement)
-    || !(canvasStripList instanceof HTMLElement)
+    !(canvasStripList instanceof HTMLElement)
   ) {
     return;
   }
@@ -2079,18 +2044,6 @@ function renderCanvasSwitcher() {
     return createCanvasStripItem(itemView);
   });
   canvasStripList.replaceChildren(...stripItems);
-
-  const menuList = document.createElement("ul");
-  menuList.className = "canvas-switcher-menu-list canvas-list";
-  menuList.id = "canvas-switcher-list";
-  menuList.setAttribute("aria-label", viewModel.menu.label);
-
-  viewModel.menu.items.forEach((itemView) => {
-    menuList.append(createCanvasSwitcherMenuItem(itemView));
-  });
-
-  canvasSwitcherMenuBody.replaceChildren(menuList);
-  setCanvasSwitcherMenuOpen(viewModel.menu.isExpanded);
   focusPendingCanvasListControl();
   scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
   renderTerminalStrip();
@@ -4763,6 +4716,8 @@ async function createTerminalNode(options) {
     reopenButton: null,
     resizeHandles: [],
     shellName: typeof options.shellName === "string" && options.shellName.length > 0 ? options.shellName : "Shell",
+    backend: "unknown",
+    tmuxSessionName: null,
     titleText: normalizeTerminalTitle(options.title, `Terminal ${terminalCount}`)
   };
   const elements = createTerminalElement(nodeRecord);
@@ -5605,7 +5560,7 @@ if (window.noteCanvas.isSmokeTest) {
       beginCanvasRename(canvasRecord.id);
       await waitForAnimationFrame();
 
-      const renameInput = canvasSwitcherMenu.querySelector(`[data-canvas-id="${canvasRecord.id}"][data-canvas-part="rename-input"]`);
+      const renameInput = canvasStripList.querySelector(`[data-canvas-id="${canvasRecord.id}"][data-canvas-part="rename-input"]`);
 
       if (renameInput instanceof HTMLInputElement) {
         renameInput.value = title;
@@ -5630,7 +5585,7 @@ if (window.noteCanvas.isSmokeTest) {
       beginCanvasRename(fromCanvas.id);
       await waitForAnimationFrame();
 
-      const fromInput = canvasSwitcherMenu.querySelector(`[data-canvas-id="${fromCanvas.id}"][data-canvas-part="rename-input"]`);
+      const fromInput = canvasStripList.querySelector(`[data-canvas-id="${fromCanvas.id}"][data-canvas-part="rename-input"]`);
 
       if (fromInput instanceof HTMLInputElement) {
         fromInput.value = draftName;
@@ -5639,7 +5594,7 @@ if (window.noteCanvas.isSmokeTest) {
       beginCanvasRename(toCanvas.id);
       await waitForAnimationFrame();
 
-      const toInput = canvasSwitcherMenu.querySelector(`[data-canvas-id="${toCanvas.id}"][data-canvas-part="rename-input"]`);
+      const toInput = canvasStripList.querySelector(`[data-canvas-id="${toCanvas.id}"][data-canvas-part="rename-input"]`);
 
       if (toInput instanceof HTMLInputElement) {
         toInput.value = nextDraftName;
@@ -5901,23 +5856,6 @@ importCanvasButton?.addEventListener("click", () => {
   void importCanvas().catch((error) => {
     console.error(error);
   });
-});
-
-exportAppSessionButton?.addEventListener("click", () => {
-  void exportAppSessionData().catch((error) => {
-    console.error(error);
-  });
-});
-
-importAppSessionButton?.addEventListener("click", () => {
-  void importAppSessionData().catch((error) => {
-    console.error(error);
-  });
-});
-
-canvasSwitcherButton?.addEventListener("click", (event) => {
-  event.preventDefault();
-  toggleCanvasSwitcherMenu();
 });
 
 canvasStripList?.addEventListener("scroll", () => {

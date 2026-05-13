@@ -45,22 +45,16 @@
     };
   }
 
-  function deriveCanvasSwitcherViewModel({ canvases, activeCanvasId, activeCanvasRenameId, isExpanded }) {
+  function deriveCanvasSwitcherViewModel({ canvases, activeCanvasId, activeCanvasRenameId }) {
     const normalizedCanvases = Array.isArray(canvases) ? canvases : [];
     const activeCanvas = normalizedCanvases.find((canvasRecord) => canvasRecord?.id === activeCanvasId) ?? normalizedCanvases[0] ?? null;
     const items = normalizedCanvases.map((canvasRecord) => {
       return normalizeCanvasForSwitcher(canvasRecord, activeCanvas?.id ?? null, activeCanvasRenameId, normalizedCanvases.length > 1);
     });
-    const disclosureExpanded = isExpanded === true;
 
     return {
       strip: {
         label: "Canvas navigator",
-        items
-      },
-      menu: {
-        label: "Manage canvases",
-        isExpanded: disclosureExpanded,
         items
       }
     };

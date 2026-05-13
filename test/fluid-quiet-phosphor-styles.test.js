@@ -54,7 +54,7 @@ test("workspace selection and chrome controls use restrained phosphor focus cues
   assert.match(styles, /\.panel-resize-handle::before\s*\{[\s\S]*opacity:\s*0;/);
   assert.match(styles, /\.panel-resize-handle:hover::before,\s*\.panel-resize-handle:focus-visible::before,\s*\.panel-resize-handle\.is-active::before\s*\{[\s\S]*opacity:\s*1;/);
   assert.match(styles, /\.panel-resize-handle:hover::before,\s*\.panel-resize-handle:focus-visible::before,\s*\.panel-resize-handle\.is-active::before\s*\{[\s\S]*background:\s*var\(--color-phosphor-accent-strong\);/);
-  assert.match(styles, /\.canvas-switcher-trigger:hover,\s*\.canvas-switcher-trigger\.is-open\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+  assert.match(styles, /\.canvas-strip-action:hover\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
 });
 
 test("collapsed sidebar toggle lives in the topbar as a compact control", () => {

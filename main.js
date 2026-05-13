@@ -1669,6 +1669,9 @@ ipcMain.handle("terminal:create", async (event, payload) => {
     terminalId,
     shellName,
     cwd: session.cwd,
+    backend: session.backend,
+    sessionKey: session.sessionKey,
+    tmuxSessionName: session.tmuxSessionName,
     cols: safeCols,
     rows: safeRows
   };

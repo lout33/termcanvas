@@ -467,10 +467,12 @@ button {
 
 .canvas-create-button,
 .canvas-secondary-button,
-.canvas-switcher-trigger,
 .canvas-topbar-action,
 .canvas-strip-overflow-button,
 .canvas-strip-item,
+.canvas-strip-main,
+.canvas-strip-action,
+.canvas-strip-input,
 .canvas-list-button,
 .canvas-list-editor,
 .canvas-list-action,
@@ -551,10 +553,11 @@ button {
 
 .canvas-create-button:focus-visible,
 .canvas-secondary-button:focus-visible,
-.canvas-switcher-trigger:focus-visible,
 .canvas-topbar-action:focus-visible,
 .canvas-strip-overflow-button:focus-visible,
-.canvas-strip-item:focus-visible,
+.canvas-strip-main:focus-visible,
+.canvas-strip-action:focus-visible,
+.canvas-strip-input:focus,
 .terminal-strip-overflow-button:focus-visible,
 .terminal-strip-item:focus-visible,
 .canvas-list-button:focus-visible,
@@ -562,76 +565,6 @@ button {
 .canvas-list-delete:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
-}
-
-.canvas-switcher-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-  min-width: 2.5rem;
-  min-height: 2.35rem;
-  padding: 0.3rem 0.7rem;
-  border-color: var(--color-sidebar-rule);
-  border-radius: var(--radius-full);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.01)),
-    rgba(9, 12, 16, 0.58);
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-align: center;
-  cursor: pointer;
-}
-
-.canvas-switcher-trigger:hover,
-.canvas-switcher-trigger.is-open {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.014)),
-    rgba(11, 14, 19, 0.68);
-  border-color: var(--color-phosphor-accent-strong);
-  color: var(--color-ink);
-}
-
-.canvas-switcher-menu {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 6;
-  display: grid;
-  gap: var(--space-1);
-  width: min(24rem, calc(100vw - (var(--drawer-offset) * 2)));
-  max-height: min(22rem, calc(100vh - 7rem));
-  padding: var(--space-1);
-  border: 1px solid var(--color-sidebar-rule);
-  border-radius: calc(var(--radius-md) + 0.125rem);
-  background:
-    linear-gradient(180deg, rgba(12, 15, 20, 0.985), rgba(8, 10, 14, 0.985)),
-    rgba(8, 11, 16, 0.94);
-  box-shadow: 0 1.25rem 2.5rem rgba(0, 0, 0, 0.34);
-}
-
-.canvas-switcher-menu[hidden] {
-  display: none;
-}
-
-.canvas-switcher-menu-body {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.canvas-switcher-menu-list {
-  max-height: min(14rem, 34vh);
-}
-
-.canvas-switcher-menu-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-1);
-  padding-top: var(--space-1);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .canvas-list {
@@ -1655,6 +1588,14 @@ button {
   background: rgba(12, 16, 21, 0.45);
 }
 
+.canvas-topbar-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-left: var(--space-1);
+  border-left: 1px solid rgba(186, 213, 221, 0.08);
+}
+
 .canvas-strip-list {
   display: grid;
   grid-auto-flow: column;
@@ -1717,7 +1658,6 @@ button {
   display: none;
 }
 
-.canvas-strip-item,
 .terminal-strip-item {
   position: relative;
   display: inline-flex;
@@ -1742,7 +1682,118 @@ button {
 }
 
 .canvas-strip-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 1.72rem;
+  max-width: 18rem;
+  border-color: transparent;
+  border-radius: 0.8rem;
+  background: rgba(11, 14, 18, 0.72);
+  color: var(--color-muted);
   font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.canvas-strip-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 14rem;
+  min-height: 1.72rem;
+  padding: 0.24rem 0.64rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: grab;
+}
+
+.canvas-strip-main:active {
+  cursor: grabbing;
+}
+
+.canvas-strip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.16rem;
+  max-width: 0;
+  padding-right: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    max-width var(--transition-base),
+    opacity var(--transition-base),
+    padding-right var(--transition-base);
+}
+
+.canvas-strip-item:hover .canvas-strip-actions,
+.canvas-strip-item:focus-within .canvas-strip-actions,
+.canvas-strip-item.is-active .canvas-strip-actions {
+  max-width: 1.7rem;
+  padding-right: 0.3rem;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.canvas-strip-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  padding: 0 0.28rem;
+  border-color: rgba(186, 213, 221, 0.08);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.canvas-strip-action:hover {
+  border-color: var(--color-phosphor-accent-strong);
+  background: rgba(111, 232, 255, 0.1);
+  color: var(--color-ink);
+}
+
+.canvas-strip-delete {
+  color: var(--color-sidebar-delete);
+  font-size: 0.86rem;
+  text-transform: none;
+}
+
+.canvas-strip-delete:hover {
+  border-color: rgba(127, 29, 29, 0.22);
+  background: var(--color-sidebar-delete-hover);
+}
+
+.canvas-strip-input {
+  width: min(14rem, 36vw);
+  min-height: 1.72rem;
+  padding: 0.24rem 0.64rem;
+  border-color: var(--color-phosphor-accent-strong);
+  border-radius: 0.8rem;
+  background: rgba(7, 10, 14, 0.92);
+  color: var(--color-ink);
+  font: inherit;
+}
+
+.canvas-strip-input:focus {
+  outline: none;
 }
 
 .terminal-strip-item {
@@ -1755,7 +1806,6 @@ button {
   background: rgba(10, 13, 17, 0.76);
 }
 
-.canvas-strip-item:hover,
 .terminal-strip-item:hover {
   background: rgba(16, 20, 25, 0.92);
   border-color: rgba(143, 220, 255, 0.18);
@@ -1763,7 +1813,13 @@ button {
   transform: translateY(-1px);
 }
 
-.canvas-strip-item.is-active,
+.canvas-strip-item:hover {
+  background: rgba(16, 20, 25, 0.92);
+  border-color: rgba(143, 220, 255, 0.18);
+  color: var(--color-ink);
+  transform: translateY(-1px);
+}
+
 .terminal-strip-item.is-active {
   background: rgba(18, 26, 32, 0.98);
   border-color: rgba(143, 220, 255, 0.34);
@@ -1775,6 +1831,7 @@ button {
   background: rgba(22, 29, 36, 0.96);
   border-color: rgba(143, 220, 255, 0.34);
   color: #eef8fd;
+  box-shadow: inset 0 0 0 1px rgba(221, 248, 255, 0.04);
 }
 
 .terminal-strip-item.is-active {
@@ -1791,10 +1848,13 @@ button {
   transform: none;
 }
 
+.canvas-strip-item.is-dragging,
 .terminal-strip-item.is-dragging {
   opacity: 0.58;
 }
 
+.canvas-strip-item.is-drop-before::before,
+.canvas-strip-item.is-drop-after::after,
 .terminal-strip-item.is-drop-before::before,
 .terminal-strip-item.is-drop-after::after {
   content: "";
@@ -1807,10 +1867,12 @@ button {
   box-shadow: 0 0 0.75rem rgba(125, 168, 255, 0.34);
 }
 
+.canvas-strip-item.is-drop-before::before,
 .terminal-strip-item.is-drop-before::before {
   left: -0.32rem;
 }
 
+.canvas-strip-item.is-drop-after::after,
 .terminal-strip-item.is-drop-after::after {
   right: -0.32rem;
 }
@@ -1818,8 +1880,7 @@ button {
 .canvas-topbar-action:active,
 .canvas-strip-overflow-button:active,
 .terminal-strip-overflow-button:active,
-.canvas-switcher-trigger:active,
-.canvas-strip-item:active,
+.canvas-strip-main:active,
 .terminal-strip-item:active {
   transform: translateY(0);
 }
