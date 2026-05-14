@@ -21,6 +21,17 @@ test("live terminal headers show backend session subtitles", () => {
   assert.match(renderer, /copySessionButton\.textContent = "ID"/);
 });
 
+test("terminal title editing only starts on double click", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /function setNodeTitleEditing\(nodeRecord, isEditing\) \{[\s\S]*titleInput\.readOnly = !isEditing;/);
+  assert.match(renderer, /function startNodeTitleEditing\(nodeRecord\) \{/);
+  assert.match(renderer, /titleInput\.readOnly = true;/);
+  assert.match(renderer, /titleInput\.tabIndex = -1;/);
+  assert.match(renderer, /elements\.titleGroup\.addEventListener\("dblclick", \(event\) => \{[\s\S]*startNodeTitleEditing\(nodeRecord\);/);
+  assert.match(renderer, /elements\.titleInput\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*if \(!nodeRecord\.isTitleEditing\) \{[\s\S]*event\.preventDefault\(\);/);
+});
+
 test("terminal strip items attach reorder handling for active canvas terminals", () => {
   const renderer = readRenderer();
 

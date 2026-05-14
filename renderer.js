@@ -467,10 +467,35 @@ function updateNodeTitleInput(nodeRecord) {
   nodeRecord.titleInput.title = nodeRecord.titleText;
 }
 
+function setNodeTitleEditing(nodeRecord, isEditing) {
+  if (!(nodeRecord.titleInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  nodeRecord.isTitleEditing = isEditing;
+  nodeRecord.titleInput.readOnly = !isEditing;
+  nodeRecord.titleInput.tabIndex = isEditing ? 0 : -1;
+  nodeRecord.titleInput.classList.toggle("is-editing", isEditing);
+}
+
+function startNodeTitleEditing(nodeRecord) {
+  if (!(nodeRecord.titleInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  if (activeTitleEditorRecord !== null && activeTitleEditorRecord !== nodeRecord) {
+    activeTitleEditorRecord.titleInput?.blur();
+  }
+
+  setNodeTitleEditing(nodeRecord, true);
+  nodeRecord.titleInput.focus();
+}
+
 function commitNodeTitle(nodeRecord, rawTitle) {
   const nextTitle = normalizeTerminalTitle(rawTitle, getDefaultTerminalTitle(nodeRecord));
   nodeRecord.titleText = nextTitle;
   updateNodeTitleInput(nodeRecord);
+  setNodeTitleEditing(nodeRecord, false);
   syncMaximizeButton(nodeRecord);
   renderTerminalStrip();
   scheduleAppSessionSave();
@@ -482,6 +507,7 @@ function cancelNodeTitleEditing(nodeRecord) {
   }
 
   updateNodeTitleInput(nodeRecord);
+  setNodeTitleEditing(nodeRecord, false);
 }
 
 function syncMaximizeButton(nodeRecord) {
@@ -4721,6 +4747,8 @@ function createTerminalElement(nodeRecord) {
   titleInput.maxLength = MAX_TERMINAL_TITLE_LENGTH;
   titleInput.spellcheck = false;
   titleInput.setAttribute("aria-label", `Rename terminal ${nodeRecord.id}`);
+  titleInput.readOnly = true;
+  titleInput.tabIndex = -1;
 
   const meta = document.createElement("div");
   meta.className = "terminal-node-meta";
@@ -4809,6 +4837,7 @@ function createTerminalElement(nodeRecord) {
     copySessionButton,
     status,
     titleInput,
+    titleGroup,
     maximizeButton,
     closeButton,
     dragArea,
@@ -4865,10 +4894,12 @@ async function createTerminalNode(options) {
     copySessionButton: null,
     status: null,
     titleInput: null,
+    titleGroup: null,
     maximizeButton: null,
     closeButton: null,
     reopenButton: null,
     resizeHandles: [],
+    isTitleEditing: false,
     shellName: typeof options.shellName === "string" && options.shellName.length > 0 ? options.shellName : "Shell",
     backend: "unknown",
     tmuxSessionName: null,
@@ -4899,6 +4930,7 @@ async function createTerminalNode(options) {
   nodeRecord.copySessionButton = elements.copySessionButton;
   nodeRecord.status = elements.status;
   nodeRecord.titleInput = elements.titleInput;
+  nodeRecord.titleGroup = elements.titleGroup;
   nodeRecord.maximizeButton = elements.maximizeButton;
   nodeRecord.closeButton = elements.closeButton;
   nodeRecord.reopenButton = elements.reopenButton;
@@ -4907,6 +4939,7 @@ async function createTerminalNode(options) {
   applyNodeSize(nodeRecord, options.width, options.height);
 
   updateNodeTitleInput(nodeRecord);
+  setNodeTitleEditing(nodeRecord, false);
   syncMaximizeButton(nodeRecord);
 
   elements.closeButton.addEventListener("click", (event) => {
@@ -4961,9 +4994,24 @@ async function createTerminalNode(options) {
     if (shouldSelectTerminal({ reason: "pointer" })) {
       setActiveNode(nodeRecord);
     }
+
+    if (!nodeRecord.isTitleEditing) {
+      event.preventDefault();
+    }
+  });
+
+  elements.titleGroup.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    startNodeTitleEditing(nodeRecord);
   });
 
   elements.titleInput.addEventListener("focus", () => {
+    if (!nodeRecord.isTitleEditing) {
+      elements.titleInput.blur();
+      return;
+    }
+
     activeTitleEditorRecord = nodeRecord;
     if (shouldSelectTerminal({ reason: "title-focus" })) {
       setActiveNode(nodeRecord);

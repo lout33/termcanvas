@@ -83,7 +83,10 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
   assert.match(styles, /\.canvas-strip-item\s*\{[\s\S]*font-size:\s*0\.8rem;/);
   assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.5rem 0\.6875rem;/);
   assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*font-size:\s*0\.9rem;/);
+  assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*cursor:\s*inherit;/);
   assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*gap:\s*0;/);
+  assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*flex:\s*0 1 14rem;/);
+  assert.match(styles, /\.terminal-node-title-input\.is-editing\s*\{[\s\S]*cursor:\s*text;/);
 });
 
 test("topbar rows use a clearer premium hierarchy with an unlabeled terminal strip", () => {

@@ -2236,6 +2236,7 @@ button {
 .terminal-node-title-group {
   display: grid;
   min-width: 0;
+  flex: 0 1 14rem;
   gap: 0;
 }
 
@@ -2259,11 +2260,17 @@ button {
   font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.015em;
-  user-select: text;
+  cursor: inherit;
+  user-select: none;
   transition:
     background var(--transition-base),
     border-color var(--transition-base),
     color var(--transition-base);
+}
+
+.terminal-node-title-input.is-editing {
+  cursor: text;
+  user-select: text;
 }
 
 .terminal-node-title-input:focus {
