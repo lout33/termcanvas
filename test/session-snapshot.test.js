@@ -78,9 +78,16 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
       expandedDirectoryPaths: ["src", "src/components"],
       previewRelativePath: "README.md"
     },
+    agentProjectTag: null,
+    managerAgentName: null,
     activeSessionKey: null,
     terminalNodes: [{
       sessionKey: null,
+      managedAgentName: null,
+      managedAgentRole: null,
+      managedProjectTag: null,
+      tmuxSessionName: null,
+      isManager: false,
       x: 10,
       y: 20,
       width: 600,
@@ -97,6 +104,11 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
   assert.equal(snapshot.canvases[1].workspace, null);
   assert.deepEqual(snapshot.canvases[1].terminalNodes[0], {
     sessionKey: null,
+    managedAgentName: null,
+    managedAgentRole: null,
+    managedProjectTag: null,
+    tmuxSessionName: null,
+    isManager: false,
     x: 0,
     y: 0,
     width: 544,

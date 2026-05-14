@@ -148,6 +148,11 @@ function migrateLegacyWorkspaceToCanvas(workspace) {
 function normalizeTerminalNodeSnapshot(nodeSnapshot) {
   return {
     sessionKey: normalizeSessionKey(nodeSnapshot?.sessionKey),
+    managedAgentName: normalizeString(nodeSnapshot?.managedAgentName),
+    managedAgentRole: normalizeString(nodeSnapshot?.managedAgentRole),
+    managedProjectTag: normalizeString(nodeSnapshot?.managedProjectTag),
+    tmuxSessionName: normalizeString(nodeSnapshot?.tmuxSessionName),
+    isManager: normalizeBoolean(nodeSnapshot?.isManager),
     x: normalizeNumber(nodeSnapshot?.x, 0),
     y: normalizeNumber(nodeSnapshot?.y, 0),
     width: normalizeNumber(nodeSnapshot?.width, 544),
@@ -202,6 +207,8 @@ function normalizeCanvasSnapshots(canvases) {
       },
       viewportScale: normalizeNumber(canvasSnapshot?.viewportScale, 1),
       workspace: normalizeCanvasWorkspaceSnapshot(canvasSnapshot?.workspace),
+      agentProjectTag: normalizeString(canvasSnapshot?.agentProjectTag),
+      managerAgentName: normalizeString(canvasSnapshot?.managerAgentName),
       activeSessionKey,
       terminalNodes
     });

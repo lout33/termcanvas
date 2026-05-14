@@ -8,6 +8,7 @@ const { createDirectorySnapshotAsync } = require("./directory_snapshot");
 const { getNodePtyHelperPaths } = require("./node_pty_runtime");
 const { readWorkspaceFilePreviewAsync, resolveWorkspaceFilePath } = require("./workspace_file_preview");
 const { createWorkspaceService } = require("./main_workspace_service");
+const { createAgentctlService } = require("./main_agentctl_service");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessions = new Map();
@@ -397,6 +398,7 @@ const workspaceService = createWorkspaceService({
   resolveExistingDirectoryPath,
   workspaceWatchDebounceMs: WORKSPACE_WATCH_DEBOUNCE_MS
 });
+const agentctlService = createAgentctlService();
 
 function resolveDialogDefaultDirectory(ownerWebContentsId) {
   return workspaceService.getActiveFolderRootPath(ownerWebContentsId) ?? app.getPath("documents");
@@ -422,7 +424,12 @@ function destroyTerminalSession(terminalId, options = {}) {
 
   session.isDisposing = true;
 
-  if (!preserveSession && session.backend === "tmux" && typeof session.tmuxSessionName === "string") {
+  if (
+    !preserveSession
+    && session.backend === "tmux"
+    && session.canDestroyTmuxSession === true
+    && typeof session.tmuxSessionName === "string"
+  ) {
     try {
       destroyTmuxSession(session.tmuxSessionName);
     } catch (error) {
@@ -475,8 +482,14 @@ async function createTmuxClientSession(options) {
     return null;
   }
 
-  const tmuxSessionName = getTmuxSessionName(options.sessionKey);
+  const tmuxSessionName = typeof options.tmuxSessionName === "string" && options.tmuxSessionName.trim().length > 0
+    ? options.tmuxSessionName.trim()
+    : getTmuxSessionName(options.sessionKey);
   const sessionAlreadyExists = hasTmuxSession(tmuxSessionName);
+
+  if (!sessionAlreadyExists && options.createIfMissing === false) {
+    throw new Error(`tmux session '${tmuxSessionName}' is not running.`);
+  }
 
   if (!sessionAlreadyExists) {
     createTmuxSession(tmuxSessionName, options.cwd);
@@ -501,7 +514,8 @@ async function createTmuxClientSession(options) {
         isDisposing: false,
         backend: "tmux",
         sessionKey: options.sessionKey,
-        tmuxSessionName
+        tmuxSessionName,
+        canDestroyTmuxSession: options.createIfMissing !== false
       },
       cwd: resolvedCwd
     };
@@ -1606,6 +1620,9 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   const terminalCwd = resolveTerminalWorkingDirectory(cwd);
   const sessionKey = normalizeTerminalSessionKey(payload?.sessionKey) ?? terminalId;
   const shouldEnforceRequestedCwd = typeof cwd === "string" && cwd.trim().length > 0;
+  const requestedTmuxSessionName = typeof payload?.tmuxSessionName === "string" && payload.tmuxSessionName.trim().length > 0
+    ? payload.tmuxSessionName.trim()
+    : null;
 
   const tmuxSession = await createTmuxClientSession({
     ownerWebContentsId: event.sender.id,
@@ -1613,7 +1630,9 @@ ipcMain.handle("terminal:create", async (event, payload) => {
     rows: safeRows,
     cwd: terminalCwd,
     shellName,
-    sessionKey
+    sessionKey,
+    tmuxSessionName: requestedTmuxSessionName,
+    createIfMissing: requestedTmuxSessionName === null
   });
   const terminalPty = tmuxSession?.session?.pty ?? pty.spawn(shell, [], {
     name: "xterm-256color",
@@ -1631,7 +1650,8 @@ ipcMain.handle("terminal:create", async (event, payload) => {
     isDisposing: false,
     backend: "pty",
     sessionKey,
-    tmuxSessionName: null
+    tmuxSessionName: null,
+    canDestroyTmuxSession: false
   };
 
   terminalSessions.set(terminalId, session);
@@ -1752,6 +1772,20 @@ ipcMain.handle("terminal:destroy", (event, payload) => {
   destroyTerminalSession(payload.terminalId, {
     preserveSession: payload?.preserveSession === true
   });
+});
+
+ipcMain.handle("canvas-agent:sync", async (_event, payload) => {
+  return agentctlService.syncCanvasProject({
+    canvasId: payload?.canvasId,
+    canvasName: payload?.canvasName,
+    workspaceRootPath: payload?.workspaceRootPath,
+    projectTag: payload?.projectTag
+  });
+});
+
+ipcMain.handle("canvas-agent:delete", async (_event, payload) => {
+  agentctlService.deleteAgent(payload?.agentName);
+  return { ok: true };
 });
 
 ipcMain.handle("canvas:save-file", async (event, payload) => {

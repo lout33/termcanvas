@@ -5,10 +5,17 @@ function serializeCanvasSessionRecord(canvasRecord, exportedCanvas) {
     viewportOffset: exportedCanvas.viewportOffset,
     viewportScale: exportedCanvas.viewportScale,
     workspace: canvasRecord.workspace ?? null,
+    agentProjectTag: canvasRecord.agentProjectTag ?? null,
+    managerAgentName: canvasRecord.managerAgentName ?? null,
     activeSessionKey: canvasRecord.activeSessionKey ?? null,
     terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
       ...exportedCanvas.terminalNodes[index],
       sessionKey: nodeRecord.sessionKey,
+      managedAgentName: nodeRecord.managedAgentName ?? null,
+      managedAgentRole: nodeRecord.managedAgentRole ?? null,
+      managedProjectTag: nodeRecord.managedProjectTag ?? null,
+      tmuxSessionName: nodeRecord.tmuxSessionName ?? null,
+      isManager: nodeRecord.isManager === true,
       isExited: nodeRecord.isExited,
       exitCode: nodeRecord.exitCode,
       exitSignal: nodeRecord.exitSignal

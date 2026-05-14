@@ -120,6 +120,7 @@ const ZOOM_INDICATOR_VISIBLE_MS = 1200;
 const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 const APP_SESSION_VERSION = 1;
 const APP_SESSION_SAVE_DEBOUNCE_MS = 180;
+const CANVAS_AGENT_SYNC_INTERVAL_MS = 1800;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -151,6 +152,8 @@ let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
 let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
+let canvasAgentSyncTimeout = 0;
+let isCanvasAgentSyncInFlight = false;
 let workspaceActionDialogResolve = null;
 let workspaceMarkdownEditor = null;
 let pendingWorkspacePreviewOwnSave = null;
@@ -310,6 +313,59 @@ function normalizeCanvasName(value, fallbackName, excludedCanvasId = null) {
   const trimmedValue = value.trim().slice(0, MAX_CANVAS_NAME_LENGTH);
   const baseName = trimmedValue.length > 0 ? trimmedValue : fallbackName;
   return getUniqueCanvasName(baseName, excludedCanvasId);
+}
+
+function normalizeManagedAgentName(value) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getManagedAgentNodeTitle(options = {}) {
+  const agentName = normalizeManagedAgentName(options.agentName);
+
+  if (agentName === null) {
+    return typeof options.title === "string" ? options.title : "";
+  }
+
+  return options.isManager === true ? `${agentName} (Manager)` : agentName;
+}
+
+function getNodeSessionIdentifier(nodeRecord) {
+  return nodeRecord.backend === "tmux"
+    ? (nodeRecord.tmuxSessionName ?? `termcanvas-${nodeRecord.sessionKey}`)
+    : nodeRecord.sessionKey;
+}
+
+async function copyTextToClipboard(text) {
+  if (typeof text !== "string" || text.length === 0) {
+    return false;
+  }
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back to a temporary selection-based copy when clipboard API is unavailable.
+  }
+
+  const fallbackTextArea = document.createElement("textarea");
+  fallbackTextArea.value = text;
+  fallbackTextArea.setAttribute("readonly", "readonly");
+  fallbackTextArea.style.position = "fixed";
+  fallbackTextArea.style.opacity = "0";
+  fallbackTextArea.style.pointerEvents = "none";
+  document.body.append(fallbackTextArea);
+  fallbackTextArea.select();
+  fallbackTextArea.setSelectionRange(0, fallbackTextArea.value.length);
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    fallbackTextArea.remove();
+  }
 }
 
 function clampNodeDimension(value, minimum, fallback) {
@@ -530,13 +586,25 @@ function formatTerminalMeta(nodeRecord) {
   const backendLabel = nodeRecord.backend === "tmux"
     ? `tmux: ${nodeRecord.tmuxSessionName ?? `termcanvas-${nodeRecord.sessionKey}`}`
     : `pty: ${nodeRecord.sessionKey}`;
-  return `${nodeRecord.shellName} · ${backendLabel}`;
+  const managedLabel = nodeRecord.managedAgentName === null
+    ? null
+    : `${nodeRecord.isManager ? "manager" : "agent"}: ${nodeRecord.managedAgentName}`;
+
+  return [managedLabel, nodeRecord.shellName, backendLabel].filter((value) => value !== null).join(" · ");
 }
 
 function syncTerminalMeta(nodeRecord) {
   const metaText = formatTerminalMeta(nodeRecord);
   nodeRecord.meta.textContent = metaText;
   nodeRecord.meta.title = metaText;
+  const sessionIdentifier = getNodeSessionIdentifier(nodeRecord);
+  if (nodeRecord.copySessionButton !== null) {
+    nodeRecord.copySessionButton.title = `Copy session id: ${sessionIdentifier}`;
+    nodeRecord.copySessionButton.setAttribute("aria-label", `Copy session id ${sessionIdentifier}`);
+  }
+  nodeRecord.status.textContent = nodeRecord.isExited
+    ? nodeRecord.status.textContent
+    : (nodeRecord.managedRuntimeState ?? "Live");
 }
 
 function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessionKey) {
@@ -552,6 +620,43 @@ function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessi
   nodeRecord.element.classList.remove("is-exited");
   updateExitedOverlay(nodeRecord);
   scheduleAppSessionSave();
+}
+
+function syncManagedNodeState(nodeRecord, agentSnapshot) {
+  nodeRecord.managedAgentName = normalizeManagedAgentName(agentSnapshot?.name);
+  nodeRecord.managedAgentRole = typeof agentSnapshot?.role === "string" && agentSnapshot.role.length > 0
+    ? agentSnapshot.role
+    : null;
+  nodeRecord.managedProjectTag = typeof agentSnapshot?.project === "string" && agentSnapshot.project.length > 0
+    ? agentSnapshot.project
+    : null;
+  nodeRecord.isManager = agentSnapshot?.is_project_manager === true;
+  nodeRecord.managedRuntimeState = typeof agentSnapshot?.runtime_state === "string" && agentSnapshot.runtime_state.length > 0
+    ? agentSnapshot.runtime_state
+    : null;
+  nodeRecord.managedAgentState = typeof agentSnapshot?.agent_state === "string" && agentSnapshot.agent_state.length > 0
+    ? agentSnapshot.agent_state
+    : null;
+  nodeRecord.tmuxSessionName = typeof agentSnapshot?.tmux_session === "string" && agentSnapshot.tmux_session.length > 0
+    ? agentSnapshot.tmux_session
+    : nodeRecord.tmuxSessionName;
+  nodeRecord.cwd = typeof agentSnapshot?.workdir === "string" && agentSnapshot.workdir.length > 0
+    ? agentSnapshot.workdir
+    : nodeRecord.cwd;
+  nodeRecord.titleText = getManagedAgentNodeTitle({
+    agentName: nodeRecord.managedAgentName,
+    isManager: nodeRecord.isManager,
+    title: nodeRecord.titleText
+  });
+  updateNodeTitleInput(nodeRecord);
+  if (nodeRecord.isManager) {
+    nodeRecord.closeButton?.setAttribute("disabled", "disabled");
+    nodeRecord.closeButton.title = "The canvas manager stays attached to this project.";
+  } else if (nodeRecord.closeButton !== null) {
+    nodeRecord.closeButton.removeAttribute("disabled");
+    nodeRecord.closeButton.title = "";
+  }
+  syncTerminalMeta(nodeRecord);
 }
 
 async function releaseTerminalSession(nodeRecord, options = {}) {
@@ -624,7 +729,8 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       cols: initialCols,
       rows: initialRows,
       cwd: nodeRecord.cwd,
-      sessionKey: nodeRecord.sessionKey
+      sessionKey: nodeRecord.sessionKey,
+      tmuxSessionName: nodeRecord.tmuxSessionName
     });
 
     if (nodeRecord.isRemoved) {
@@ -639,6 +745,16 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       typeof created.tmuxSessionName === "string" ? created.tmuxSessionName : null,
       typeof created.sessionKey === "string" ? created.sessionKey : nodeRecord.sessionKey
     );
+    syncManagedNodeState(nodeRecord, {
+      name: nodeRecord.managedAgentName,
+      role: nodeRecord.managedAgentRole,
+      project: nodeRecord.managedProjectTag,
+      runtime_state: nodeRecord.managedRuntimeState,
+      agent_state: nodeRecord.managedAgentState,
+      tmux_session: nodeRecord.tmuxSessionName,
+      workdir: nodeRecord.cwd,
+      is_project_manager: nodeRecord.isManager
+    });
     nodeRecord.cwd = typeof created.cwd === "string" && created.cwd.length > 0 ? created.cwd : nodeRecord.cwd;
 
     const dataDisposable = terminal.onData((data) => {
@@ -1659,6 +1775,10 @@ function createCanvasRecord(options = {}) {
     },
     viewportScale,
     workspace: normalizeCanvasWorkspaceRecord(options.workspace),
+    agentProjectTag: typeof options.agentProjectTag === "string" && options.agentProjectTag.trim().length > 0
+      ? options.agentProjectTag.trim()
+      : null,
+    managerAgentName: normalizeManagedAgentName(options.managerAgentName),
     highestNodeLayer: 2,
     nodes: []
   };
@@ -3641,6 +3761,7 @@ async function chooseCanvasWorkspace() {
 
   applyWorkspaceState(opened.state);
   openWorkspaceDrawer();
+  scheduleCanvasAgentSync();
   return opened.state;
 }
 
@@ -3713,12 +3834,19 @@ function serializeCanvasSessionRecord(canvasRecord) {
     viewportOffset: exportedCanvas.viewportOffset,
     viewportScale: exportedCanvas.viewportScale,
     workspace: canvasRecord.workspace ?? null,
+    agentProjectTag: canvasRecord.agentProjectTag,
+    managerAgentName: canvasRecord.managerAgentName,
     activeSessionKey: activeNodeRecord?.canvas?.id === canvasRecord.id
       ? activeNodeRecord.sessionKey
       : null,
     terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
       ...exportedCanvas.terminalNodes[index],
       sessionKey: nodeRecord.sessionKey,
+      managedAgentName: nodeRecord.managedAgentName,
+      managedAgentRole: nodeRecord.managedAgentRole,
+      managedProjectTag: nodeRecord.managedProjectTag,
+      tmuxSessionName: nodeRecord.tmuxSessionName,
+      isManager: nodeRecord.isManager,
       isExited: nodeRecord.isExited,
       exitCode: nodeRecord.exitCode,
       exitSignal: nodeRecord.exitSignal
@@ -3891,6 +4019,10 @@ async function restoreCanvasWorkspace(canvasRecord) {
   }
 
   scheduleAppSessionSave();
+
+  if (canvasRecord.id === activeCanvasId) {
+    scheduleCanvasAgentSync();
+  }
 }
 
 async function restoreCanvasSession(sessionSnapshot) {
@@ -3906,7 +4038,9 @@ async function restoreCanvasSession(sessionSnapshot) {
       name: canvasSnapshot.name,
       viewportOffset: canvasSnapshot.viewportOffset,
       viewportScale: canvasSnapshot.viewportScale,
-      workspace: canvasSnapshot.workspace ?? null
+      workspace: canvasSnapshot.workspace ?? null,
+      agentProjectTag: canvasSnapshot.agentProjectTag ?? null,
+      managerAgentName: canvasSnapshot.managerAgentName ?? null
     });
   });
 
@@ -3934,6 +4068,11 @@ async function restoreCanvasSession(sessionSnapshot) {
           exitCode: nodeSnapshot.exitCode,
           exitSignal: nodeSnapshot.exitSignal,
           sessionKey: nodeSnapshot.sessionKey,
+          managedAgentName: nodeSnapshot.managedAgentName,
+          managedAgentRole: nodeSnapshot.managedAgentRole,
+          managedProjectTag: nodeSnapshot.managedProjectTag,
+          tmuxSessionName: nodeSnapshot.tmuxSessionName,
+          isManager: nodeSnapshot.isManager,
           shouldFocus: false
         });
       } catch (error) {
@@ -4002,6 +4141,8 @@ async function initializeApp() {
     } else {
       applyWorkspaceState(await window.noteCanvas.getWorkspaceDirectoryState());
     }
+
+    scheduleCanvasAgentSync();
   } catch (error) {
     console.error(error);
 
@@ -4375,6 +4516,7 @@ function setActiveCanvas(canvasId) {
     }
 
     closeCanvasSwitcherMenu();
+    scheduleCanvasAgentSync();
 
     scheduleAppSessionSave();
   }
@@ -4584,7 +4726,16 @@ function createTerminalElement(nodeRecord) {
   meta.className = "terminal-node-meta";
   meta.textContent = "Starting shell";
 
-  titleGroup.append(titleInput, meta);
+  const metaRow = document.createElement("div");
+  metaRow.className = "terminal-node-meta-row";
+
+  const copySessionButton = document.createElement("button");
+  copySessionButton.className = "terminal-node-copy-session terminal-node-control";
+  copySessionButton.type = "button";
+  copySessionButton.textContent = "ID";
+
+  metaRow.append(meta, copySessionButton);
+  titleGroup.append(titleInput, metaRow);
   dragArea.append(grabHandle, titleGroup);
 
   const status = document.createElement("span");
@@ -4655,6 +4806,7 @@ function createTerminalElement(nodeRecord) {
     terminalMount,
     interactionOverlay,
     meta,
+    copySessionButton,
     status,
     titleInput,
     maximizeButton,
@@ -4710,15 +4862,30 @@ async function createTerminalNode(options) {
     syncSize: () => {},
     disposeInput: () => {},
     meta: null,
+    copySessionButton: null,
     status: null,
     titleInput: null,
     maximizeButton: null,
+    closeButton: null,
     reopenButton: null,
     resizeHandles: [],
     shellName: typeof options.shellName === "string" && options.shellName.length > 0 ? options.shellName : "Shell",
     backend: "unknown",
     tmuxSessionName: null,
-    titleText: normalizeTerminalTitle(options.title, `Terminal ${terminalCount}`)
+    managedAgentName: normalizeManagedAgentName(options.managedAgentName),
+    managedAgentRole: typeof options.managedAgentRole === "string" && options.managedAgentRole.length > 0 ? options.managedAgentRole : null,
+    managedProjectTag: typeof options.managedProjectTag === "string" && options.managedProjectTag.length > 0 ? options.managedProjectTag : null,
+    managedRuntimeState: typeof options.managedRuntimeState === "string" && options.managedRuntimeState.length > 0 ? options.managedRuntimeState : null,
+    managedAgentState: typeof options.managedAgentState === "string" && options.managedAgentState.length > 0 ? options.managedAgentState : null,
+    isManager: options.isManager === true,
+    titleText: normalizeTerminalTitle(
+      getManagedAgentNodeTitle({
+        agentName: options.managedAgentName,
+        isManager: options.isManager,
+        title: options.title
+      }),
+      `Terminal ${terminalCount}`
+    )
   };
   const elements = createTerminalElement(nodeRecord);
   nodeRecord.element = elements.node;
@@ -4729,9 +4896,11 @@ async function createTerminalNode(options) {
   nodeRecord.overlayTitle = elements.overlayTitle;
   nodeRecord.overlayMeta = elements.overlayMeta;
   nodeRecord.meta = elements.meta;
+  nodeRecord.copySessionButton = elements.copySessionButton;
   nodeRecord.status = elements.status;
   nodeRecord.titleInput = elements.titleInput;
   nodeRecord.maximizeButton = elements.maximizeButton;
+  nodeRecord.closeButton = elements.closeButton;
   nodeRecord.reopenButton = elements.reopenButton;
   nodeRecord.resizeHandles = elements.resizeHandles;
 
@@ -4743,6 +4912,15 @@ async function createTerminalNode(options) {
   elements.closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (nodeRecord.isManager) {
+      return;
+    }
+
+    if (nodeRecord.managedAgentName !== null) {
+      void deleteManagedAgentNode(nodeRecord);
+      return;
+    }
+
     void destroyTerminalNode(nodeRecord);
   });
 
@@ -4750,6 +4928,22 @@ async function createTerminalNode(options) {
     event.preventDefault();
     event.stopPropagation();
     setNodeMaximized(nodeRecord, !nodeRecord.isMaximized);
+  });
+
+  elements.copySessionButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sessionIdentifier = getNodeSessionIdentifier(nodeRecord);
+    const button = elements.copySessionButton;
+    const originalLabel = "ID";
+
+    void copyTextToClipboard(sessionIdentifier).then((copied) => {
+      button.textContent = copied ? "Copied" : "Failed";
+      window.setTimeout(() => {
+        button.textContent = originalLabel;
+      }, 1200);
+    });
   });
 
   elements.reopenButton.addEventListener("click", (event) => {
@@ -4851,6 +5045,16 @@ async function createTerminalNode(options) {
 
   positionNode(nodeRecord);
   syncTerminalInteractionOverlay(nodeRecord);
+  syncManagedNodeState(nodeRecord, {
+    name: nodeRecord.managedAgentName,
+    role: nodeRecord.managedAgentRole,
+    project: nodeRecord.managedProjectTag,
+    runtime_state: nodeRecord.managedRuntimeState,
+    agent_state: nodeRecord.managedAgentState,
+    tmux_session: nodeRecord.tmuxSessionName,
+    workdir: nodeRecord.cwd,
+    is_project_manager: nodeRecord.isManager
+  });
   updateEmptyState();
 
   try {
@@ -4870,6 +5074,185 @@ async function createTerminalNode(options) {
 
   scheduleAppSessionSave();
   return nodeRecord;
+}
+
+function getManagedCanvasNodes(canvasRecord) {
+  return canvasRecord.nodes.filter((nodeRecord) => nodeRecord.managedAgentName !== null && !nodeRecord.isRemoved);
+}
+
+function getManagedNodePlacement(canvasRecord, agentSnapshot) {
+  const managerNode = canvasRecord.nodes.find((nodeRecord) => nodeRecord.isManager && !nodeRecord.isRemoved) ?? null;
+  const existingManagedCount = getManagedCanvasNodes(canvasRecord).length;
+
+  if (agentSnapshot?.is_project_manager === true || managerNode === null) {
+    const centerPoint = toWorldPoint(getBoardViewportCenterPoint());
+    return {
+      x: centerPoint.x - (DEFAULT_NODE_WIDTH / 2),
+      y: centerPoint.y - (DEFAULT_NODE_HEIGHT / 2)
+    };
+  }
+
+  const workerIndex = Math.max(0, existingManagedCount - 1);
+  const column = workerIndex % 2;
+  const row = Math.floor(workerIndex / 2);
+
+  return {
+    x: managerNode.x + DEFAULT_NODE_WIDTH + 48 + (column * (DEFAULT_NODE_WIDTH + 32)),
+    y: managerNode.y + (row * (DEFAULT_NODE_HEIGHT + 28))
+  };
+}
+
+async function deleteManagedAgentNode(nodeRecord) {
+  const agentName = nodeRecord.managedAgentName;
+
+  await destroyTerminalNode(nodeRecord, { shouldDestroySession: false });
+
+  if (agentName !== null) {
+    try {
+      await window.noteCanvas.deleteCanvasAgent(agentName);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  scheduleCanvasAgentSync();
+}
+
+async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
+  const nextTmuxSessionName = typeof agentSnapshot?.tmux_session === "string" && agentSnapshot.tmux_session.length > 0
+    ? agentSnapshot.tmux_session
+    : null;
+
+  if (nextTmuxSessionName === null || nodeRecord.isRemoved) {
+    return;
+  }
+
+  const previousTmuxSessionName = nodeRecord.tmuxSessionName;
+
+  if (previousTmuxSessionName === nextTmuxSessionName) {
+    return;
+  }
+
+  nodeRecord.tmuxSessionName = nextTmuxSessionName;
+  nodeRecord.backend = "tmux";
+
+  try {
+    await releaseTerminalSession(nodeRecord);
+    await bindTerminalSession(nodeRecord, { shouldFocus: false });
+  } catch (error) {
+    console.error(error);
+    setNodeExitedState(nodeRecord, null, null);
+    nodeRecord.status.textContent = "Attach failed";
+    nodeRecord.meta.textContent = `Could not attach to ${nextTmuxSessionName}`;
+  }
+}
+
+async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
+  if (canvasRecord.id !== activeCanvasId) {
+    return;
+  }
+
+  const sessions = Array.isArray(snapshot?.sessions) ? snapshot.sessions : [];
+  const seenAgentNames = new Set();
+
+  canvasRecord.agentProjectTag = typeof snapshot?.project === "string" && snapshot.project.length > 0
+    ? snapshot.project
+    : canvasRecord.agentProjectTag;
+  canvasRecord.managerAgentName = normalizeManagedAgentName(snapshot?.manager?.name);
+
+  for (const agentSnapshot of sessions) {
+    const agentName = normalizeManagedAgentName(agentSnapshot?.name);
+
+    if (agentName === null) {
+      continue;
+    }
+
+    seenAgentNames.add(agentName);
+    const existingNode = canvasRecord.nodes.find((nodeRecord) => nodeRecord.managedAgentName === agentName && !nodeRecord.isRemoved) ?? null;
+
+    if (existingNode !== null) {
+      await rebindManagedNodeToAgentSession(existingNode, agentSnapshot);
+      syncManagedNodeState(existingNode, agentSnapshot);
+      continue;
+    }
+
+    const nextPosition = getManagedNodePlacement(canvasRecord, agentSnapshot);
+
+    try {
+      await createTerminalNode({
+        x: nextPosition.x,
+        y: nextPosition.y,
+        width: DEFAULT_NODE_WIDTH,
+        height: DEFAULT_NODE_HEIGHT,
+        cwd: agentSnapshot.workdir,
+        title: agentSnapshot.name,
+        sessionKey: agentName,
+        tmuxSessionName: agentSnapshot.tmux_session,
+        managedAgentName: agentName,
+        managedAgentRole: agentSnapshot.role,
+        managedProjectTag: snapshot.project,
+        managedRuntimeState: agentSnapshot.runtime_state,
+        managedAgentState: agentSnapshot.agent_state,
+        isManager: agentSnapshot.is_project_manager === true,
+        shouldFocus: false
+      });
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  const staleNodes = getManagedCanvasNodes(canvasRecord).filter((nodeRecord) => !seenAgentNames.has(nodeRecord.managedAgentName));
+
+  for (const staleNode of staleNodes) {
+    await destroyTerminalNode(staleNode, { shouldDestroySession: false });
+  }
+
+  scheduleAppSessionSave();
+}
+
+async function syncActiveCanvasAgentProject() {
+  if (isCanvasAgentSyncInFlight) {
+    return;
+  }
+
+  const canvasRecord = getActiveCanvas();
+
+  if (canvasRecord === null || typeof canvasRecord.workspace?.rootPath !== "string") {
+    return;
+  }
+
+  isCanvasAgentSyncInFlight = true;
+
+  try {
+    const snapshot = await window.noteCanvas.syncCanvasAgentProject({
+      canvasId: canvasRecord.id,
+      canvasName: canvasRecord.name,
+      workspaceRootPath: canvasRecord.workspace.rootPath,
+      projectTag: canvasRecord.agentProjectTag
+    });
+
+    if (canvasRecord.id !== activeCanvasId) {
+      return;
+    }
+
+    await reconcileCanvasAgentProject(canvasRecord, snapshot);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    isCanvasAgentSyncInFlight = false;
+    scheduleCanvasAgentSync(CANVAS_AGENT_SYNC_INTERVAL_MS);
+  }
+}
+
+function scheduleCanvasAgentSync(delay = 0) {
+  if (canvasAgentSyncTimeout !== 0) {
+    clearTimeout(canvasAgentSyncTimeout);
+  }
+
+  canvasAgentSyncTimeout = window.setTimeout(() => {
+    canvasAgentSyncTimeout = 0;
+    void syncActiveCanvasAgentProject();
+  }, Math.max(0, delay));
 }
 
 async function destroyTerminalNode(nodeRecord, options = {}) {

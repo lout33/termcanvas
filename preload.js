@@ -58,6 +58,8 @@ contextBridge.exposeInMainWorld(
       terminalId,
       preserveSession: options?.preserveSession === true
     }),
+    syncCanvasAgentProject: (payload) => ipcRenderer.invoke("canvas-agent:sync", payload),
+    deleteCanvasAgent: (agentName) => ipcRenderer.invoke("canvas-agent:delete", { agentName }),
     saveCanvasFile: (payload) => ipcRenderer.invoke("canvas:save-file", payload),
     openCanvasFile: () => ipcRenderer.invoke("canvas:open-file"),
     onTerminalData: (callback) => {

@@ -8,13 +8,17 @@ function readRenderer() {
   return fs.readFileSync(rendererPath, "utf8");
 }
 
-test("live terminal headers clear shell subtitles", () => {
+test("live terminal headers show backend session subtitles", () => {
   const renderer = readRenderer();
 
   assert.match(
     renderer,
-    /function setNodeLiveState\(nodeRecord, shellName\) \{[\s\S]*nodeRecord\.meta\.textContent = "";/
+    /function setNodeLiveState\(nodeRecord, shellName, backend, tmuxSessionName, sessionKey\) \{[\s\S]*syncTerminalMeta\(nodeRecord\);/
   );
+  assert.match(renderer, /tmux: \$\{nodeRecord\.tmuxSessionName \?\? `termcanvas-\$\{nodeRecord\.sessionKey\}`\}/);
+  assert.match(renderer, /pty: \$\{nodeRecord\.sessionKey\}/);
+  assert.match(renderer, /function getNodeSessionIdentifier\(nodeRecord\)/);
+  assert.match(renderer, /copySessionButton\.textContent = "ID"/);
 });
 
 test("terminal strip items attach reorder handling for active canvas terminals", () => {

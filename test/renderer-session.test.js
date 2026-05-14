@@ -29,9 +29,16 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
         canvasRecord: {
           id: "canvas-1",
           workspace: firstWorkspace,
+          agentProjectTag: null,
+          managerAgentName: null,
           activeSessionKey: null,
           nodes: [{
             sessionKey: "terminal-1",
+            managedAgentName: null,
+            managedAgentRole: null,
+            managedProjectTag: null,
+            tmuxSessionName: null,
+            isManager: false,
             isExited: false,
             exitCode: null,
             exitSignal: null
@@ -57,9 +64,16 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
         canvasRecord: {
           id: "canvas-2",
           workspace: secondWorkspace,
+          agentProjectTag: null,
+          managerAgentName: null,
           activeSessionKey: "terminal-2",
           nodes: [{
             sessionKey: "terminal-2",
+            managedAgentName: null,
+            managedAgentRole: null,
+            managedProjectTag: null,
+            tmuxSessionName: null,
+            isManager: false,
             isExited: true,
             exitCode: 1,
             exitSignal: "SIGTERM"
@@ -97,6 +111,11 @@ test("serializeAppSessionSnapshot keeps each canvas workspace isolated when the 
     title: "Two",
     isMaximized: true,
     sessionKey: "terminal-2",
+    managedAgentName: null,
+    managedAgentRole: null,
+    managedProjectTag: null,
+    tmuxSessionName: null,
+    isManager: false,
     isExited: true,
     exitCode: 1,
     exitSignal: "SIGTERM"

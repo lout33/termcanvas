@@ -2239,6 +2239,13 @@ button {
   gap: 0;
 }
 
+.terminal-node-meta-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
 .terminal-node-title-input {
   width: 100%;
   min-width: 0;
@@ -2270,6 +2277,11 @@ button {
 }
 
 .terminal-node-meta {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-terminal-muted);
   font-size: 0.6rem;
   letter-spacing: 0.08em;
@@ -2285,6 +2297,23 @@ button {
   flex: 0 0 auto;
   align-items: center;
   gap: 0.25rem;
+}
+
+.terminal-node-copy-session {
+  width: auto;
+  min-width: 2.1rem;
+  padding: 0 0.35rem;
+  color: var(--color-maximize-button);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.terminal-node-copy-session:hover {
+  background: var(--color-maximize-button-hover);
+  border-color: var(--color-maximize-button-hover-border);
+  color: var(--color-terminal-ink);
+  opacity: 1;
 }
 
 .terminal-node-status {

@@ -135,3 +135,16 @@ test("preload exposes app session file import and export methods", () => {
   ]);
   delete require.cache[preloadPath];
 });
+
+test("preload exposes canvas agent sync and delete methods", () => {
+  const { exposedApi, invokeCalls, preloadPath } = loadPreloadWithMocks();
+
+  exposedApi.syncCanvasAgentProject({ canvasId: "canvas-1" });
+  exposedApi.deleteCanvasAgent("worker-1");
+
+  assert.deepEqual(invokeCalls, [
+    ["canvas-agent:sync", { canvasId: "canvas-1" }],
+    ["canvas-agent:delete", { agentName: "worker-1" }]
+  ]);
+  delete require.cache[preloadPath];
+});
