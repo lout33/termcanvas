@@ -39,7 +39,7 @@ Examples:
 - Workspace drawer for browsing imported folders and previewing files
 - App-session restore across relaunches
 - `tmux`-backed terminal reattach when available
-- Managed AI agent terminals through the bundled `agentmux` runtime
+- Integrated `agentmux` manager for commander and worker AI agent terminals
 - Canvas JSON export and import
 - Full app-data JSON export and import for moving setups between installs
 - Electron security boundary with Node kept out of the renderer
@@ -96,7 +96,7 @@ Important behavior:
 
 ## Managed Agents
 
-TermCanvas includes `agentmux` when the desktop app is packaged, so users do not need to install a separate agent manager.
+TermCanvas has an integrated `agentmux` manager for creating and tracking commander and worker AI agent terminals on the canvas. Packaged apps include the runtime, so users do not need to install a separate agent manager.
 
 - packaged apps run the bundled runtime from the app resources folder
 - packaged apps store agentmux state under the app `userData` directory
