@@ -38,3 +38,22 @@ test("terminal strip items attach reorder handling for active canvas terminals",
   assert.match(renderer, /attachReorderableListItem\(stripItem, stripItem, \{/);
   assert.match(renderer, /onMove: async \(_nodeId, targetIndex\) => reorderTerminalNodeById\(itemView\.id, targetIndex\)/);
 });
+
+test("managed agent snapshots reconcile managers before workers", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /function sortManagedAgentSnapshots\(agentSnapshots\) \{/);
+  assert.match(renderer, /const leftRank = left\?\.is_project_manager === true \? 0 : 1;/);
+  assert.match(renderer, /const rightRank = right\?\.is_project_manager === true \? 0 : 1;/);
+  assert.match(renderer, /const sessions = sortManagedAgentSnapshots\(Array\.isArray\(snapshot\?\.sessions\) \? snapshot\.sessions : \[\]\);/);
+});
+
+test("managed agent labels use commander and worker roles", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /function normalizeManagedAgentRole\(value, isManager = false\) \{/);
+  assert.match(renderer, /return "commander";/);
+  assert.match(renderer, /return "worker";/);
+  assert.match(renderer, /return "Commander";/);
+  assert.match(renderer, /return "Worker";/);
+});

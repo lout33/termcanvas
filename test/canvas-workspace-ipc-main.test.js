@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const Module = require("node:module");
+const { EventEmitter } = require("node:events");
 
 function createMockContents(id, contentsEventHandlers, sentMessages) {
   return {
@@ -27,7 +28,9 @@ function loadMainWithMocks({
   showSaveDialog,
   openPathResult = "",
   resolveWhenReady = false,
-  getPath = () => os.homedir()
+  getPath = () => os.homedir(),
+  nodePtyStub = {},
+  childProcessStub = null
 }) {
   const handlers = new Map();
   const openPathCalls = [];
@@ -109,6 +112,7 @@ function loadMainWithMocks({
   const originalLoad = Module._load;
   const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
   const mainPath = require.resolve("../main.js");
+  const agentmuxServicePath = require.resolve("../main_agentmux_service.js");
 
   if (smokeTest) {
     process.env.CANVAS_SMOKE_TEST = "1";
@@ -122,13 +126,18 @@ function loadMainWithMocks({
     }
 
     if (request === "node-pty") {
-      return {};
+      return nodePtyStub;
+    }
+
+    if (request === "node:child_process" && childProcessStub !== null) {
+      return childProcessStub;
     }
 
     return originalLoad.call(this, request, parent, isMain);
   };
 
   delete require.cache[mainPath];
+  delete require.cache[agentmuxServicePath];
 
   try {
     require(mainPath);
@@ -152,6 +161,62 @@ function loadMainWithMocks({
     appEventHandlers,
     contentsEventHandlers,
     sentMessages
+  };
+}
+
+function createMockPtyProcess({ autoExitCode = null } = {}) {
+  const dataListeners = [];
+  const exitListeners = [];
+
+  return {
+    onData: (listener) => {
+      dataListeners.push(listener);
+    },
+    onExit: (listener) => {
+      exitListeners.push(listener);
+      if (autoExitCode !== null) {
+        setImmediate(() => {
+          listener({ exitCode: autoExitCode, signal: 0 });
+        });
+      }
+    },
+    write: () => {},
+    resize: () => {},
+    kill: () => {}
+  };
+}
+
+function createMockSpawn(handler) {
+  return (command, args) => {
+    const childProcess = new EventEmitter();
+    childProcess.stdout = new EventEmitter();
+    childProcess.stderr = new EventEmitter();
+    childProcess.kill = () => {};
+
+    setImmediate(() => {
+      try {
+        const result = handler(command, args);
+
+        if (result?.error instanceof Error) {
+          childProcess.emit("error", result.error);
+          return;
+        }
+
+        if (typeof result?.stdout === "string" && result.stdout.length > 0) {
+          childProcess.stdout.emit("data", result.stdout);
+        }
+
+        if (typeof result?.stderr === "string" && result.stderr.length > 0) {
+          childProcess.stderr.emit("data", result.stderr);
+        }
+
+        childProcess.emit("close", Number.isInteger(result?.status) ? result.status : 0);
+      } catch (error) {
+        childProcess.emit("error", error);
+      }
+    });
+
+    return childProcess;
   };
 }
 
@@ -202,6 +267,93 @@ test("workspace-directory:choose-canvas replaces the owner's existing workspace 
     delete process.env.CANVAS_SMOKE_TEST;
   } else {
     process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
+test("terminal:create falls back to a plain shell when a saved tmux session is gone", async () => {
+  const spawnCalls = [];
+  const ptySpawnCalls = [];
+  const originalWarn = console.warn;
+  const warnMessages = [];
+
+  console.warn = (message) => {
+    warnMessages.push(String(message));
+  };
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: (command, args) => {
+          spawnCalls.push({ command, args });
+
+          if (command === "tmux" && args[0] === "-V") {
+            return { status: 0, stdout: "tmux 3.4", stderr: "" };
+          }
+
+          if (args[0] === "new-session") {
+            return { status: 0, stdout: "", stderr: "" };
+          }
+
+          if (args[0] === "kill-session") {
+            return { status: 0, stdout: "", stderr: "" };
+          }
+
+          if (args[0] === "has-session") {
+            const sessionName = args[2];
+            if (typeof sessionName === "string" && sessionName.startsWith("termcanvas-probe-")) {
+              return { status: 0, stdout: "", stderr: "" };
+            }
+
+            return { status: 1, stdout: "", stderr: "can't find session" };
+          }
+
+          return { status: 0, stdout: "", stderr: "" };
+        }
+      },
+      nodePtyStub: {
+        spawn: (command, args) => {
+          ptySpawnCalls.push({ command, args });
+          const sessionTarget = Array.isArray(args) ? args[2] : null;
+          const isProbeAttach = command === "tmux"
+            && Array.isArray(args)
+            && args[0] === "attach-session"
+            && typeof sessionTarget === "string"
+            && sessionTarget.startsWith("termcanvas-probe-");
+
+          return createMockPtyProcess({ autoExitCode: isProbeAttach ? 0 : null });
+        }
+      }
+    });
+
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    assert.equal(typeof createTerminalHandler, "function");
+
+    const created = await createTerminalHandler(
+      { sender: { id: 41 } },
+      {
+        terminalId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        cwd: os.homedir(),
+        sessionKey: "joke-worker",
+        tmuxSessionName: "termcanvas-joke-worker"
+      }
+    );
+
+    assert.equal(created.backend, "pty");
+    assert.equal(created.tmuxSessionName, null);
+    assert.ok(warnMessages.some((message) => /termcanvas-joke-worker/.test(message)));
+    assert.ok(
+      ptySpawnCalls.some(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0),
+      "expected fallback shell PTY spawn"
+    );
+
+    delete require.cache[mainPath];
+  } finally {
+    console.warn = originalWarn;
   }
 });
 
@@ -774,6 +926,150 @@ test("Cmd+M is swallowed without forwarding when no active terminal is cached", 
   delete require.cache[mainPath];
 });
 
+test("canvas-agent:sync returns an unavailable marker when agentmux is missing", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-unavailable-"));
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+
+  process.env.TERMCANVAS_AGENTMUX_ROOT = tempRoot;
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: () => ({
+          error: Object.assign(new Error("spawn agentmux ENOENT"), { code: "ENOENT" })
+        })
+      }
+    });
+    const syncCanvasAgent = handlers.get("canvas-agent:sync");
+
+    assert.equal(typeof syncCanvasAgent, "function");
+
+    const result = await syncCanvasAgent(
+      { sender: { id: 101 } },
+      {
+        canvasId: "canvas-1",
+        canvasName: "Canvas 1",
+        workspaceRootPath: tempRoot
+      }
+    );
+
+    assert.equal(result.unavailable, true);
+    assert.match(result.reason, /agentmux is unavailable/u);
+    delete require.cache[mainPath];
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("canvas-agent:sync bootstraps once then polls agentmux read-only status", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-sync-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const workspaceRoot = path.join(tempRoot, "workspace");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+  const spawnCalls = [];
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.writeFileSync(path.join(agentmuxRoot, "agentmux.py"), "#!/usr/bin/env python3\n", "utf8");
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawn: createMockSpawn((command, args) => {
+          spawnCalls.push({ command, args });
+
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              project: "canvas-one",
+              manager: { name: "manager" },
+              sessions: []
+            }),
+            stderr: ""
+          };
+        })
+      }
+    });
+    const syncCanvasAgent = handlers.get("canvas-agent:sync");
+
+    assert.equal(typeof syncCanvasAgent, "function");
+
+    const result = await syncCanvasAgent(
+      { sender: { id: 101 } },
+      {
+        canvasId: "canvas-1",
+        canvasName: "Canvas 1",
+        workspaceRootPath: workspaceRoot,
+        projectTag: "canvas-one"
+      }
+    );
+    const nextResult = await syncCanvasAgent(
+      { sender: { id: 101 } },
+      {
+        canvasId: "canvas-1",
+        canvasName: "Canvas 1",
+        workspaceRootPath: workspaceRoot,
+        projectTag: "canvas-one"
+      }
+    );
+
+    assert.equal(result.project, "canvas-one");
+    assert.equal(nextResult.project, "canvas-one");
+    const agentsContents = fs.readFileSync(path.join(workspaceRoot, "AGENTS.md"), "utf8");
+    assert.match(agentsContents, /Do not assume your role from this file alone/u);
+    assert.match(agentsContents, /AGENTMUX_ROLE=commander/u);
+    assert.match(agentsContents, /AGENTMUX_ROLE=worker/u);
+    assert.match(agentsContents, /If `AGENTMUX_ROLE=worker`, complete your assigned task/u);
+    assert.doesNotMatch(agentsContents, /You are the TermCanvas commander/u);
+    assert.doesNotMatch(agentsContents, /Agentmux Commander Rules/u);
+    assert.deepEqual(spawnCalls, [
+      {
+        command: "python3",
+        args: [
+          path.join(agentmuxRoot, "agentmux.py"),
+          "project-sync",
+          "canvas-one",
+          "--workdir",
+          workspaceRoot,
+          "--harness",
+          "shell",
+          "--json"
+        ]
+      },
+      {
+        command: "python3",
+        args: [
+          path.join(agentmuxRoot, "agentmux.py"),
+          "ls",
+          "--project",
+          "canvas-one",
+          "--json"
+        ]
+      }
+    ]);
+    delete require.cache[mainPath];
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("terminal:write ignores missing sessions", () => {
   const { handlers, mainPath } = loadMainWithMocks({
     smokeTest: true,
@@ -788,6 +1084,66 @@ test("terminal:write ignores missing sessions", () => {
       terminalId: "missing-terminal",
       data: "pwd\r"
     });
+  });
+
+  delete require.cache[mainPath];
+});
+
+test("terminal:write converts recoverable pty write failures into terminal exit events", async () => {
+  const sentMessages = [];
+  const mockPty = createMockPtyProcess();
+  mockPty.write = () => {
+    const error = new Error("EIO: i/o error, write");
+    error.code = "EIO";
+    throw error;
+  };
+
+  const { handlers, mainPath, sentMessages: emittedMessages } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: (command, args) => {
+        if (command === "tmux" && args[0] === "-V") {
+          return { status: 1, stdout: "", stderr: "" };
+        }
+
+        return { status: 0, stdout: "", stderr: "" };
+      }
+    },
+    nodePtyStub: {
+      spawn: () => mockPty
+    }
+  });
+
+  const createTerminal = handlers.get("terminal:create");
+  const writeTerminal = handlers.get("terminal:write");
+
+  assert.equal(typeof createTerminal, "function");
+  assert.equal(typeof writeTerminal, "function");
+
+  await createTerminal(
+    { sender: { id: 101 } },
+    { terminalId: "write-failure-terminal", cols: 80, rows: 24, cwd: os.homedir() }
+  );
+
+  assert.doesNotThrow(() => {
+    writeTerminal(
+      { sender: { id: 101 } },
+      { terminalId: "write-failure-terminal", data: "pwd\r" }
+    );
+  });
+
+  sentMessages.push(...emittedMessages);
+  assert.deepEqual(
+    sentMessages.filter((entry) => entry.channel === "terminal:exit").map((entry) => entry.payload),
+    [{ terminalId: "write-failure-terminal", exitCode: null, signal: null }]
+  );
+
+  assert.doesNotThrow(() => {
+    writeTerminal(
+      { sender: { id: 101 } },
+      { terminalId: "write-failure-terminal", data: "pwd\r" }
+    );
   });
 
   delete require.cache[mainPath];

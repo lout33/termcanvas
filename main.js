@@ -8,7 +8,7 @@ const { createDirectorySnapshotAsync } = require("./directory_snapshot");
 const { getNodePtyHelperPaths } = require("./node_pty_runtime");
 const { readWorkspaceFilePreviewAsync, resolveWorkspaceFilePath } = require("./workspace_file_preview");
 const { createWorkspaceService } = require("./main_workspace_service");
-const { createAgentctlService } = require("./main_agentctl_service");
+const { createAgentmuxService, isAgentmuxUnavailableError } = require("./main_agentmux_service");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessions = new Map();
@@ -204,6 +204,11 @@ function isTmuxSessionMissing(result) {
   return typeof result?.stderr === "string" && /can't find session/u.test(result.stderr);
 }
 
+function isMissingTmuxSessionError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /tmux session '.+' is not running\./u.test(message) || /can't find session/u.test(message);
+}
+
 function hasTmuxSession(sessionName) {
   const result = runTmuxCommand(["has-session", "-t", sessionName]);
   return result !== null && result.status === 0;
@@ -388,6 +393,52 @@ function sendToOwner(ownerWebContentsId, channel, payload) {
   }
 }
 
+function isRecoverablePtyIoError(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.code === "EIO"
+    || error.code === "EBADF"
+    || /i\/o error/u.test(error.message)
+    || /bad file descriptor/u.test(error.message);
+}
+
+function closeTerminalSessionAfterPtyFailure(terminalId, session, error, actionLabel) {
+  if (session.isDisposing) {
+    terminalSessions.delete(terminalId);
+    return;
+  }
+
+  session.isDisposing = true;
+  console.warn(`Terminal session ${actionLabel} failed; treating session as exited.`, {
+    terminalId,
+    backend: session.backend,
+    error: error.message
+  });
+  sendToOwner(session.ownerWebContentsId, "terminal:exit", {
+    terminalId,
+    exitCode: null,
+    signal: null
+  });
+  terminalSessions.delete(terminalId);
+}
+
+function writeToSessionPty(terminalId, session, data, actionLabel) {
+  try {
+    session.pty.write(data);
+  } catch (error) {
+    if (isRecoverablePtyIoError(error)) {
+      closeTerminalSessionAfterPtyFailure(terminalId, session, error, actionLabel);
+      return false;
+    }
+
+    throw error;
+  }
+
+  return true;
+}
+
 const workspaceService = createWorkspaceService({
   app,
   shell,
@@ -398,7 +449,7 @@ const workspaceService = createWorkspaceService({
   resolveExistingDirectoryPath,
   workspaceWatchDebounceMs: WORKSPACE_WATCH_DEBOUNCE_MS
 });
-const agentctlService = createAgentctlService();
+const agentmuxService = createAgentmuxService({ app });
 
 function resolveDialogDefaultDirectory(ownerWebContentsId) {
   return workspaceService.getActiveFolderRootPath(ownerWebContentsId) ?? app.getPath("documents");
@@ -1624,16 +1675,29 @@ ipcMain.handle("terminal:create", async (event, payload) => {
     ? payload.tmuxSessionName.trim()
     : null;
 
-  const tmuxSession = await createTmuxClientSession({
-    ownerWebContentsId: event.sender.id,
-    cols: safeCols,
-    rows: safeRows,
-    cwd: terminalCwd,
-    shellName,
-    sessionKey,
-    tmuxSessionName: requestedTmuxSessionName,
-    createIfMissing: requestedTmuxSessionName === null
-  });
+  let tmuxSession = null;
+
+  try {
+    tmuxSession = await createTmuxClientSession({
+      ownerWebContentsId: event.sender.id,
+      cols: safeCols,
+      rows: safeRows,
+      cwd: terminalCwd,
+      shellName,
+      sessionKey,
+      tmuxSessionName: requestedTmuxSessionName,
+      createIfMissing: requestedTmuxSessionName === null
+    });
+  } catch (error) {
+    if (requestedTmuxSessionName !== null && isMissingTmuxSessionError(error)) {
+      console.warn(
+        `tmux session '${requestedTmuxSessionName}' is not running; restoring terminal as a plain shell PTY.`
+      );
+    } else {
+      throw error;
+    }
+  }
+
   const terminalPty = tmuxSession?.session?.pty ?? pty.spawn(shell, [], {
     name: "xterm-256color",
     cols: safeCols,
@@ -1657,7 +1721,12 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   terminalSessions.set(terminalId, session);
 
   if (shouldEnforceRequestedCwd && session.backend !== "tmux") {
-    terminalPty.write(`cd -- '${escapeShellPathForSingleQuotes(terminalCwd)}'\r`);
+    writeToSessionPty(
+      terminalId,
+      session,
+      `cd -- '${escapeShellPathForSingleQuotes(terminalCwd)}'\r`,
+      "bootstrap write"
+    );
   }
 
   terminalPty.onData((data) => {
@@ -1737,7 +1806,7 @@ ipcMain.handle("terminal:write", (event, payload) => {
       });
     }
 
-    session.pty.write(data);
+    writeToSessionPty(payload.terminalId, session, data, "write");
   }
 });
 
@@ -1775,16 +1844,27 @@ ipcMain.handle("terminal:destroy", (event, payload) => {
 });
 
 ipcMain.handle("canvas-agent:sync", async (_event, payload) => {
-  return agentctlService.syncCanvasProject({
-    canvasId: payload?.canvasId,
-    canvasName: payload?.canvasName,
-    workspaceRootPath: payload?.workspaceRootPath,
-    projectTag: payload?.projectTag
-  });
+  try {
+    return await agentmuxService.syncCanvasProject({
+      canvasId: payload?.canvasId,
+      canvasName: payload?.canvasName,
+      workspaceRootPath: payload?.workspaceRootPath,
+      projectTag: payload?.projectTag
+    });
+  } catch (error) {
+    if (isAgentmuxUnavailableError(error)) {
+      return {
+        unavailable: true,
+        reason: error.message
+      };
+    }
+
+    throw error;
+  }
 });
 
 ipcMain.handle("canvas-agent:delete", async (_event, payload) => {
-  agentctlService.deleteAgent(payload?.agentName);
+  await agentmuxService.deleteAgent(payload?.agentName);
   return { ok: true };
 });
 

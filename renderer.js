@@ -120,7 +120,7 @@ const ZOOM_INDICATOR_VISIBLE_MS = 1200;
 const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 const APP_SESSION_VERSION = 1;
 const APP_SESSION_SAVE_DEBOUNCE_MS = 180;
-const CANVAS_AGENT_SYNC_INTERVAL_MS = 1800;
+const CANVAS_AGENT_SYNC_INTERVAL_MS = 6000;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -319,6 +319,30 @@ function normalizeManagedAgentName(value) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function normalizeManagedAgentRole(value, isManager = false) {
+  if (value === "commander" || value === "project_manager") {
+    return "commander";
+  }
+
+  if (value === "worker" || value === "project_worker") {
+    return "worker";
+  }
+
+  return isManager ? "commander" : "agent";
+}
+
+function getManagedAgentRoleLabel(role) {
+  if (role === "commander") {
+    return "Commander";
+  }
+
+  if (role === "worker") {
+    return "Worker";
+  }
+
+  return "Agent";
+}
+
 function getManagedAgentNodeTitle(options = {}) {
   const agentName = normalizeManagedAgentName(options.agentName);
 
@@ -326,7 +350,8 @@ function getManagedAgentNodeTitle(options = {}) {
     return typeof options.title === "string" ? options.title : "";
   }
 
-  return options.isManager === true ? `${agentName} (Manager)` : agentName;
+  const role = normalizeManagedAgentRole(options.role, options.isManager === true);
+  return `${agentName} (${getManagedAgentRoleLabel(role)})`;
 }
 
 function getNodeSessionIdentifier(nodeRecord) {
@@ -614,7 +639,7 @@ function formatTerminalMeta(nodeRecord) {
     : `pty: ${nodeRecord.sessionKey}`;
   const managedLabel = nodeRecord.managedAgentName === null
     ? null
-    : `${nodeRecord.isManager ? "manager" : "agent"}: ${nodeRecord.managedAgentName}`;
+    : `${getManagedAgentRoleLabel(normalizeManagedAgentRole(nodeRecord.managedAgentRole, nodeRecord.isManager))}: ${nodeRecord.managedAgentName}`;
 
   return [managedLabel, nodeRecord.shellName, backendLabel].filter((value) => value !== null).join(" · ");
 }
@@ -650,13 +675,13 @@ function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessi
 
 function syncManagedNodeState(nodeRecord, agentSnapshot) {
   nodeRecord.managedAgentName = normalizeManagedAgentName(agentSnapshot?.name);
-  nodeRecord.managedAgentRole = typeof agentSnapshot?.role === "string" && agentSnapshot.role.length > 0
-    ? agentSnapshot.role
-    : null;
+  nodeRecord.isManager = agentSnapshot?.is_project_manager === true;
+  nodeRecord.managedAgentRole = nodeRecord.managedAgentName === null
+    ? null
+    : normalizeManagedAgentRole(agentSnapshot?.role, nodeRecord.isManager);
   nodeRecord.managedProjectTag = typeof agentSnapshot?.project === "string" && agentSnapshot.project.length > 0
     ? agentSnapshot.project
     : null;
-  nodeRecord.isManager = agentSnapshot?.is_project_manager === true;
   nodeRecord.managedRuntimeState = typeof agentSnapshot?.runtime_state === "string" && agentSnapshot.runtime_state.length > 0
     ? agentSnapshot.runtime_state
     : null;
@@ -671,6 +696,7 @@ function syncManagedNodeState(nodeRecord, agentSnapshot) {
     : nodeRecord.cwd;
   nodeRecord.titleText = getManagedAgentNodeTitle({
     agentName: nodeRecord.managedAgentName,
+    role: nodeRecord.managedAgentRole,
     isManager: nodeRecord.isManager,
     title: nodeRecord.titleText
   });
@@ -4904,7 +4930,9 @@ async function createTerminalNode(options) {
     backend: "unknown",
     tmuxSessionName: null,
     managedAgentName: normalizeManagedAgentName(options.managedAgentName),
-    managedAgentRole: typeof options.managedAgentRole === "string" && options.managedAgentRole.length > 0 ? options.managedAgentRole : null,
+    managedAgentRole: normalizeManagedAgentName(options.managedAgentName) === null
+      ? null
+      : normalizeManagedAgentRole(options.managedAgentRole, options.isManager === true),
     managedProjectTag: typeof options.managedProjectTag === "string" && options.managedProjectTag.length > 0 ? options.managedProjectTag : null,
     managedRuntimeState: typeof options.managedRuntimeState === "string" && options.managedRuntimeState.length > 0 ? options.managedRuntimeState : null,
     managedAgentState: typeof options.managedAgentState === "string" && options.managedAgentState.length > 0 ? options.managedAgentState : null,
@@ -4912,6 +4940,7 @@ async function createTerminalNode(options) {
     titleText: normalizeTerminalTitle(
       getManagedAgentNodeTitle({
         agentName: options.managedAgentName,
+        role: options.managedAgentRole,
         isManager: options.isManager,
         title: options.title
       }),
@@ -5128,6 +5157,21 @@ function getManagedCanvasNodes(canvasRecord) {
   return canvasRecord.nodes.filter((nodeRecord) => nodeRecord.managedAgentName !== null && !nodeRecord.isRemoved);
 }
 
+function sortManagedAgentSnapshots(agentSnapshots) {
+  return [...agentSnapshots].sort((left, right) => {
+    const leftRank = left?.is_project_manager === true ? 0 : 1;
+    const rightRank = right?.is_project_manager === true ? 0 : 1;
+
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+
+    const leftName = normalizeManagedAgentName(left?.name) ?? "";
+    const rightName = normalizeManagedAgentName(right?.name) ?? "";
+    return leftName.localeCompare(rightName);
+  });
+}
+
 function getManagedNodePlacement(canvasRecord, agentSnapshot) {
   const managerNode = canvasRecord.nodes.find((nodeRecord) => nodeRecord.isManager && !nodeRecord.isRemoved) ?? null;
   const existingManagedCount = getManagedCanvasNodes(canvasRecord).length;
@@ -5200,7 +5244,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
     return;
   }
 
-  const sessions = Array.isArray(snapshot?.sessions) ? snapshot.sessions : [];
+  const sessions = sortManagedAgentSnapshots(Array.isArray(snapshot?.sessions) ? snapshot.sessions : []);
   const seenAgentNames = new Set();
 
   canvasRecord.agentProjectTag = typeof snapshot?.project === "string" && snapshot.project.length > 0
@@ -5280,6 +5324,10 @@ async function syncActiveCanvasAgentProject() {
     });
 
     if (canvasRecord.id !== activeCanvasId) {
+      return;
+    }
+
+    if (snapshot?.unavailable === true) {
       return;
     }
 
