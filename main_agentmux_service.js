@@ -54,15 +54,7 @@ function deriveCanvasProjectTag(workspaceRootPath, canvasId) {
 }
 
 function getDefaultAgentmuxRootPath() {
-  const candidates = [
-    path.resolve(__dirname, "../../agentmux"),
-    path.resolve(__dirname, "../../agentctl")
-  ];
-
-  return candidates.find((candidatePath) => (
-    fs.existsSync(path.join(candidatePath, "agentmux"))
-    || fs.existsSync(path.join(candidatePath, "agentmux.py"))
-  )) ?? candidates[0];
+  return path.resolve(__dirname, "vendor/agentmux");
 }
 
 function getBundledAgentmuxRootPath(options = {}) {

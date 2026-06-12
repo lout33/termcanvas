@@ -39,6 +39,7 @@ Examples:
 - Workspace drawer for browsing imported folders and previewing files
 - App-session restore across relaunches
 - `tmux`-backed terminal reattach when available
+- Managed AI agent terminals through the bundled `agentmux` runtime
 - Canvas JSON export and import
 - Full app-data JSON export and import for moving setups between installs
 - Electron security boundary with Node kept out of the renderer
@@ -92,6 +93,16 @@ Important behavior:
 - closing a terminal node with `x` destroys that terminal session
 - closing the app preserves live `tmux`-backed terminals for relaunch
 - without `tmux`, the app still restores the UI layout, but not the exact live shell process
+
+## Managed Agents
+
+TermCanvas includes `agentmux` when the desktop app is packaged, so users do not need to install a separate agent manager.
+
+- packaged apps run the bundled runtime from the app resources folder
+- packaged apps store agentmux state under the app `userData` directory
+- development builds use the vendored runtime in `vendor/agentmux` by default
+- set `TERMCANVAS_AGENTMUX_ROOT` only when testing a different local runtime
+- missing `agentmux` does not block normal terminal canvas use
 
 ## Move Data Between Installs
 

@@ -72,3 +72,40 @@ test("packaged runtime path includes common mac cli install locations first", ()
     ].join(path.delimiter)
   );
 });
+
+test("development agentmux service uses vendored runtime by default", () => {
+  const repoRoot = path.join(__dirname, "..");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+  delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+
+  try {
+    const service = createAgentmuxService({ agentmuxHomePath: path.join(repoRoot, ".tmp-agentmux-home") });
+    const invocation = service.getAgentmuxInvocation();
+
+    assert.equal(service.rootPath, path.join(repoRoot, "vendor", "agentmux"));
+    assert.equal(invocation.command, path.join(repoRoot, "vendor", "agentmux", "agentmux"));
+    assert.deepEqual(invocation.argsPrefix, []);
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+  }
+});
+
+test("release config bundles agentmux from electron-builder config", () => {
+  const repoRoot = path.join(__dirname, "..");
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  const electronBuilderConfig = fs.readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8");
+
+  assert.equal(packageJson.build, undefined);
+  assert.match(electronBuilderConfig, /extraResources:/u);
+  assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux"/u);
+  assert.match(electronBuilderConfig, /to: "agentmux\/agentmux"/u);
+  assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux\.py"/u);
+  assert.match(electronBuilderConfig, /to: "agentmux\/agentmux\.py"/u);
+  assert.match(electronBuilderConfig, /!vendor\/agentmux\/\*\*/u);
+  assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "agentmux")), true);
+  assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "agentmux.py")), true);
+});

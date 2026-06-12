@@ -12,8 +12,14 @@ files:
   - "!findings.md"
   - "!progress.md"
   - "!*.log"
+  - "!vendor/agentmux/**"
 asarUnpack:
   - "node_modules/node-pty/**/*"
+extraResources:
+  - from: "vendor/agentmux/agentmux"
+    to: "agentmux/agentmux"
+  - from: "vendor/agentmux/agentmux.py"
+    to: "agentmux/agentmux.py"
 mac:
   category: public.app-category.developer-tools
   icon: assets/branding/termcanvas.icns
