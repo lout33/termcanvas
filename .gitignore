@@ -8,3 +8,4 @@ findings.md
 progress.md
 *.log
 .DS_Store
+vendor/agentmux/.agentmux/
