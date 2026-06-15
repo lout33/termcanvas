@@ -47,6 +47,11 @@
   --color-maximize-button: rgba(205, 237, 242, 0.84);
   --color-maximize-button-hover: rgba(111, 232, 255, 0.14);
   --color-maximize-button-hover-border: rgba(111, 232, 255, 0.28);
+  --color-status-live: #4ade80;
+  --color-status-live-glow: rgba(74, 222, 128, 0.45);
+  --color-status-live-edge: rgba(74, 222, 128, 0.28);
+  --color-status-pending: #fbbf24;
+  --color-status-exited: #f87171;
   --color-terminal-exited: rgba(248, 113, 113, 0.92);
   --color-terminal-exited-bg: rgba(127, 29, 29, 0.18);
   --color-terminal-overlay: rgba(6, 7, 9, 0.62);
@@ -2324,8 +2329,11 @@ button {
 }
 
 .terminal-node-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   min-height: 1.25rem;
-  padding: 0 0.375rem;
+  padding: 0 0.45rem 0 0.4rem;
   border: 1px solid rgba(186, 213, 221, 0.08);
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
@@ -2333,6 +2341,42 @@ button {
   line-height: 1.25rem;
 }
 
+.terminal-node-status-dot {
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--color-status-pending);
+  box-shadow: 0 0 0 0.12rem rgba(0, 0, 0, 0.18);
+  transition: background var(--transition-base);
+}
+
+.terminal-node-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-node-status[data-state="live"] .terminal-node-status-dot {
+  background: var(--color-status-live);
+  box-shadow: 0 0 0.3rem var(--color-status-live-glow);
+}
+
+.terminal-node-status[data-state="pending"] .terminal-node-status-dot {
+  background: var(--color-status-pending);
+}
+
+.terminal-node-status[data-state="exited"] .terminal-node-status-dot {
+  background: var(--color-status-exited);
+}
+
+.terminal-node-status[data-state="live"] {
+  border-color: var(--color-status-live-edge);
+  color: var(--color-terminal-ink);
+}
+
+.terminal-node-status[data-state="exited"],
 .terminal-node.is-exited .terminal-node-status {
   border-color: rgba(248, 113, 113, 0.2);
   background: var(--color-terminal-exited-bg);

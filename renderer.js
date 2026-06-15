@@ -610,6 +610,37 @@ function updateExitedOverlay(nodeRecord) {
   }
 }
 
+function classifyNodeStatusState(text) {
+  const value = String(text ?? "").toLowerCase();
+  if (value.includes("exit") || value.includes("fail") || value.includes("ended")) {
+    return "exited";
+  }
+  if (value.includes("live") || value.includes("running") || value.includes("active") || value.includes("ready")) {
+    return "live";
+  }
+  return "pending";
+}
+
+function setTerminalNodeStatus(nodeRecord, text) {
+  const label = typeof text === "string" && text.length > 0 ? text : "—";
+  if (nodeRecord.statusLabel) {
+    nodeRecord.statusLabel.textContent = label;
+  } else if (nodeRecord.status) {
+    nodeRecord.status.textContent = label;
+  }
+  if (nodeRecord.status) {
+    nodeRecord.status.dataset.state = classifyNodeStatusState(label);
+    nodeRecord.status.title = label;
+  }
+}
+
+function getTerminalNodeStatusText(nodeRecord) {
+  if (nodeRecord.statusLabel) {
+    return nodeRecord.statusLabel.textContent;
+  }
+  return nodeRecord.status ? nodeRecord.status.textContent : "";
+}
+
 function setNodeExitedState(nodeRecord, exitCode, signal) {
   nodeRecord.isExited = true;
   nodeRecord.exitCode = typeof exitCode === "number" ? exitCode : null;
@@ -617,7 +648,7 @@ function setNodeExitedState(nodeRecord, exitCode, signal) {
   nodeRecord.resizeObserver?.disconnect();
   nodeRecord.resizeObserver = null;
   nodeRecord.syncSize = () => {};
-  nodeRecord.status.textContent = "Exited";
+  setTerminalNodeStatus(nodeRecord, "Exited");
   nodeRecord.meta.textContent = nodeRecord.exitCode === 0
     ? "Shell finished"
     : nodeRecord.exitCode !== null
@@ -653,9 +684,12 @@ function syncTerminalMeta(nodeRecord) {
     nodeRecord.copySessionButton.title = `Copy session id: ${sessionIdentifier}`;
     nodeRecord.copySessionButton.setAttribute("aria-label", `Copy session id ${sessionIdentifier}`);
   }
-  nodeRecord.status.textContent = nodeRecord.isExited
-    ? nodeRecord.status.textContent
-    : (nodeRecord.managedRuntimeState ?? "Live");
+  setTerminalNodeStatus(
+    nodeRecord,
+    nodeRecord.isExited
+      ? getTerminalNodeStatusText(nodeRecord)
+      : (nodeRecord.managedRuntimeState ?? "Live")
+  );
 }
 
 function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessionKey) {
@@ -666,7 +700,7 @@ function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessi
   nodeRecord.backend = backend;
   nodeRecord.tmuxSessionName = tmuxSessionName;
   nodeRecord.sessionKey = sessionKey;
-  nodeRecord.status.textContent = "Live";
+  setTerminalNodeStatus(nodeRecord, "Live");
   syncTerminalMeta(nodeRecord);
   nodeRecord.element.classList.remove("is-exited");
   updateExitedOverlay(nodeRecord);
@@ -861,7 +895,7 @@ async function reopenTerminalNode(nodeRecord) {
     return;
   }
 
-  nodeRecord.status.textContent = "Reopening";
+  setTerminalNodeStatus(nodeRecord, "Reopening");
   nodeRecord.meta.textContent = "Starting fresh shell";
   nodeRecord.overlay.hidden = true;
 
@@ -870,7 +904,7 @@ async function reopenTerminalNode(nodeRecord) {
     await bindTerminalSession(nodeRecord);
   } catch (error) {
     setNodeExitedState(nodeRecord, null, null);
-    nodeRecord.status.textContent = "Restart failed";
+    setTerminalNodeStatus(nodeRecord, "Restart failed");
     nodeRecord.meta.textContent = "Could not reopen shell";
     console.error(error);
   }
@@ -4794,7 +4828,14 @@ function createTerminalElement(nodeRecord) {
 
   const status = document.createElement("span");
   status.className = "terminal-node-meta terminal-node-status";
-  status.textContent = "Booting";
+  const statusDot = document.createElement("span");
+  statusDot.className = "terminal-node-status-dot";
+  statusDot.setAttribute("aria-hidden", "true");
+  const statusLabel = document.createElement("span");
+  statusLabel.className = "terminal-node-status-label";
+  statusLabel.textContent = "Booting";
+  status.append(statusDot, statusLabel);
+  status.dataset.state = "pending";
 
   const actions = document.createElement("div");
   actions.className = "terminal-node-actions";
@@ -4862,6 +4903,7 @@ function createTerminalElement(nodeRecord) {
     meta,
     copySessionButton,
     status,
+    statusLabel,
     titleInput,
     titleGroup,
     maximizeButton,
@@ -4919,6 +4961,7 @@ async function createTerminalNode(options) {
     meta: null,
     copySessionButton: null,
     status: null,
+    statusLabel: null,
     titleInput: null,
     titleGroup: null,
     maximizeButton: null,
@@ -4958,6 +5001,7 @@ async function createTerminalNode(options) {
   nodeRecord.meta = elements.meta;
   nodeRecord.copySessionButton = elements.copySessionButton;
   nodeRecord.status = elements.status;
+  nodeRecord.statusLabel = elements.statusLabel;
   nodeRecord.titleInput = elements.titleInput;
   nodeRecord.titleGroup = elements.titleGroup;
   nodeRecord.maximizeButton = elements.maximizeButton;
@@ -5234,7 +5278,7 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
   } catch (error) {
     console.error(error);
     setNodeExitedState(nodeRecord, null, null);
-    nodeRecord.status.textContent = "Attach failed";
+    setTerminalNodeStatus(nodeRecord, "Attach failed");
     nodeRecord.meta.textContent = `Could not attach to ${nextTmuxSessionName}`;
   }
 }
