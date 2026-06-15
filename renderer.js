@@ -156,6 +156,7 @@ let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
 let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
+let workspaceFilterQuery = "";
 let canvasAgentSyncTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
 let workspaceActionDialogResolve = null;
@@ -2986,7 +2987,7 @@ function syncAppShellWorkspaceState() {
   appShell?.classList.toggle("has-file-inspector", isWorkspacePreviewOpen());
 }
 
-function buildWorkspaceTreeRows(folderRecord) {
+function buildWorkspaceTreeRows(folderRecord, options = {}) {
   if (folderRecord === null) {
     return [];
   }
@@ -2996,6 +2997,30 @@ function buildWorkspaceTreeRows(folderRecord) {
   const selectedRelativePath = workspaceSelectionState.folderId === folderRecord.id
     ? workspaceSelectionState.relativePath
     : null;
+
+  const filterQuery = typeof options.filterQuery === "string" ? options.filterQuery.trim().toLowerCase() : "";
+  const isFiltering = filterQuery.length > 0;
+  let includedPaths = null;
+
+  if (isFiltering) {
+    includedPaths = new Set();
+    folderRecord.entries.forEach((entry) => {
+      const matchesName = entry.name.toLowerCase().includes(filterQuery);
+      const matchesPath = entry.relativePath.toLowerCase().includes(filterQuery);
+
+      if (!matchesName && !matchesPath) {
+        return;
+      }
+
+      includedPaths.add(entry.relativePath);
+      const parts = entry.relativePath.split("/");
+      let ancestor = "";
+      for (let index = 0; index < parts.length - 1; index += 1) {
+        ancestor = ancestor.length === 0 ? parts[index] : `${ancestor}/${parts[index]}`;
+        includedPaths.add(ancestor);
+      }
+    });
+  }
 
   folderRecord.entries.forEach((entry) => {
     const parentPath = getWorkspaceEntryParentPath(entry.relativePath);
@@ -3014,8 +3039,14 @@ function buildWorkspaceTreeRows(folderRecord) {
     const children = childrenByParentPath.get(parentPath) ?? [];
 
     children.forEach((entry) => {
+      if (isFiltering && !includedPaths.has(entry.relativePath)) {
+        return;
+      }
+
       const isDirectory = entry.kind === "directory";
-      const isExpanded = isDirectory && expandedDirectories.has(entry.relativePath);
+      const isExpanded = isFiltering
+        ? isDirectory
+        : (isDirectory && expandedDirectories.has(entry.relativePath));
 
       rows.push({
         ...entry,
@@ -3779,6 +3810,33 @@ function renderWorkspaceBrowser() {
     meta.textContent = `${activeFolder.entries.length} ${activeFolder.entries.length === 1 ? "entry" : "entries"}`;
 
     summary.append(summaryHeader, currentPath, meta);
+
+    if (activeFolder.entries.length > 0) {
+      const search = document.createElement("div");
+      search.className = "workspace-browser-search";
+
+      const searchInput = document.createElement("input");
+      searchInput.className = "workspace-browser-search-input";
+      searchInput.type = "search";
+      searchInput.placeholder = "Filter files…";
+      searchInput.spellcheck = false;
+      searchInput.setAttribute("aria-label", "Filter workspace files");
+      searchInput.value = workspaceFilterQuery;
+      searchInput.addEventListener("input", () => {
+        workspaceFilterQuery = searchInput.value;
+        renderWorkspaceBrowser();
+        const refreshedInput = workspaceBrowser.querySelector(".workspace-browser-search-input");
+        if (refreshedInput instanceof HTMLInputElement) {
+          refreshedInput.focus();
+          const caret = refreshedInput.value.length;
+          refreshedInput.setSelectionRange(caret, caret);
+        }
+      });
+
+      search.append(searchInput);
+      summary.append(search);
+    }
+
     fragment.append(summary);
 
     if (activeFolder.lastError.length > 0) {
@@ -3787,11 +3845,19 @@ function renderWorkspaceBrowser() {
       error.textContent = activeFolder.lastError;
       fragment.append(error);
     } else if (activeFolder.entries.length > 0) {
+      const treeRows = buildWorkspaceTreeRows(activeFolder, { filterQuery: workspaceFilterQuery });
+
+      if (treeRows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "workspace-browser-empty";
+        empty.textContent = "No files match your filter.";
+        fragment.append(empty);
+      } else {
       const entryList = document.createElement("ul");
       entryList.className = "workspace-browser-list";
       entryList.dataset.workspaceRootPath = activeFolder.rootPath;
 
-      buildWorkspaceTreeRows(activeFolder).forEach((entry) => {
+      treeRows.forEach((entry) => {
         const item = document.createElement("li");
         item.className = "workspace-browser-row";
 
@@ -3831,6 +3897,7 @@ function renderWorkspaceBrowser() {
       });
 
       fragment.append(entryList);
+      }
     } else {
       const empty = document.createElement("div");
       empty.className = "workspace-browser-empty";

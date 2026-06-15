@@ -664,6 +664,36 @@ button {
   text-transform: uppercase;
 }
 
+.workspace-browser-search {
+  margin-top: 0.5rem;
+}
+
+.workspace-browser-search-input {
+  width: 100%;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--color-sidebar-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-sidebar-action-surface);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  transition:
+    border-color var(--transition-base),
+    background var(--transition-base);
+}
+
+.workspace-browser-search-input::placeholder {
+  color: var(--color-placeholder);
+}
+
+.workspace-browser-search-input:focus {
+  outline: none;
+  border-color: var(--color-sidebar-accent-strong);
+  background: var(--color-sidebar-panel-hover);
+}
+
 .workspace-browser-empty,
 .workspace-browser-error {
   color: var(--color-muted);
