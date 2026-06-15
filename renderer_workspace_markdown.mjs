@@ -2,6 +2,9 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, Decoration, ViewPlugin, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
+import { javascript } from "@codemirror/lang-javascript";
+import { css } from "@codemirror/lang-css";
+import { html } from "@codemirror/lang-html";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { tags } from "@lezer/highlight";
@@ -286,7 +289,166 @@ function createMarkdownEditor({ parentElement, initialText = "", readOnly = fals
   };
 }
 
+const codeEditorTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    border: "1px solid rgba(180, 207, 217, 0.12)",
+    borderRadius: "0.625rem",
+    backgroundColor: "rgba(7, 8, 10, 0.92)",
+    color: "#f1f5f2",
+    fontFamily: 'var(--font-mono, "SFMono-Regular", Menlo, Monaco, Consolas, monospace)',
+    fontSize: "0.84rem"
+  },
+  ".cm-scroller": {
+    fontFamily: 'var(--font-mono, "SFMono-Regular", Menlo, Monaco, Consolas, monospace)',
+    lineHeight: "1.6"
+  },
+  ".cm-content": {
+    caretColor: "#f1f5f2"
+  },
+  ".cm-gutters": {
+    borderTopLeftRadius: "0.625rem",
+    borderBottomLeftRadius: "0.625rem",
+    backgroundColor: "rgba(10, 12, 16, 0.92)",
+    borderRight: "1px solid rgba(180, 207, 217, 0.08)",
+    color: "rgba(147, 162, 170, 0.6)"
+  },
+  ".cm-activeLineGutter, .cm-activeLine": {
+    backgroundColor: "rgba(111, 232, 255, 0.06)"
+  },
+  "&.cm-focused": {
+    outline: "none",
+    borderColor: "rgba(111, 232, 255, 0.28)",
+    boxShadow: "0 0 0 1px rgba(111, 232, 255, 0.24)"
+  },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": {
+    backgroundColor: "rgba(111, 232, 255, 0.18)"
+  }
+});
+
+function getCodeLanguageExtension(fileName) {
+  const name = typeof fileName === "string" ? fileName.toLowerCase() : "";
+  const extensionMatch = /\.([a-z0-9]+)$/u.exec(name);
+  const extension = extensionMatch ? extensionMatch[1] : "";
+
+  switch (extension) {
+    case "js":
+    case "cjs":
+    case "mjs":
+    case "jsx":
+      return javascript({ jsx: true });
+    case "ts":
+      return javascript({ typescript: true });
+    case "tsx":
+      return javascript({ typescript: true, jsx: true });
+    case "json":
+      return javascript();
+    case "css":
+      return css();
+    case "html":
+    case "htm":
+      return html();
+    default:
+      return null;
+  }
+}
+
+function createCodeEditor({ parentElement, fileName = "", initialText = "", readOnly = false, onChange, onBlur, onSaveShortcut }) {
+  if (!(parentElement instanceof HTMLElement)) {
+    throw new Error("A parent element is required to create the code editor.");
+  }
+
+  const editableCompartment = new Compartment();
+  const languageExtension = getCodeLanguageExtension(fileName);
+  let isApplyingExternalText = false;
+
+  const extensions = [
+    basicSetup,
+    oneDark,
+    codeEditorTheme,
+    editableCompartment.of(EditorView.editable.of(readOnly !== true)),
+    EditorView.contentAttributes.of({
+      spellcheck: "false",
+      autocorrect: "off",
+      autocapitalize: "off"
+    }),
+    keymap.of([{
+      key: "Mod-s",
+      run: () => {
+        if (typeof onSaveShortcut === "function") {
+          onSaveShortcut();
+        }
+
+        return true;
+      }
+    }]),
+    EditorView.updateListener.of((update) => {
+      if (!update.docChanged || isApplyingExternalText || typeof onChange !== "function") {
+        return;
+      }
+
+      onChange(update.state.doc.toString());
+    }),
+    EditorView.domEventHandlers({
+      blur: () => {
+        if (typeof onBlur === "function") {
+          onBlur();
+        }
+
+        return false;
+      }
+    })
+  ];
+
+  if (languageExtension !== null) {
+    extensions.splice(1, 0, languageExtension);
+  }
+
+  const view = new EditorView({
+    parent: parentElement,
+    state: EditorState.create({
+      doc: typeof initialText === "string" ? initialText : "",
+      extensions
+    })
+  });
+
+  return {
+    destroy() {
+      view.destroy();
+    },
+    focus() {
+      view.focus();
+    },
+    getText() {
+      return view.state.doc.toString();
+    },
+    setReadOnly(isReadOnly) {
+      view.dispatch({
+        effects: editableCompartment.reconfigure(EditorView.editable.of(isReadOnly !== true))
+      });
+    },
+    setText(nextText) {
+      const normalizedText = typeof nextText === "string" ? nextText : "";
+
+      if (view.state.doc.toString() === normalizedText) {
+        return;
+      }
+
+      isApplyingExternalText = true;
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: normalizedText
+        }
+      });
+      isApplyingExternalText = false;
+    }
+  };
+}
+
 export {
   createMarkdownEditor,
+  createCodeEditor,
   renderMarkdownToHtml
 };

@@ -1076,6 +1076,33 @@ button {
   cursor: default;
 }
 
+.file-inspector-code-editor {
+  min-height: 34rem;
+  border: 1px solid rgba(186, 213, 221, 0.08);
+  border-radius: calc(var(--radius-lg) + 0.125rem);
+  background: rgba(5, 7, 10, 0.72);
+  overflow: hidden;
+  cursor: text;
+}
+
+.file-inspector-code-editor .cm-editor {
+  min-height: 34rem;
+  background: transparent;
+}
+
+.file-inspector-code-editor.is-readonly {
+  cursor: default;
+}
+
+.file-inspector-code-editor.is-readonly .cm-editor {
+  cursor: default;
+}
+
+.file-inspector-code-editor .cm-gutters,
+.file-inspector-code-editor .cm-activeLineGutter {
+  cursor: default;
+}
+
 .file-inspector-markdown {
   max-width: min(72rem, 100%);
   margin: 0 auto;

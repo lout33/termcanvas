@@ -40,7 +40,8 @@ const {
   shouldApplyWorkspacePreviewActionError
 } = window.noteCanvasRendererWorkspacePreview;
 const {
-  createMarkdownEditor
+  createMarkdownEditor,
+  createCodeEditor
 } = window.noteCanvasRendererWorkspaceMarkdown ?? {};
 
 if (window.noteCanvas?.isSmokeTest) {
@@ -3018,6 +3019,9 @@ function renderFileInspector() {
   const body = document.createElement("div");
   body.className = "file-inspector-body";
   let markdownEditorMount = null;
+  let codeEditorMount = null;
+  let codeEditorReadOnly = false;
+  let codeEditorInitialText = "";
 
   if (isMarkdownFile) {
     if (workspacePreviewState.isDirty || workspacePreviewState.saveErrorMessage.length > 0) {
@@ -3038,6 +3042,20 @@ function renderFileInspector() {
       markdownEditorMount = document.createElement("div");
       markdownEditorMount.className = "file-inspector-markdown-editor";
       body.append(markdownEditorMount);
+    } else if (typeof createCodeEditor === "function") {
+      codeEditorMount = document.createElement("div");
+      codeEditorMount.className = "file-inspector-code-editor";
+      codeEditorReadOnly = false;
+      codeEditorInitialText = workspacePreviewState.draftText;
+      body.append(codeEditorMount);
+
+      if (workspacePreviewState.saveErrorMessage.length > 0) {
+        const saveError = document.createElement("div");
+        saveError.className = "file-inspector-error";
+        saveError.dataset.fileInspectorSaveBanner = "true";
+        saveError.textContent = workspacePreviewState.saveErrorMessage;
+        body.append(saveError);
+      }
     } else {
       const editor = document.createElement("textarea");
       editor.className = "file-inspector-editor";
@@ -3169,6 +3187,12 @@ function renderFileInspector() {
     frame.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
     frame.title = `${previewViewModel.fileName} preview`;
     body.append(frame);
+  } else if (typeof createCodeEditor === "function") {
+    codeEditorMount = document.createElement("div");
+    codeEditorMount.className = "file-inspector-code-editor is-readonly";
+    codeEditorReadOnly = true;
+    codeEditorInitialText = previewViewModel.textContents;
+    body.append(codeEditorMount);
   } else {
     const pre = document.createElement("pre");
     pre.className = "file-inspector-content";
@@ -3200,6 +3224,35 @@ function renderFileInspector() {
     window.requestAnimationFrame(() => {
       workspaceMarkdownEditor?.focus();
     });
+  } else if (codeEditorMount !== null && typeof createCodeEditor === "function") {
+    workspaceMarkdownEditor = createCodeEditor({
+      parentElement: codeEditorMount,
+      fileName: previewViewModel.fileName,
+      initialText: codeEditorInitialText,
+      readOnly: codeEditorReadOnly || workspacePreviewState.isSaving,
+      onBlur: () => {
+        if (!codeEditorReadOnly && workspacePreviewState.isDirty && workspacePreviewState.isSaving !== true) {
+          void saveWorkspacePreviewText();
+        }
+      },
+      onChange: (nextText) => {
+        if (codeEditorReadOnly) {
+          return;
+        }
+        updateWorkspacePreviewDraftText(nextText);
+        updateWorkspacePreviewInlineSaveState();
+      },
+      onSaveShortcut: () => {
+        if (!codeEditorReadOnly) {
+          void saveWorkspacePreviewText();
+        }
+      }
+    });
+    if (!codeEditorReadOnly) {
+      window.requestAnimationFrame(() => {
+        workspaceMarkdownEditor?.focus();
+      });
+    }
   }
 }
 
