@@ -1983,7 +1983,7 @@ button {
 
 .board-navigation {
   position: absolute;
-  right: var(--measure-board-gap);
+  left: var(--measure-board-gap);
   bottom: var(--measure-board-gap);
   z-index: 3;
   display: inline-flex;
@@ -1999,6 +1999,60 @@ button {
 
 .board-navigation[hidden] {
   display: none;
+}
+
+.board-minimap {
+  position: absolute;
+  right: var(--measure-board-gap);
+  bottom: var(--measure-board-gap);
+  z-index: 3;
+  width: 11rem;
+  padding: 0.3rem;
+  border: 1px solid var(--color-board-hud-border);
+  border-radius: calc(var(--radius-md) + 0.125rem);
+  background: var(--color-board-hud);
+  backdrop-filter: blur(0.375rem);
+  box-shadow: 0 0.5rem 1.35rem rgba(0, 0, 0, 0.2);
+}
+
+.board-minimap[hidden] {
+  display: none;
+}
+
+.board-minimap-canvas {
+  position: relative;
+  width: 100%;
+  height: 7rem;
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(212, 231, 238, 0.05), transparent 70%),
+    rgba(6, 8, 11, 0.6);
+  overflow: hidden;
+}
+
+.board-minimap-node {
+  position: absolute;
+  border-radius: 0.15rem;
+  background: rgba(176, 211, 224, 0.32);
+  border: 1px solid rgba(212, 231, 238, 0.32);
+}
+
+.board-minimap-node.is-active {
+  background: var(--color-phosphor-accent-strong);
+  border-color: var(--color-phosphor-accent-strong);
+}
+
+.board-minimap-node.is-exited {
+  background: rgba(248, 113, 113, 0.3);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.board-minimap-viewport {
+  position: absolute;
+  border: 1px solid rgba(111, 232, 255, 0.6);
+  border-radius: 0.15rem;
+  background: rgba(111, 232, 255, 0.08);
+  pointer-events: none;
 }
 
 .board-nav-button {

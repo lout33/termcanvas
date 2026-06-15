@@ -65,6 +65,9 @@ const boardZoomOutButton = document.getElementById("board-zoom-out-button");
 const boardZoomInButton = document.getElementById("board-zoom-in-button");
 const boardCenterViewButton = document.getElementById("board-center-view-button");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
+const boardMinimap = document.getElementById("board-minimap");
+const boardMinimapCanvas = document.getElementById("board-minimap-canvas");
+const boardMinimapViewport = document.getElementById("board-minimap-viewport");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
 const canvasStripList = document.getElementById("canvas-strip-list");
 const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
@@ -2058,6 +2061,109 @@ function requestViewportRender() {
   });
 }
 
+let minimapRenderFrame = 0;
+
+function scheduleMinimapRender() {
+  if (minimapRenderFrame !== 0) {
+    return;
+  }
+  minimapRenderFrame = requestAnimationFrame(() => {
+    minimapRenderFrame = 0;
+    renderMinimap();
+  });
+}
+
+function renderMinimap() {
+  if (boardMinimap === null || boardMinimapCanvas === null || boardMinimapViewport === null) {
+    return;
+  }
+
+  const activeCanvas = getActiveCanvas();
+  const nodes = activeCanvas === null
+    ? []
+    : activeCanvas.nodes.filter((nodeRecord) => nodeRecord.isRemoved !== true && nodeRecord.isMaximized !== true);
+
+  if (activeCanvas === null || nodes.length === 0) {
+    boardMinimap.hidden = true;
+    boardMinimapCanvas.querySelectorAll(".board-minimap-node").forEach((element) => element.remove());
+    return;
+  }
+
+  boardMinimap.hidden = false;
+
+  const scale = Number.isFinite(activeCanvas.viewportScale) && activeCanvas.viewportScale > 0
+    ? activeCanvas.viewportScale
+    : 1;
+  const offsetX = Number.isFinite(activeCanvas.viewportOffset.x) ? activeCanvas.viewportOffset.x : 0;
+  const offsetY = Number.isFinite(activeCanvas.viewportOffset.y) ? activeCanvas.viewportOffset.y : 0;
+
+  // Visible canvas region (in canvas coordinates).
+  const viewLeft = -offsetX / scale;
+  const viewTop = -offsetY / scale;
+  const viewWidth = board.clientWidth / scale;
+  const viewHeight = board.clientHeight / scale;
+
+  let minX = viewLeft;
+  let minY = viewTop;
+  let maxX = viewLeft + viewWidth;
+  let maxY = viewTop + viewHeight;
+
+  for (const nodeRecord of nodes) {
+    minX = Math.min(minX, nodeRecord.x);
+    minY = Math.min(minY, nodeRecord.y);
+    maxX = Math.max(maxX, nodeRecord.x + nodeRecord.width);
+    maxY = Math.max(maxY, nodeRecord.y + nodeRecord.height);
+  }
+
+  const contentWidth = Math.max(1, maxX - minX);
+  const contentHeight = Math.max(1, maxY - minY);
+  const pad = 0.06;
+  const paddedWidth = contentWidth * (1 + pad * 2);
+  const paddedHeight = contentHeight * (1 + pad * 2);
+  const originX = minX - contentWidth * pad;
+  const originY = minY - contentHeight * pad;
+
+  const boxWidth = boardMinimapCanvas.clientWidth || 168;
+  const boxHeight = boardMinimapCanvas.clientHeight || 112;
+  const k = Math.min(boxWidth / paddedWidth, boxHeight / paddedHeight);
+  const renderedWidth = paddedWidth * k;
+  const renderedHeight = paddedHeight * k;
+  const centerX = (boxWidth - renderedWidth) / 2;
+  const centerY = (boxHeight - renderedHeight) / 2;
+
+  const project = (x, y) => ({
+    left: (x - originX) * k + centerX,
+    top: (y - originY) * k + centerY
+  });
+
+  const existingNodes = Array.from(boardMinimapCanvas.querySelectorAll(".board-minimap-node"));
+  while (existingNodes.length > nodes.length) {
+    existingNodes.pop().remove();
+  }
+
+  nodes.forEach((nodeRecord, index) => {
+    let dot = existingNodes[index];
+    if (!dot) {
+      dot = document.createElement("div");
+      dot.className = "board-minimap-node";
+      boardMinimapCanvas.insertBefore(dot, boardMinimapViewport);
+    }
+    const topLeft = project(nodeRecord.x, nodeRecord.y);
+    dot.style.left = `${topLeft.left}px`;
+    dot.style.top = `${topLeft.top}px`;
+    dot.style.width = `${Math.max(2, nodeRecord.width * k)}px`;
+    dot.style.height = `${Math.max(2, nodeRecord.height * k)}px`;
+    dot.classList.toggle("is-exited", nodeRecord.isExited === true);
+    dot.classList.toggle("is-active", nodeRecord === activeNodeRecord);
+  });
+
+  const viewTopLeft = project(viewLeft, viewTop);
+  boardMinimapViewport.style.left = `${viewTopLeft.left}px`;
+  boardMinimapViewport.style.top = `${viewTopLeft.top}px`;
+  boardMinimapViewport.style.width = `${Math.max(4, viewWidth * k)}px`;
+  boardMinimapViewport.style.height = `${Math.max(4, viewHeight * k)}px`;
+}
+
 function renderCanvas(options = {}) {
   const { syncTerminalSizes = false, syncNodePositions = true } = options;
 
@@ -2077,6 +2183,7 @@ function renderCanvas(options = {}) {
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
     updateEmptyState();
+    scheduleMinimapRender();
     return;
   }
 
@@ -2097,6 +2204,8 @@ function renderCanvas(options = {}) {
   if (syncTerminalSizes || didChangeMountedNodes) {
     scheduleTerminalSizeSync(activeCanvas.nodes);
   }
+
+  scheduleMinimapRender();
 }
 
 function createCanvasStripItem(itemView) {
@@ -4788,6 +4897,7 @@ function moveDraggedNode(event) {
   nodeRecord.x = dragState.originX + (deltaX / viewportScale);
   nodeRecord.y = dragState.originY + (deltaY / viewportScale);
   positionNode(nodeRecord);
+  scheduleMinimapRender();
 }
 
 function moveResizedNode(event) {
@@ -4834,6 +4944,7 @@ function moveResizedNode(event) {
   nodeRecord.y = (nextNorth + nextSouth) / 2;
   applyNodeSize(nodeRecord, nextEast - nextWest, nextSouth - nextNorth);
   positionNode(nodeRecord);
+  scheduleMinimapRender();
 }
 
 function createTerminalElement(nodeRecord) {
