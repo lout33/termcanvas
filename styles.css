@@ -156,10 +156,176 @@ button {
 
 .app-shell {
   position: relative;
+  display: flex;
+  align-items: stretch;
   min-height: 100vh;
   background: var(--color-board-deep);
+  --rail-width: 3.25rem;
   --workspace-left-inset: var(--measure-board-gap);
   --workspace-right-inset: var(--measure-board-gap);
+}
+
+.app-rail {
+  flex: 0 0 var(--rail-width);
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.4rem;
+  border-right: 1px solid var(--color-topbar-border);
+  background: linear-gradient(180deg, rgba(10, 13, 18, 0.98), rgba(7, 9, 13, 0.98));
+}
+
+.app-rail-brand {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+  margin-bottom: 0.15rem;
+  padding: 0;
+}
+
+.app-rail-brand .canvas-brand-mark {
+  width: 100%;
+  height: 100%;
+}
+
+.app-rail-action {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+}
+
+.canvas-switcher-rail-section {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+}
+
+.canvas-switcher-rail-section .canvas-strip-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0.15rem 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  counter-reset: canvas-rail;
+}
+
+.canvas-switcher-rail-section .canvas-strip-overflow-button {
+  display: none;
+}
+
+.canvas-switcher-rail-section .canvas-strip-item {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.3rem;
+  height: 2.3rem;
+}
+
+.canvas-switcher-rail-section .canvas-strip-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  padding: 0;
+  border: 1px solid var(--color-chip-border);
+  border-radius: 0.7rem;
+  background: var(--color-chip-surface);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-base),
+    background var(--transition-base),
+    color var(--transition-base);
+}
+
+.canvas-switcher-rail-section .canvas-strip-main::before {
+  counter-increment: canvas-rail;
+  content: counter(canvas-rail);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.canvas-switcher-rail-section .canvas-strip-main:hover {
+  border-color: var(--color-phosphor-accent-strong);
+  color: var(--color-ink);
+}
+
+.canvas-switcher-rail-section .canvas-strip-item.is-active .canvas-strip-main {
+  border-color: var(--color-phosphor-accent-strong);
+  background: var(--color-sidebar-panel-active);
+  color: var(--color-ink);
+}
+
+.canvas-switcher-rail-section .canvas-strip-actions {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.3rem;
+  opacity: 0;
+  transition: opacity var(--transition-base);
+}
+
+.canvas-switcher-rail-section .canvas-strip-item:hover .canvas-strip-actions,
+.canvas-switcher-rail-section .canvas-strip-item:focus-within .canvas-strip-actions {
+  opacity: 1;
+}
+
+.canvas-switcher-rail-section .canvas-strip-input {
+  width: 2.3rem;
+  height: 2.3rem;
+  text-align: center;
+}
+
+.app-rail-spacer {
+  flex: 1 1 auto;
+}
+
+.app-rail-file-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+}
+
+.canvas-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0 0.3rem;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+}
+
+.canvas-breadcrumb-project {
+  color: var(--color-muted);
+}
+
+.canvas-breadcrumb-sep {
+  color: rgba(147, 162, 170, 0.5);
+}
+
+.canvas-breadcrumb-canvas {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-shell.is-resizing-panel {
@@ -1498,6 +1664,7 @@ button {
   z-index: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 100vh;
   background: linear-gradient(180deg, rgba(18, 21, 26, 0.98) 0%, var(--color-board-deep) 100%);

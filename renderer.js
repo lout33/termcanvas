@@ -65,6 +65,7 @@ const boardZoomOutButton = document.getElementById("board-zoom-out-button");
 const boardZoomInButton = document.getElementById("board-zoom-in-button");
 const boardCenterViewButton = document.getElementById("board-center-view-button");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
+const canvasBreadcrumbCanvas = document.getElementById("canvas-breadcrumb-canvas");
 const boardMinimap = document.getElementById("board-minimap");
 const boardMinimapCanvas = document.getElementById("board-minimap-canvas");
 const boardMinimapViewport = document.getElementById("board-minimap-viewport");
@@ -2188,8 +2189,15 @@ function renderCanvas(options = {}) {
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
     updateEmptyState();
+    if (canvasBreadcrumbCanvas !== null) {
+      canvasBreadcrumbCanvas.textContent = "canvas";
+    }
     scheduleMinimapRender();
     return;
+  }
+
+  if (canvasBreadcrumbCanvas !== null) {
+    canvasBreadcrumbCanvas.textContent = activeCanvas.name;
   }
 
   board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
