@@ -633,9 +633,13 @@ function setTerminalNodeStatus(nodeRecord, text) {
   } else if (nodeRecord.status) {
     nodeRecord.status.textContent = label;
   }
+  const state = classifyNodeStatusState(label);
   if (nodeRecord.status) {
-    nodeRecord.status.dataset.state = classifyNodeStatusState(label);
+    nodeRecord.status.dataset.state = state;
     nodeRecord.status.title = label;
+  }
+  if (nodeRecord.element) {
+    nodeRecord.element.dataset.state = state;
   }
 }
 
@@ -5029,6 +5033,10 @@ function createTerminalElement(nodeRecord) {
   grabHandle.className = "terminal-node-grab-handle";
   grabHandle.setAttribute("aria-hidden", "true");
 
+  const leadDot = document.createElement("span");
+  leadDot.className = "terminal-node-lead-dot";
+  leadDot.setAttribute("aria-hidden", "true");
+
   const titleGroup = document.createElement("div");
   titleGroup.className = "terminal-node-title-group";
 
@@ -5055,7 +5063,7 @@ function createTerminalElement(nodeRecord) {
 
   metaRow.append(meta, copySessionButton);
   titleGroup.append(titleInput, metaRow);
-  dragArea.append(grabHandle, titleGroup);
+  dragArea.append(grabHandle, leadDot, titleGroup);
 
   const status = document.createElement("span");
   status.className = "terminal-node-meta terminal-node-status";
