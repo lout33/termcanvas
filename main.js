@@ -627,6 +627,19 @@ function createMainWindow() {
     });
   }
 
+  if (typeof process.env.CANVAS_CAPTURE === "string" && process.env.CANVAS_CAPTURE.length > 0) {
+    const capturePath = process.env.CANVAS_CAPTURE;
+    window.webContents.once("did-finish-load", () => {
+      void (async () => {
+        await delay(1800);
+        const image = await window.webContents.capturePage();
+        fs.writeFileSync(capturePath, image.toPNG());
+        console.log(`[capture] wrote ${capturePath}`);
+        app.quit();
+      })();
+    });
+  }
+
   return window;
 }
 

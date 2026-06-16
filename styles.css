@@ -437,6 +437,22 @@ button {
   justify-content: flex-end;
 }
 
+/* VS Code-style: Explorer actions stay calm and reveal on hover/focus. */
+.sidebar-section-actions-reveal {
+  flex-wrap: nowrap;
+  opacity: 0;
+  transform: translateY(-1px);
+  transition:
+    opacity var(--transition-base),
+    transform var(--transition-base);
+}
+
+.sidebar-primary-section:hover .sidebar-section-actions-reveal,
+.sidebar-primary-section:focus-within .sidebar-section-actions-reveal {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .sidebar-section-action {
   flex: 0 0 auto;
 }
@@ -1023,6 +1039,25 @@ button {
   word-break: break-word;
 }
 
+.file-inspector-code {
+  height: 100%;
+  min-height: 24rem;
+  border: 1px solid rgba(186, 213, 221, 0.08);
+  border-radius: calc(var(--radius-lg) + 0.125rem);
+  background: rgba(5, 7, 10, 0.72);
+  overflow: hidden;
+}
+
+.file-inspector-code .cm-editor {
+  height: 100%;
+  min-height: 24rem;
+  background: transparent;
+}
+
+.file-inspector-code .cm-scroller {
+  overflow: auto;
+}
+
 .file-inspector-editor {
   width: 100%;
   min-height: 100%;
@@ -1471,15 +1506,20 @@ button {
 }
 
 .canvas-topbar-primary-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
+  min-width: 0;
   min-height: 2.72rem;
-  padding: 0.22rem 0.3rem 0.16rem;
+  padding: 0.22rem 0.4rem 0.18rem;
   border: 1px solid rgba(186, 213, 221, 0.08);
   border-radius: 0.95rem;
   background: linear-gradient(180deg, rgba(24, 31, 40, 0.92), rgba(18, 24, 31, 0.9));
+}
+
+.canvas-topbar-leading {
+  flex: 0 0 auto;
 }
 
 .canvas-topbar-leading,
@@ -1528,6 +1568,38 @@ button {
   text-transform: uppercase;
 }
 
+.canvas-project-breadcrumb {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.34rem;
+  min-width: 0;
+  padding-left: 0.55rem;
+  margin-left: 0.2rem;
+  border-left: 1px solid var(--color-sidebar-rule);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.canvas-project-breadcrumb-label {
+  color: var(--color-muted);
+  letter-spacing: 0.02em;
+}
+
+.canvas-project-breadcrumb-sep {
+  color: var(--color-muted);
+  opacity: 0.6;
+}
+
+.canvas-project-breadcrumb-name {
+  min-width: 0;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-ink);
+  font-weight: 700;
+}
+
 .canvas-topbar-spacer {
   visibility: hidden;
 }
@@ -1574,25 +1646,24 @@ button {
 
 .canvas-switcher-topbar-section {
   position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  width: min(100%, 56rem);
   min-width: 0;
-  justify-self: center;
+  flex: 0 1 auto;
   overflow: visible;
   padding: 0.1rem;
-  border: 1px solid rgba(186, 213, 221, 0.06);
-  border-radius: 0.85rem;
-  background: rgba(12, 16, 21, 0.45);
+  border: 0;
+  background: transparent;
 }
 
 .canvas-topbar-file-actions {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding-left: var(--space-1);
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: var(--space-2);
   border-left: 1px solid rgba(186, 213, 221, 0.08);
 }
 
@@ -1616,17 +1687,20 @@ button {
 }
 
 .terminal-strip-topbar-section {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  width: min(100%, 56rem);
   min-width: 0;
-  justify-self: center;
+  flex: 0 1 auto;
   min-height: 2.05rem;
-  padding: 0.06rem 0.3rem 0;
+  padding-left: var(--space-2);
+  margin-left: var(--space-1);
   border: 0;
-  border-radius: 0 0 0.8rem 0.8rem;
+  border-left: 1px solid var(--color-sidebar-rule);
   background: transparent;
+}
+
+.terminal-strip-topbar-section.is-empty {
+  display: none;
 }
 
 .terminal-strip-shell {
@@ -2627,26 +2701,12 @@ button {
 }
 
 @media (max-width: 720px) {
-  .canvas-topbar-primary-row {
-    grid-template-columns: auto minmax(0, 1fr);
-    row-gap: var(--space-2);
-  }
-
   .canvas-brand-tagline {
     display: none;
   }
 
-  .canvas-topbar-spacer {
+  .canvas-project-breadcrumb {
     display: none;
-  }
-
-  .canvas-switcher-topbar-section {
-    width: 100%;
-    grid-column: 1 / -1;
-  }
-
-  .terminal-strip-topbar-section {
-    width: 100%;
   }
 
   .canvas-strip-item,

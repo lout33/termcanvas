@@ -2,6 +2,9 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, Decoration, ViewPlugin, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
+import { javascript } from "@codemirror/lang-javascript";
+import { css as cssLanguage } from "@codemirror/lang-css";
+import { html as htmlLanguage } from "@codemirror/lang-html";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { tags } from "@lezer/highlight";
@@ -286,7 +289,94 @@ function createMarkdownEditor({ parentElement, initialText = "", readOnly = fals
   };
 }
 
+const codeViewerTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    backgroundColor: "transparent",
+    color: "#e6edf3",
+    fontFamily: 'var(--font-mono, "SFMono-Regular", Menlo, Monaco, Consolas, monospace)',
+    fontSize: "0.8rem"
+  },
+  ".cm-scroller": {
+    fontFamily: 'var(--font-mono, "SFMono-Regular", Menlo, Monaco, Consolas, monospace)',
+    lineHeight: "1.62"
+  },
+  ".cm-content": {
+    padding: "0.55rem 0"
+  },
+  ".cm-gutters": {
+    backgroundColor: "transparent",
+    border: "none",
+    color: "rgba(147, 162, 170, 0.5)"
+  },
+  ".cm-lineNumbers .cm-gutterElement": {
+    padding: "0 0.65rem 0 0.9rem"
+  },
+  ".cm-activeLine, .cm-activeLineGutter": {
+    backgroundColor: "transparent"
+  },
+  ".cm-selectionBackground, ::selection": {
+    backgroundColor: "rgba(111, 232, 255, 0.16)"
+  }
+});
+
+function pickCodeLanguageExtension(language) {
+  switch (language) {
+    case "typescript":
+      return javascript({ typescript: true, jsx: true });
+    case "javascript":
+      return javascript({ jsx: true });
+    case "json":
+      return javascript();
+    case "css":
+      return cssLanguage();
+    case "html":
+      return htmlLanguage();
+    default:
+      return null;
+  }
+}
+
+function createCodeViewer({ parentElement, text = "", language = "" }) {
+  if (!(parentElement instanceof HTMLElement)) {
+    throw new Error("A parent element is required to create the code viewer.");
+  }
+
+  const extensions = [
+    basicSetup,
+    oneDark,
+    codeViewerTheme,
+    EditorState.readOnly.of(true),
+    EditorView.editable.of(false),
+    EditorView.contentAttributes.of({ tabindex: "0" })
+  ];
+
+  const languageExtension = pickCodeLanguageExtension(language);
+
+  if (languageExtension !== null) {
+    extensions.push(languageExtension);
+  }
+
+  const view = new EditorView({
+    parent: parentElement,
+    state: EditorState.create({
+      doc: typeof text === "string" ? text : "",
+      extensions
+    })
+  });
+
+  return {
+    destroy() {
+      view.destroy();
+    },
+    focus() {
+      view.focus();
+    }
+  };
+}
+
 export {
   createMarkdownEditor,
+  createCodeViewer,
   renderMarkdownToHtml
 };

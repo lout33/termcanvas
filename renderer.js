@@ -40,7 +40,8 @@ const {
   shouldApplyWorkspacePreviewActionError
 } = window.noteCanvasRendererWorkspacePreview;
 const {
-  createMarkdownEditor
+  createMarkdownEditor,
+  createCodeViewer
 } = window.noteCanvasRendererWorkspaceMarkdown ?? {};
 
 if (window.noteCanvas?.isSmokeTest) {
@@ -156,6 +157,7 @@ let canvasAgentSyncTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
 let workspaceActionDialogResolve = null;
 let workspaceMarkdownEditor = null;
+let workspaceCodeViewer = null;
 let pendingWorkspacePreviewOwnSave = null;
 let pendingWorkspacePreviewSaveAfterCurrent = false;
 
@@ -2219,6 +2221,29 @@ function renderCanvasSwitcher() {
   focusPendingCanvasListControl();
   scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
   renderTerminalStrip();
+  updateProjectBreadcrumb();
+}
+
+function updateProjectBreadcrumb() {
+  const nameEl = document.getElementById("canvas-project-breadcrumb-name");
+
+  if (!(nameEl instanceof HTMLElement)) {
+    return;
+  }
+
+  const activeFolder = getActiveWorkspaceFolder();
+  let label = "";
+
+  if (activeFolder !== null) {
+    const source = activeFolder.rootName || activeFolder.rootPath || "";
+    label = source.split("/").filter((segment) => segment.length > 0).at(-1) ?? "";
+  }
+
+  if (label.length === 0) {
+    label = getActiveCanvas()?.name?.trim() ?? "";
+  }
+
+  nameEl.textContent = label.length > 0 ? label : "workspace";
 }
 
 function getWorkspaceEntryName(relativePath) {
@@ -2525,6 +2550,7 @@ function getExpandedDirectoriesForFolder(folderId) {
 function clearWorkspacePreview(options = {}) {
   workspacePreviewRequestId += 1;
   destroyWorkspaceMarkdownEditor();
+  destroyWorkspaceCodeViewer();
   clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = null;
   workspacePreviewState.relativePath = null;
@@ -2576,6 +2602,44 @@ function destroyWorkspaceMarkdownEditor() {
 
   workspaceMarkdownEditor.destroy();
   workspaceMarkdownEditor = null;
+}
+
+function destroyWorkspaceCodeViewer() {
+  if (workspaceCodeViewer === null) {
+    return;
+  }
+
+  workspaceCodeViewer.destroy();
+  workspaceCodeViewer = null;
+}
+
+function getWorkspacePreviewCodeLanguage(fileName) {
+  const extension = (fileName ?? "").split(".").at(-1)?.toLowerCase() ?? "";
+
+  switch (extension) {
+    case "ts":
+    case "tsx":
+    case "mts":
+    case "cts":
+      return "typescript";
+    case "js":
+    case "jsx":
+    case "mjs":
+    case "cjs":
+      return "javascript";
+    case "json":
+      return "json";
+    case "css":
+    case "scss":
+    case "less":
+      return "css";
+    case "html":
+    case "htm":
+    case "xml":
+      return "html";
+    default:
+      return "";
+  }
 }
 
 function syncWorkspacePreviewDirtyState() {
@@ -2903,6 +2967,7 @@ function renderFileInspector() {
   }
 
   destroyWorkspaceMarkdownEditor();
+  destroyWorkspaceCodeViewer();
   const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
   const isMarkdownFile = isMarkdownWorkspacePreview();
   const relativePath = workspacePreviewState.relativePath ?? "";
@@ -2984,6 +3049,9 @@ function renderFileInspector() {
   const body = document.createElement("div");
   body.className = "file-inspector-body";
   let markdownEditorMount = null;
+  let codeViewerMount = null;
+  let codeViewerText = "";
+  let codeViewerLanguage = "";
 
   if (isMarkdownFile) {
     if (workspacePreviewState.isDirty || workspacePreviewState.saveErrorMessage.length > 0) {
@@ -3135,6 +3203,12 @@ function renderFileInspector() {
     frame.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
     frame.title = `${previewViewModel.fileName} preview`;
     body.append(frame);
+  } else if (typeof createCodeViewer === "function" && typeof previewViewModel.textContents === "string") {
+    codeViewerMount = document.createElement("div");
+    codeViewerMount.className = "file-inspector-code";
+    codeViewerText = previewViewModel.textContents;
+    codeViewerLanguage = getWorkspacePreviewCodeLanguage(previewViewModel.fileName);
+    body.append(codeViewerMount);
   } else {
     const pre = document.createElement("pre");
     pre.className = "file-inspector-content";
@@ -3167,6 +3241,14 @@ function renderFileInspector() {
       workspaceMarkdownEditor?.focus();
     });
   }
+
+  if (codeViewerMount !== null && typeof createCodeViewer === "function") {
+    workspaceCodeViewer = createCodeViewer({
+      parentElement: codeViewerMount,
+      text: codeViewerText,
+      language: codeViewerLanguage
+    });
+  }
 }
 
 async function loadWorkspaceFilePreview(relativePath, options = {}) {
@@ -3181,6 +3263,7 @@ async function loadWorkspaceFilePreview(relativePath, options = {}) {
   const previewRootPath = activeFolder.rootPath;
   const nextViewMode = options.preserveViewMode === true ? workspacePreviewState.viewMode : "auto";
   destroyWorkspaceMarkdownEditor();
+  destroyWorkspaceCodeViewer();
   clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = previewFolderId;
   workspacePreviewState.relativePath = relativePath;
@@ -3541,6 +3624,7 @@ function renderWorkspaceBrowser() {
   }
 
   updateWorkspaceControls();
+  updateProjectBreadcrumb();
   const existingEntryList = workspaceBrowser.querySelector(".workspace-browser-list");
   const preservedScrollTop = existingEntryList instanceof HTMLElement ? existingEntryList.scrollTop : 0;
   const preservedRootPath = existingEntryList instanceof HTMLElement ? existingEntryList.dataset.workspaceRootPath ?? null : null;

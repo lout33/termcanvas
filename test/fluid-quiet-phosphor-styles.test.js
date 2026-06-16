@@ -89,17 +89,25 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
   assert.match(styles, /\.terminal-node-title-input\.is-editing\s*\{[\s\S]*cursor:\s*text;/);
 });
 
-test("topbar rows use a clearer premium hierarchy with an unlabeled terminal strip", () => {
+test("topbar is a single left-flowing row that groups canvas and terminal tabs", () => {
   const styles = readStyles();
 
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*grid-column:\s*1\s*\/\s*-1;/);
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*width:\s*100%;/);
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*border-radius:\s*1\.05rem;/);
+  // One flex row, never stacked.
+  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*display:\s*flex;/);
+  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*flex-wrap:\s*nowrap;/);
   assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*2\.72rem;/);
-  assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*border-radius:\s*0\.85rem;/);
-  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\);/);
+  // Canvas switcher is a flat inline group, no boxed container.
+  assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*display:\s*flex;/);
+  assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*background:\s*transparent;/);
+  // Terminal strip flows inline next to the canvas tabs, separated by a divider.
+  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*display:\s*flex;/);
+  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*border-left:\s*1px solid var\(--color-sidebar-rule\);/);
   assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*min-height:\s*2\.05rem;/);
-  assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*background:\s*transparent;/);
+  // File actions sit at the far right of the row.
+  assert.match(styles, /\.canvas-topbar-file-actions\s*\{[\s\S]*margin-left:\s*auto;/);
   assert.match(styles, /\.terminal-strip-shell\s*\{[\s\S]*background:\s*rgba\(8, 11, 15, 0\.18\);/);
   assert.match(styles, /\.terminal-strip-item\.is-active\s*\{[\s\S]*background:\s*rgba\(18, 26, 32, 0\.98\);/);
 });
