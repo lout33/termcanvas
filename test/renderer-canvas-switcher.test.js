@@ -74,7 +74,7 @@ test("deriveCanvasSwitcherViewModel keeps active and renaming flags in the strip
       terminalSummary: "1 terminal",
       isActive: true,
       isRenaming: true,
-      canDelete: false
+      canDelete: true
     }]
   });
   assert.equal(viewModel.menu, undefined);

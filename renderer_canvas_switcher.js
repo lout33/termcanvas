@@ -49,7 +49,9 @@
     const normalizedCanvases = Array.isArray(canvases) ? canvases : [];
     const activeCanvas = normalizedCanvases.find((canvasRecord) => canvasRecord?.id === activeCanvasId) ?? normalizedCanvases[0] ?? null;
     const items = normalizedCanvases.map((canvasRecord) => {
-      return normalizeCanvasForSwitcher(canvasRecord, activeCanvas?.id ?? null, activeCanvasRenameId, normalizedCanvases.length > 1);
+      // Any canvas can be deleted — removing the last one returns to the
+      // no-project welcome state.
+      return normalizeCanvasForSwitcher(canvasRecord, activeCanvas?.id ?? null, activeCanvasRenameId, true);
     });
 
     return {

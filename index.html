@@ -55,10 +55,8 @@
                   <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
                 </button>
 
-                <div class="canvas-breadcrumb" id="canvas-breadcrumb" aria-live="polite">
+                <div class="canvas-breadcrumb" id="canvas-breadcrumb">
                   <span class="canvas-breadcrumb-project">TermCanvas</span>
-                  <span class="canvas-breadcrumb-sep" aria-hidden="true">·</span>
-                  <span class="canvas-breadcrumb-canvas" id="canvas-breadcrumb-canvas">canvas</span>
                 </div>
               </div>
 
@@ -173,6 +171,14 @@
             <span class="empty-state-copy">Drag to move the canvas. Cmd/Ctrl + wheel to zoom.</span>
           </div>
 
+          <div class="board-welcome" id="board-welcome" hidden>
+            <strong class="board-welcome-title">No project open</strong>
+            <span class="board-welcome-copy">Pick a folder to start a canvas for your project.</span>
+            <button class="board-welcome-button" id="board-welcome-open-button" type="button">Open a folder</button>
+          </div>
+
+          <svg class="canvas-edge-layer" id="canvas-edge-layer" aria-hidden="true"></svg>
+
           <section class="nodes-layer" id="nodes-layer" aria-label="Infinite terminal canvas"></section>
 
           <div class="panel-resize-handle inspector-resize-handle" id="file-inspector-resize-handle" aria-hidden="true"></div>
@@ -200,6 +206,7 @@
     <script src="./renderer_action_dialog.js"></script>
     <script src="./renderer_canvas_switcher.js"></script>
     <script src="./renderer_canvas_navigation.js"></script>
+    <script src="./renderer_canvas_delegation.js"></script>
     <script src="./renderer_workspace_markdown.bundle.js"></script>
     <script src="./renderer_workspace_preview.js"></script>
     <script src="./renderer.js"></script>

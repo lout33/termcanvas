@@ -629,9 +629,18 @@ function createMainWindow() {
 
   if (typeof process.env.CANVAS_CAPTURE === "string" && process.env.CANVAS_CAPTURE.length > 0) {
     const capturePath = process.env.CANVAS_CAPTURE;
+    const captureScript = typeof process.env.CANVAS_CAPTURE_SCRIPT === "string" ? process.env.CANVAS_CAPTURE_SCRIPT : "";
     window.webContents.once("did-finish-load", () => {
       void (async () => {
         await delay(1800);
+        if (captureScript.length > 0) {
+          try {
+            await window.webContents.executeJavaScript(captureScript);
+            await delay(600);
+          } catch (error) {
+            console.error("[capture] script error", error);
+          }
+        }
         const image = await window.webContents.capturePage();
         fs.writeFileSync(capturePath, image.toPNG());
         console.log(`[capture] wrote ${capturePath}`);

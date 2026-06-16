@@ -40,6 +40,9 @@ const {
   shouldApplyWorkspacePreviewActionError
 } = window.noteCanvasRendererWorkspacePreview;
 const {
+  deriveCanvasDelegationEdges
+} = window.noteCanvasRendererCanvasDelegation;
+const {
   createMarkdownEditor,
   createCodeEditor
 } = window.noteCanvasRendererWorkspaceMarkdown ?? {};
@@ -57,6 +60,7 @@ if (window.noteCanvas?.isSmokeTest) {
 const appShell = document.querySelector(".app-shell");
 const board = document.getElementById("board");
 const nodesLayer = document.getElementById("nodes-layer");
+const canvasEdgeLayer = document.getElementById("canvas-edge-layer");
 const emptyState = document.getElementById("empty-state");
 const boardHints = document.getElementById("board-hints");
 const boardNavigation = document.getElementById("board-navigation");
@@ -65,7 +69,8 @@ const boardZoomOutButton = document.getElementById("board-zoom-out-button");
 const boardZoomInButton = document.getElementById("board-zoom-in-button");
 const boardCenterViewButton = document.getElementById("board-center-view-button");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
-const canvasBreadcrumbCanvas = document.getElementById("canvas-breadcrumb-canvas");
+const boardWelcome = document.getElementById("board-welcome");
+const boardWelcomeOpenButton = document.getElementById("board-welcome-open-button");
 const boardMinimap = document.getElementById("board-minimap");
 const boardMinimapCanvas = document.getElementById("board-minimap-canvas");
 const boardMinimapViewport = document.getElementById("board-minimap-viewport");
@@ -726,6 +731,9 @@ function syncManagedNodeState(nodeRecord, agentSnapshot) {
   nodeRecord.managedProjectTag = typeof agentSnapshot?.project === "string" && agentSnapshot.project.length > 0
     ? agentSnapshot.project
     : null;
+  nodeRecord.managedParentAgent = normalizeManagedAgentName(agentSnapshot?.parent_agent);
+  nodeRecord.managedCommanderAgent = normalizeManagedAgentName(agentSnapshot?.commander_agent);
+  nodeRecord.managedDepth = Number.isInteger(agentSnapshot?.depth) ? agentSnapshot.depth : null;
   nodeRecord.managedRuntimeState = typeof agentSnapshot?.runtime_state === "string" && agentSnapshot.runtime_state.length > 0
     ? agentSnapshot.runtime_state
     : null;
@@ -753,6 +761,7 @@ function syncManagedNodeState(nodeRecord, agentSnapshot) {
     nodeRecord.closeButton.title = "";
   }
   syncTerminalMeta(nodeRecord);
+  scheduleCanvasEdgeRender();
 }
 
 async function releaseTerminalSession(nodeRecord, options = {}) {
@@ -1978,11 +1987,22 @@ function syncAllTerminalInteractionOverlays() {
 
 function updateEmptyState() {
   const activeCanvas = getActiveCanvas();
-  const shouldShowEmptyCanvasOnboarding = shouldShowBoardHintsForCanvas(activeCanvas);
+  const hasNoCanvas = canvases.length === 0;
+  const shouldShowEmptyCanvasOnboarding = !hasNoCanvas && shouldShowBoardHintsForCanvas(activeCanvas);
   emptyState.hidden = !shouldShowEmptyCanvasOnboarding;
 
   if (boardHints instanceof HTMLElement) {
     boardHints.hidden = !shouldShowEmptyCanvasOnboarding;
+  }
+
+  updateBoardWelcome();
+}
+
+// The board welcome ("No project open — pick a folder") shows only when there is
+// no canvas at all, so a fresh start prompts for a folder instead of auto-creating one.
+function updateBoardWelcome() {
+  if (boardWelcome instanceof HTMLElement) {
+    boardWelcome.hidden = canvases.length > 0;
   }
 }
 
@@ -2170,6 +2190,78 @@ function renderMinimap() {
   boardMinimapViewport.style.height = `${Math.max(4, viewHeight * k)}px`;
 }
 
+const CANVAS_EDGE_SVG_NS = "http://www.w3.org/2000/svg";
+let canvasEdgeRenderFrame = 0;
+
+function scheduleCanvasEdgeRender() {
+  if (canvasEdgeLayer === null || canvasEdgeRenderFrame !== 0) {
+    return;
+  }
+
+  canvasEdgeRenderFrame = requestAnimationFrame(() => {
+    canvasEdgeRenderFrame = 0;
+    renderCanvasDelegationEdges();
+  });
+}
+
+function clearCanvasDelegationEdges() {
+  if (canvasEdgeLayer !== null && canvasEdgeLayer.childNodes.length > 0) {
+    canvasEdgeLayer.replaceChildren();
+  }
+}
+
+// Draw the agentmux delegation graph (commander -> worker) as lines between
+// node centers. The SVG layer shares the viewport transform, so we work in
+// world coordinates and let pan/zoom come for free.
+function renderCanvasDelegationEdges() {
+  if (canvasEdgeLayer === null || typeof deriveCanvasDelegationEdges !== "function") {
+    return;
+  }
+
+  const activeCanvas = getActiveCanvas();
+  const nodes = activeCanvas?.nodes ?? [];
+
+  if (activeCanvas === null || nodes.length === 0 || nodes.some((nodeRecord) => nodeRecord.isMaximized)) {
+    clearCanvasDelegationEdges();
+    return;
+  }
+
+  const edges = deriveCanvasDelegationEdges(nodes.map((nodeRecord, index) => ({
+    id: index,
+    agentName: nodeRecord.managedAgentName,
+    parentAgent: nodeRecord.managedParentAgent,
+    commanderAgent: nodeRecord.managedCommanderAgent,
+    isManager: nodeRecord.isManager,
+    projectTag: nodeRecord.managedProjectTag
+  })));
+
+  if (edges.length === 0) {
+    clearCanvasDelegationEdges();
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const edge of edges) {
+    const fromNode = nodes[edge.fromId];
+    const toNode = nodes[edge.toId];
+
+    if (fromNode == null || toNode == null) {
+      continue;
+    }
+
+    const line = document.createElementNS(CANVAS_EDGE_SVG_NS, "line");
+    line.setAttribute("class", "canvas-edge-line");
+    line.setAttribute("x1", String(fromNode.x + (fromNode.width / 2)));
+    line.setAttribute("y1", String(fromNode.y + (fromNode.height / 2)));
+    line.setAttribute("x2", String(toNode.x + (toNode.width / 2)));
+    line.setAttribute("y2", String(toNode.y + (toNode.height / 2)));
+    fragment.append(line);
+  }
+
+  canvasEdgeLayer.replaceChildren(fragment);
+}
+
 function renderCanvas(options = {}) {
   const { syncTerminalSizes = false, syncNodePositions = true } = options;
 
@@ -2189,15 +2281,9 @@ function renderCanvas(options = {}) {
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
     updateEmptyState();
-    if (canvasBreadcrumbCanvas !== null) {
-      canvasBreadcrumbCanvas.textContent = "canvas";
-    }
     scheduleMinimapRender();
+    scheduleCanvasEdgeRender();
     return;
-  }
-
-  if (canvasBreadcrumbCanvas !== null) {
-    canvasBreadcrumbCanvas.textContent = activeCanvas.name;
   }
 
   board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
@@ -2219,6 +2305,7 @@ function renderCanvas(options = {}) {
   }
 
   scheduleMinimapRender();
+  scheduleCanvasEdgeRender();
 }
 
 function createCanvasStripItem(itemView) {
@@ -4172,6 +4259,9 @@ function serializeCanvasSessionRecord(canvasRecord) {
       managedAgentName: nodeRecord.managedAgentName,
       managedAgentRole: nodeRecord.managedAgentRole,
       managedProjectTag: nodeRecord.managedProjectTag,
+      managedParentAgent: nodeRecord.managedParentAgent,
+      managedCommanderAgent: nodeRecord.managedCommanderAgent,
+      managedDepth: nodeRecord.managedDepth,
       tmuxSessionName: nodeRecord.tmuxSessionName,
       isManager: nodeRecord.isManager,
       isExited: nodeRecord.isExited,
@@ -4398,6 +4488,9 @@ async function restoreCanvasSession(sessionSnapshot) {
           managedAgentName: nodeSnapshot.managedAgentName,
           managedAgentRole: nodeSnapshot.managedAgentRole,
           managedProjectTag: nodeSnapshot.managedProjectTag,
+          managedParentAgent: nodeSnapshot.managedParentAgent,
+          managedCommanderAgent: nodeSnapshot.managedCommanderAgent,
+          managedDepth: nodeSnapshot.managedDepth,
           tmuxSessionName: nodeSnapshot.tmuxSessionName,
           isManager: nodeSnapshot.isManager,
           shouldFocus: false
@@ -4457,10 +4550,8 @@ async function initializeApp() {
       await restoreCanvasSession(sessionSnapshot);
     }
 
-    if (canvases.length === 0) {
-      createCanvas();
-    }
-
+    // No canvas yet (fresh start / empty session): don't auto-create a phantom
+    // folderless canvas. Show the welcome prompt so the user opens a folder first.
     const activeCanvas = getActiveCanvas();
 
     if (activeCanvas !== null) {
@@ -4472,12 +4563,11 @@ async function initializeApp() {
     scheduleCanvasAgentSync();
   } catch (error) {
     console.error(error);
-
-    if (canvases.length === 0) {
-      createCanvas();
-    }
   } finally {
     isSessionHydrating = false;
+    // Render once more so the board reflects the final state — in particular the
+    // no-canvas welcome prompt, which otherwise never renders without an active canvas.
+    renderCanvas();
     flushAppSessionSave();
   }
 }
@@ -4857,11 +4947,52 @@ function createCanvas() {
   setActiveCanvas(canvasRecord.id);
 }
 
-async function deleteCanvas(canvasId) {
-  if (canvases.length <= 1) {
-    return;
+// "New canvas" / "Open a folder": pick the workspace folder FIRST (VS Code / Zed
+// "new project" flow), then create the canvas bound to it only on success. Cancel
+// creates nothing, so we never leave a phantom folderless canvas behind. Used by
+// both the "+" button and the no-canvas welcome prompt.
+async function createCanvasWithWorkspace() {
+  let opened = null;
+
+  try {
+    opened = await window.noteCanvas.chooseCanvasWorkspace();
+  } catch (error) {
+    console.error(error);
+    return null;
   }
 
+  if (opened == null || opened.canceled === true || opened.state == null) {
+    return null;
+  }
+
+  // Resolve the folder that was just opened so the new canvas is created already
+  // bound to it. This is essential: setActiveCanvas() restores a folderless canvas
+  // with an empty workspace, which would otherwise race-overwrite the picked folder
+  // and leave the Explorer blank. Binding up front routes through the normal restore.
+  const importedFolders = Array.isArray(opened.state.importedFolders) ? opened.state.importedFolders : [];
+  const openedFolder = importedFolders.find((folder) => folder?.id === opened.state.activeFolderId)
+    ?? importedFolders[0]
+    ?? null;
+
+  if (openedFolder == null || typeof openedFolder.rootPath !== "string") {
+    return null;
+  }
+
+  const canvasRecord = createCanvasRecord({
+    workspace: {
+      rootPath: openedFolder.rootPath,
+      rootName: typeof openedFolder.rootName === "string" ? openedFolder.rootName : openedFolder.rootPath,
+      expandedDirectoryPaths: [],
+      previewRelativePath: null
+    }
+  });
+
+  setActiveCanvas(canvasRecord.id);
+  openWorkspaceDrawer();
+  return canvasRecord;
+}
+
+async function deleteCanvas(canvasId) {
   const canvasRecord = getCanvasById(canvasId);
 
   if (canvasRecord === null) {
@@ -4897,7 +5028,16 @@ async function deleteCanvas(canvasId) {
 
   if (activeCanvasId === canvasId) {
     const fallbackCanvas = canvases[Math.max(0, canvasIndex - 1)] ?? canvases[0] ?? null;
-    activeCanvasId = fallbackCanvas?.id ?? null;
+
+    if (fallbackCanvas !== null) {
+      setActiveCanvas(fallbackCanvas.id);
+    } else {
+      activeCanvasId = null;
+      applyWorkspaceState({ importedFolders: [], activeFolderId: null }, { skipCanvasWorkspaceSync: true });
+      clearWorkspacePreview({ skipCanvasWorkspaceSync: true });
+      closeCanvasSwitcherMenu();
+      scheduleCanvasAgentSync();
+    }
   }
 
   renderCanvasSwitcher();
@@ -4977,6 +5117,7 @@ function moveDraggedNode(event) {
   nodeRecord.y = dragState.originY + (deltaY / viewportScale);
   positionNode(nodeRecord);
   scheduleMinimapRender();
+  scheduleCanvasEdgeRender();
 }
 
 function moveResizedNode(event) {
@@ -5024,6 +5165,7 @@ function moveResizedNode(event) {
   applyNodeSize(nodeRecord, nextEast - nextWest, nextSouth - nextNorth);
   positionNode(nodeRecord);
   scheduleMinimapRender();
+  scheduleCanvasEdgeRender();
 }
 
 function createTerminalElement(nodeRecord) {
@@ -5224,6 +5366,9 @@ async function createTerminalNode(options) {
       ? null
       : normalizeManagedAgentRole(options.managedAgentRole, options.isManager === true),
     managedProjectTag: typeof options.managedProjectTag === "string" && options.managedProjectTag.length > 0 ? options.managedProjectTag : null,
+    managedParentAgent: normalizeManagedAgentName(options.managedParentAgent),
+    managedCommanderAgent: normalizeManagedAgentName(options.managedCommanderAgent),
+    managedDepth: Number.isInteger(options.managedDepth) ? options.managedDepth : null,
     managedRuntimeState: typeof options.managedRuntimeState === "string" && options.managedRuntimeState.length > 0 ? options.managedRuntimeState : null,
     managedAgentState: typeof options.managedAgentState === "string" && options.managedAgentState.length > 0 ? options.managedAgentState : null,
     isManager: options.isManager === true,
@@ -6613,7 +6758,15 @@ if (window.noteCanvas.isSmokeTest) {
 }
 
 createCanvasButton.addEventListener("click", () => {
-  createCanvas();
+  void createCanvasWithWorkspace().catch((error) => {
+    console.error(error);
+  });
+});
+
+boardWelcomeOpenButton?.addEventListener("click", () => {
+  void createCanvasWithWorkspace().catch((error) => {
+    console.error(error);
+  });
 });
 
 exportCanvasButton?.addEventListener("click", () => {

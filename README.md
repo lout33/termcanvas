@@ -4,6 +4,8 @@ TermCanvas is a desktop app that lets you arrange real terminal sessions on an i
 
 It is built for developers who juggle multiple repos, shells, AI agents, and long-running tasks and want something more spatial than tabs or split panes.
 
+The current direction is an agent-orchestration canvas: a fast, simple workspace where a commander agent, worker agents, normal shells, project files, and task context all live in one visible place.
+
 ## Demo
 
 ![TermCanvas demo GIF showing live terminal nodes being arranged on the canvas](./docs/termcanvas-demo.gif)
@@ -15,6 +17,8 @@ Demo video: https://www.youtube.com/watch?v=4XN5jvk9P1U
 - a spatial terminal workspace
 - an infinite canvas for real shell sessions
 - a desktop app for managing multiple terminals side by side
+- a project-bound canvas for browsing files next to the terminals that operate on them
+- an agentmux-aware view of commander and worker AI agent terminals
 - a better fit for task-based terminal work than a pile of tabs
 
 ## Why People Use It
@@ -34,12 +38,14 @@ Examples:
 
 - Real interactive shell terminals rendered with `xterm.js`
 - Infinite canvas with pan and zoom
-- Multiple canvases for separate work contexts
+- Multiple project-bound canvases for separate work contexts
 - Drag, resize, rename, maximize, restore, and close terminal nodes
 - Workspace drawer for browsing imported folders and previewing files
 - App-session restore across relaunches
 - `tmux`-backed terminal reattach when available
 - Integrated `agentmux` manager for commander and worker AI agent terminals
+- Agent delegation lines that show commander-to-worker relationships on the canvas
+- Fresh-start welcome state that prompts for a folder instead of creating an empty phantom canvas
 - Canvas JSON export and import
 - Full app-data JSON export and import for moving setups between installs
 - Electron security boundary with Node kept out of the renderer
@@ -61,12 +67,16 @@ npm run dev
 
 `tmux` is recommended if you want live terminal sessions to survive app relaunches.
 
+On a fresh launch, TermCanvas now waits for you to open a folder. Creating a new canvas with the `+` button also asks for the workspace folder first. If you cancel the folder picker, no canvas is created.
+
 ## How It Works
 
 - Double-click empty space to create a terminal
 - Drag the canvas to move around
 - Use modified mouse wheel to zoom
+- Use `+` to create a new canvas by choosing a workspace folder
 - Switch between canvases from the top bar
+- Delete any canvas, including the last one; deleting the last canvas returns to the welcome state
 - Open folders in the left drawer to browse files next to your terminals
 - Close the app and reopen it to restore layout and session state
 
@@ -104,6 +114,36 @@ TermCanvas has an integrated `agentmux` manager for creating and tracking comman
 - set `TERMCANVAS_AGENTMUX_ROOT` only when testing a different local runtime
 - missing `agentmux` does not block normal terminal canvas use
 
+Current agent-canvas behavior:
+
+- managed terminal nodes track agent name, role, project tag, parent agent, commander agent, and depth when agentmux reports them
+- commander-to-worker delegation lines are derived automatically from `parent_agent` or `commander_agent`
+- lines are drawn behind node cards and pan or zoom with the canvas
+- edges are project-scoped, deduplicated, and ignore self-links or unknown parents
+- today's agentmux runtime is effectively two levels: one commander and its workers; the edge derivation is name-based so deeper trees can work if the runtime later exposes them
+
+This is not a manual graph editor. The intent is to show the real agent swarm topology that agentmux knows about.
+
+## Current Product Direction
+
+TermCanvas is moving from a generic spatial terminal board toward a project-aware agent orchestration canvas.
+
+What we are trying to make easy:
+
+- open a project and immediately get a canvas for that project
+- see terminals, workers, files, and previews without losing context
+- see who spawned whom in an agentmux swarm
+- keep the UI simple enough that the canvas feels faster than juggling tabs
+- preserve live terminal work across app relaunches when `tmux` is available
+
+Near-term roadmap:
+
+- auto-layout workers under their commander so the delegation graph is readable without manual dragging
+- make agent cards more role-aware with clearer status, names, and runtime state
+- expose a safe, read-only canvas snapshot so agents can understand who else is on the canvas
+- improve large-canvas feel: fit-to-content, smoother pan/zoom, and no jank with many nodes
+- add richer file/document navigation in the right preview panel
+
 ## Move Data Between Installs
 
 Use the canvas menu to export and import full app data as JSON.
@@ -116,9 +156,10 @@ Use the canvas menu to export and import full app data as JSON.
 
 ```bash
 npm run build
+npm test
 ```
 
-This runs a fast syntax check for the main Electron files.
+`npm run build` bundles the markdown preview/editor and runs syntax checks for the main Electron files. `npm test` runs the Node test suite for renderer helper modules and preload contracts.
 
 ## Local macOS Build
 
@@ -182,7 +223,8 @@ When the `v0.1.1` style tag is pushed, GitHub Actions:
 
 ## Current Limits
 
-- no node connections or graph linking yet
+- delegation graph lines currently come from agentmux metadata only; there is no manual node wiring
+- worker placement is still manual until auto tree layout lands
 - no collaboration yet
 - no polished multi-window shared-terminal flow yet
 - no guaranteed session continuity if `tmux` sessions are killed outside the app
