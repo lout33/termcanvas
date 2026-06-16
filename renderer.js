@@ -41,7 +41,7 @@ const {
 } = window.noteCanvasRendererWorkspacePreview;
 const {
   createMarkdownEditor,
-  createCodeViewer
+  createCodeEditor
 } = window.noteCanvasRendererWorkspaceMarkdown ?? {};
 
 if (window.noteCanvas?.isSmokeTest) {
@@ -65,6 +65,10 @@ const boardZoomOutButton = document.getElementById("board-zoom-out-button");
 const boardZoomInButton = document.getElementById("board-zoom-in-button");
 const boardCenterViewButton = document.getElementById("board-center-view-button");
 const boardFullscreenExitButton = document.getElementById("board-fullscreen-exit");
+const canvasBreadcrumbCanvas = document.getElementById("canvas-breadcrumb-canvas");
+const boardMinimap = document.getElementById("board-minimap");
+const boardMinimapCanvas = document.getElementById("board-minimap-canvas");
+const boardMinimapViewport = document.getElementById("board-minimap-viewport");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
 const canvasStripList = document.getElementById("canvas-strip-list");
 const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
@@ -153,11 +157,11 @@ let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
 let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
+let workspaceFilterQuery = "";
 let canvasAgentSyncTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
 let workspaceActionDialogResolve = null;
 let workspaceMarkdownEditor = null;
-let workspaceCodeViewer = null;
 let pendingWorkspacePreviewOwnSave = null;
 let pendingWorkspacePreviewSaveAfterCurrent = false;
 
@@ -612,6 +616,41 @@ function updateExitedOverlay(nodeRecord) {
   }
 }
 
+function classifyNodeStatusState(text) {
+  const value = String(text ?? "").toLowerCase();
+  if (value.includes("exit") || value.includes("fail") || value.includes("ended")) {
+    return "exited";
+  }
+  if (value.includes("live") || value.includes("running") || value.includes("active") || value.includes("ready")) {
+    return "live";
+  }
+  return "pending";
+}
+
+function setTerminalNodeStatus(nodeRecord, text) {
+  const label = typeof text === "string" && text.length > 0 ? text : "—";
+  if (nodeRecord.statusLabel) {
+    nodeRecord.statusLabel.textContent = label;
+  } else if (nodeRecord.status) {
+    nodeRecord.status.textContent = label;
+  }
+  const state = classifyNodeStatusState(label);
+  if (nodeRecord.status) {
+    nodeRecord.status.dataset.state = state;
+    nodeRecord.status.title = label;
+  }
+  if (nodeRecord.element) {
+    nodeRecord.element.dataset.state = state;
+  }
+}
+
+function getTerminalNodeStatusText(nodeRecord) {
+  if (nodeRecord.statusLabel) {
+    return nodeRecord.statusLabel.textContent;
+  }
+  return nodeRecord.status ? nodeRecord.status.textContent : "";
+}
+
 function setNodeExitedState(nodeRecord, exitCode, signal) {
   nodeRecord.isExited = true;
   nodeRecord.exitCode = typeof exitCode === "number" ? exitCode : null;
@@ -619,7 +658,7 @@ function setNodeExitedState(nodeRecord, exitCode, signal) {
   nodeRecord.resizeObserver?.disconnect();
   nodeRecord.resizeObserver = null;
   nodeRecord.syncSize = () => {};
-  nodeRecord.status.textContent = "Exited";
+  setTerminalNodeStatus(nodeRecord, "Exited");
   nodeRecord.meta.textContent = nodeRecord.exitCode === 0
     ? "Shell finished"
     : nodeRecord.exitCode !== null
@@ -655,9 +694,12 @@ function syncTerminalMeta(nodeRecord) {
     nodeRecord.copySessionButton.title = `Copy session id: ${sessionIdentifier}`;
     nodeRecord.copySessionButton.setAttribute("aria-label", `Copy session id ${sessionIdentifier}`);
   }
-  nodeRecord.status.textContent = nodeRecord.isExited
-    ? nodeRecord.status.textContent
-    : (nodeRecord.managedRuntimeState ?? "Live");
+  setTerminalNodeStatus(
+    nodeRecord,
+    nodeRecord.isExited
+      ? getTerminalNodeStatusText(nodeRecord)
+      : (nodeRecord.managedRuntimeState ?? "Live")
+  );
 }
 
 function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessionKey) {
@@ -668,7 +710,7 @@ function setNodeLiveState(nodeRecord, shellName, backend, tmuxSessionName, sessi
   nodeRecord.backend = backend;
   nodeRecord.tmuxSessionName = tmuxSessionName;
   nodeRecord.sessionKey = sessionKey;
-  nodeRecord.status.textContent = "Live";
+  setTerminalNodeStatus(nodeRecord, "Live");
   syncTerminalMeta(nodeRecord);
   nodeRecord.element.classList.remove("is-exited");
   updateExitedOverlay(nodeRecord);
@@ -863,7 +905,7 @@ async function reopenTerminalNode(nodeRecord) {
     return;
   }
 
-  nodeRecord.status.textContent = "Reopening";
+  setTerminalNodeStatus(nodeRecord, "Reopening");
   nodeRecord.meta.textContent = "Starting fresh shell";
   nodeRecord.overlay.hidden = true;
 
@@ -872,7 +914,7 @@ async function reopenTerminalNode(nodeRecord) {
     await bindTerminalSession(nodeRecord);
   } catch (error) {
     setNodeExitedState(nodeRecord, null, null);
-    nodeRecord.status.textContent = "Restart failed";
+    setTerminalNodeStatus(nodeRecord, "Restart failed");
     nodeRecord.meta.textContent = "Could not reopen shell";
     console.error(error);
   }
@@ -2025,6 +2067,109 @@ function requestViewportRender() {
   });
 }
 
+let minimapRenderFrame = 0;
+
+function scheduleMinimapRender() {
+  if (minimapRenderFrame !== 0) {
+    return;
+  }
+  minimapRenderFrame = requestAnimationFrame(() => {
+    minimapRenderFrame = 0;
+    renderMinimap();
+  });
+}
+
+function renderMinimap() {
+  if (boardMinimap === null || boardMinimapCanvas === null || boardMinimapViewport === null) {
+    return;
+  }
+
+  const activeCanvas = getActiveCanvas();
+  const nodes = activeCanvas === null
+    ? []
+    : activeCanvas.nodes.filter((nodeRecord) => nodeRecord.isRemoved !== true && nodeRecord.isMaximized !== true);
+
+  if (activeCanvas === null || nodes.length === 0) {
+    boardMinimap.hidden = true;
+    boardMinimapCanvas.querySelectorAll(".board-minimap-node").forEach((element) => element.remove());
+    return;
+  }
+
+  boardMinimap.hidden = false;
+
+  const scale = Number.isFinite(activeCanvas.viewportScale) && activeCanvas.viewportScale > 0
+    ? activeCanvas.viewportScale
+    : 1;
+  const offsetX = Number.isFinite(activeCanvas.viewportOffset.x) ? activeCanvas.viewportOffset.x : 0;
+  const offsetY = Number.isFinite(activeCanvas.viewportOffset.y) ? activeCanvas.viewportOffset.y : 0;
+
+  // Visible canvas region (in canvas coordinates).
+  const viewLeft = -offsetX / scale;
+  const viewTop = -offsetY / scale;
+  const viewWidth = board.clientWidth / scale;
+  const viewHeight = board.clientHeight / scale;
+
+  let minX = viewLeft;
+  let minY = viewTop;
+  let maxX = viewLeft + viewWidth;
+  let maxY = viewTop + viewHeight;
+
+  for (const nodeRecord of nodes) {
+    minX = Math.min(minX, nodeRecord.x);
+    minY = Math.min(minY, nodeRecord.y);
+    maxX = Math.max(maxX, nodeRecord.x + nodeRecord.width);
+    maxY = Math.max(maxY, nodeRecord.y + nodeRecord.height);
+  }
+
+  const contentWidth = Math.max(1, maxX - minX);
+  const contentHeight = Math.max(1, maxY - minY);
+  const pad = 0.06;
+  const paddedWidth = contentWidth * (1 + pad * 2);
+  const paddedHeight = contentHeight * (1 + pad * 2);
+  const originX = minX - contentWidth * pad;
+  const originY = minY - contentHeight * pad;
+
+  const boxWidth = boardMinimapCanvas.clientWidth || 168;
+  const boxHeight = boardMinimapCanvas.clientHeight || 112;
+  const k = Math.min(boxWidth / paddedWidth, boxHeight / paddedHeight);
+  const renderedWidth = paddedWidth * k;
+  const renderedHeight = paddedHeight * k;
+  const centerX = (boxWidth - renderedWidth) / 2;
+  const centerY = (boxHeight - renderedHeight) / 2;
+
+  const project = (x, y) => ({
+    left: (x - originX) * k + centerX,
+    top: (y - originY) * k + centerY
+  });
+
+  const existingNodes = Array.from(boardMinimapCanvas.querySelectorAll(".board-minimap-node"));
+  while (existingNodes.length > nodes.length) {
+    existingNodes.pop().remove();
+  }
+
+  nodes.forEach((nodeRecord, index) => {
+    let dot = existingNodes[index];
+    if (!dot) {
+      dot = document.createElement("div");
+      dot.className = "board-minimap-node";
+      boardMinimapCanvas.insertBefore(dot, boardMinimapViewport);
+    }
+    const topLeft = project(nodeRecord.x, nodeRecord.y);
+    dot.style.left = `${topLeft.left}px`;
+    dot.style.top = `${topLeft.top}px`;
+    dot.style.width = `${Math.max(2, nodeRecord.width * k)}px`;
+    dot.style.height = `${Math.max(2, nodeRecord.height * k)}px`;
+    dot.classList.toggle("is-exited", nodeRecord.isExited === true);
+    dot.classList.toggle("is-active", nodeRecord === activeNodeRecord);
+  });
+
+  const viewTopLeft = project(viewLeft, viewTop);
+  boardMinimapViewport.style.left = `${viewTopLeft.left}px`;
+  boardMinimapViewport.style.top = `${viewTopLeft.top}px`;
+  boardMinimapViewport.style.width = `${Math.max(4, viewWidth * k)}px`;
+  boardMinimapViewport.style.height = `${Math.max(4, viewHeight * k)}px`;
+}
+
 function renderCanvas(options = {}) {
   const { syncTerminalSizes = false, syncNodePositions = true } = options;
 
@@ -2044,7 +2189,15 @@ function renderCanvas(options = {}) {
     appShell?.classList.remove("has-maximized-node");
     board.classList.remove("has-maximized-node");
     updateEmptyState();
+    if (canvasBreadcrumbCanvas !== null) {
+      canvasBreadcrumbCanvas.textContent = "canvas";
+    }
+    scheduleMinimapRender();
     return;
+  }
+
+  if (canvasBreadcrumbCanvas !== null) {
+    canvasBreadcrumbCanvas.textContent = activeCanvas.name;
   }
 
   board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
@@ -2064,6 +2217,8 @@ function renderCanvas(options = {}) {
   if (syncTerminalSizes || didChangeMountedNodes) {
     scheduleTerminalSizeSync(activeCanvas.nodes);
   }
+
+  scheduleMinimapRender();
 }
 
 function createCanvasStripItem(itemView) {
@@ -2221,29 +2376,6 @@ function renderCanvasSwitcher() {
   focusPendingCanvasListControl();
   scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
   renderTerminalStrip();
-  updateProjectBreadcrumb();
-}
-
-function updateProjectBreadcrumb() {
-  const nameEl = document.getElementById("canvas-project-breadcrumb-name");
-
-  if (!(nameEl instanceof HTMLElement)) {
-    return;
-  }
-
-  const activeFolder = getActiveWorkspaceFolder();
-  let label = "";
-
-  if (activeFolder !== null) {
-    const source = activeFolder.rootName || activeFolder.rootPath || "";
-    label = source.split("/").filter((segment) => segment.length > 0).at(-1) ?? "";
-  }
-
-  if (label.length === 0) {
-    label = getActiveCanvas()?.name?.trim() ?? "";
-  }
-
-  nameEl.textContent = label.length > 0 ? label : "workspace";
 }
 
 function getWorkspaceEntryName(relativePath) {
@@ -2550,7 +2682,6 @@ function getExpandedDirectoriesForFolder(folderId) {
 function clearWorkspacePreview(options = {}) {
   workspacePreviewRequestId += 1;
   destroyWorkspaceMarkdownEditor();
-  destroyWorkspaceCodeViewer();
   clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = null;
   workspacePreviewState.relativePath = null;
@@ -2602,44 +2733,6 @@ function destroyWorkspaceMarkdownEditor() {
 
   workspaceMarkdownEditor.destroy();
   workspaceMarkdownEditor = null;
-}
-
-function destroyWorkspaceCodeViewer() {
-  if (workspaceCodeViewer === null) {
-    return;
-  }
-
-  workspaceCodeViewer.destroy();
-  workspaceCodeViewer = null;
-}
-
-function getWorkspacePreviewCodeLanguage(fileName) {
-  const extension = (fileName ?? "").split(".").at(-1)?.toLowerCase() ?? "";
-
-  switch (extension) {
-    case "ts":
-    case "tsx":
-    case "mts":
-    case "cts":
-      return "typescript";
-    case "js":
-    case "jsx":
-    case "mjs":
-    case "cjs":
-      return "javascript";
-    case "json":
-      return "json";
-    case "css":
-    case "scss":
-    case "less":
-      return "css";
-    case "html":
-    case "htm":
-    case "xml":
-      return "html";
-    default:
-      return "";
-  }
 }
 
 function syncWorkspacePreviewDirtyState() {
@@ -2906,7 +2999,7 @@ function syncAppShellWorkspaceState() {
   appShell?.classList.toggle("has-file-inspector", isWorkspacePreviewOpen());
 }
 
-function buildWorkspaceTreeRows(folderRecord) {
+function buildWorkspaceTreeRows(folderRecord, options = {}) {
   if (folderRecord === null) {
     return [];
   }
@@ -2916,6 +3009,30 @@ function buildWorkspaceTreeRows(folderRecord) {
   const selectedRelativePath = workspaceSelectionState.folderId === folderRecord.id
     ? workspaceSelectionState.relativePath
     : null;
+
+  const filterQuery = typeof options.filterQuery === "string" ? options.filterQuery.trim().toLowerCase() : "";
+  const isFiltering = filterQuery.length > 0;
+  let includedPaths = null;
+
+  if (isFiltering) {
+    includedPaths = new Set();
+    folderRecord.entries.forEach((entry) => {
+      const matchesName = entry.name.toLowerCase().includes(filterQuery);
+      const matchesPath = entry.relativePath.toLowerCase().includes(filterQuery);
+
+      if (!matchesName && !matchesPath) {
+        return;
+      }
+
+      includedPaths.add(entry.relativePath);
+      const parts = entry.relativePath.split("/");
+      let ancestor = "";
+      for (let index = 0; index < parts.length - 1; index += 1) {
+        ancestor = ancestor.length === 0 ? parts[index] : `${ancestor}/${parts[index]}`;
+        includedPaths.add(ancestor);
+      }
+    });
+  }
 
   folderRecord.entries.forEach((entry) => {
     const parentPath = getWorkspaceEntryParentPath(entry.relativePath);
@@ -2934,8 +3051,14 @@ function buildWorkspaceTreeRows(folderRecord) {
     const children = childrenByParentPath.get(parentPath) ?? [];
 
     children.forEach((entry) => {
+      if (isFiltering && !includedPaths.has(entry.relativePath)) {
+        return;
+      }
+
       const isDirectory = entry.kind === "directory";
-      const isExpanded = isDirectory && expandedDirectories.has(entry.relativePath);
+      const isExpanded = isFiltering
+        ? isDirectory
+        : (isDirectory && expandedDirectories.has(entry.relativePath));
 
       rows.push({
         ...entry,
@@ -2967,7 +3090,6 @@ function renderFileInspector() {
   }
 
   destroyWorkspaceMarkdownEditor();
-  destroyWorkspaceCodeViewer();
   const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
   const isMarkdownFile = isMarkdownWorkspacePreview();
   const relativePath = workspacePreviewState.relativePath ?? "";
@@ -3049,9 +3171,9 @@ function renderFileInspector() {
   const body = document.createElement("div");
   body.className = "file-inspector-body";
   let markdownEditorMount = null;
-  let codeViewerMount = null;
-  let codeViewerText = "";
-  let codeViewerLanguage = "";
+  let codeEditorMount = null;
+  let codeEditorReadOnly = false;
+  let codeEditorInitialText = "";
 
   if (isMarkdownFile) {
     if (workspacePreviewState.isDirty || workspacePreviewState.saveErrorMessage.length > 0) {
@@ -3072,6 +3194,20 @@ function renderFileInspector() {
       markdownEditorMount = document.createElement("div");
       markdownEditorMount.className = "file-inspector-markdown-editor";
       body.append(markdownEditorMount);
+    } else if (typeof createCodeEditor === "function") {
+      codeEditorMount = document.createElement("div");
+      codeEditorMount.className = "file-inspector-code-editor";
+      codeEditorReadOnly = false;
+      codeEditorInitialText = workspacePreviewState.draftText;
+      body.append(codeEditorMount);
+
+      if (workspacePreviewState.saveErrorMessage.length > 0) {
+        const saveError = document.createElement("div");
+        saveError.className = "file-inspector-error";
+        saveError.dataset.fileInspectorSaveBanner = "true";
+        saveError.textContent = workspacePreviewState.saveErrorMessage;
+        body.append(saveError);
+      }
     } else {
       const editor = document.createElement("textarea");
       editor.className = "file-inspector-editor";
@@ -3203,12 +3339,12 @@ function renderFileInspector() {
     frame.src = getWorkspacePreviewObjectUrl(previewViewModel) ?? "";
     frame.title = `${previewViewModel.fileName} preview`;
     body.append(frame);
-  } else if (typeof createCodeViewer === "function" && typeof previewViewModel.textContents === "string") {
-    codeViewerMount = document.createElement("div");
-    codeViewerMount.className = "file-inspector-code";
-    codeViewerText = previewViewModel.textContents;
-    codeViewerLanguage = getWorkspacePreviewCodeLanguage(previewViewModel.fileName);
-    body.append(codeViewerMount);
+  } else if (typeof createCodeEditor === "function") {
+    codeEditorMount = document.createElement("div");
+    codeEditorMount.className = "file-inspector-code-editor is-readonly";
+    codeEditorReadOnly = true;
+    codeEditorInitialText = previewViewModel.textContents;
+    body.append(codeEditorMount);
   } else {
     const pre = document.createElement("pre");
     pre.className = "file-inspector-content";
@@ -3240,14 +3376,35 @@ function renderFileInspector() {
     window.requestAnimationFrame(() => {
       workspaceMarkdownEditor?.focus();
     });
-  }
-
-  if (codeViewerMount !== null && typeof createCodeViewer === "function") {
-    workspaceCodeViewer = createCodeViewer({
-      parentElement: codeViewerMount,
-      text: codeViewerText,
-      language: codeViewerLanguage
+  } else if (codeEditorMount !== null && typeof createCodeEditor === "function") {
+    workspaceMarkdownEditor = createCodeEditor({
+      parentElement: codeEditorMount,
+      fileName: previewViewModel.fileName,
+      initialText: codeEditorInitialText,
+      readOnly: codeEditorReadOnly || workspacePreviewState.isSaving,
+      onBlur: () => {
+        if (!codeEditorReadOnly && workspacePreviewState.isDirty && workspacePreviewState.isSaving !== true) {
+          void saveWorkspacePreviewText();
+        }
+      },
+      onChange: (nextText) => {
+        if (codeEditorReadOnly) {
+          return;
+        }
+        updateWorkspacePreviewDraftText(nextText);
+        updateWorkspacePreviewInlineSaveState();
+      },
+      onSaveShortcut: () => {
+        if (!codeEditorReadOnly) {
+          void saveWorkspacePreviewText();
+        }
+      }
     });
+    if (!codeEditorReadOnly) {
+      window.requestAnimationFrame(() => {
+        workspaceMarkdownEditor?.focus();
+      });
+    }
   }
 }
 
@@ -3263,7 +3420,6 @@ async function loadWorkspaceFilePreview(relativePath, options = {}) {
   const previewRootPath = activeFolder.rootPath;
   const nextViewMode = options.preserveViewMode === true ? workspacePreviewState.viewMode : "auto";
   destroyWorkspaceMarkdownEditor();
-  destroyWorkspaceCodeViewer();
   clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = previewFolderId;
   workspacePreviewState.relativePath = relativePath;
@@ -3624,7 +3780,6 @@ function renderWorkspaceBrowser() {
   }
 
   updateWorkspaceControls();
-  updateProjectBreadcrumb();
   const existingEntryList = workspaceBrowser.querySelector(".workspace-browser-list");
   const preservedScrollTop = existingEntryList instanceof HTMLElement ? existingEntryList.scrollTop : 0;
   const preservedRootPath = existingEntryList instanceof HTMLElement ? existingEntryList.dataset.workspaceRootPath ?? null : null;
@@ -3667,6 +3822,33 @@ function renderWorkspaceBrowser() {
     meta.textContent = `${activeFolder.entries.length} ${activeFolder.entries.length === 1 ? "entry" : "entries"}`;
 
     summary.append(summaryHeader, currentPath, meta);
+
+    if (activeFolder.entries.length > 0) {
+      const search = document.createElement("div");
+      search.className = "workspace-browser-search";
+
+      const searchInput = document.createElement("input");
+      searchInput.className = "workspace-browser-search-input";
+      searchInput.type = "search";
+      searchInput.placeholder = "Filter files…";
+      searchInput.spellcheck = false;
+      searchInput.setAttribute("aria-label", "Filter workspace files");
+      searchInput.value = workspaceFilterQuery;
+      searchInput.addEventListener("input", () => {
+        workspaceFilterQuery = searchInput.value;
+        renderWorkspaceBrowser();
+        const refreshedInput = workspaceBrowser.querySelector(".workspace-browser-search-input");
+        if (refreshedInput instanceof HTMLInputElement) {
+          refreshedInput.focus();
+          const caret = refreshedInput.value.length;
+          refreshedInput.setSelectionRange(caret, caret);
+        }
+      });
+
+      search.append(searchInput);
+      summary.append(search);
+    }
+
     fragment.append(summary);
 
     if (activeFolder.lastError.length > 0) {
@@ -3675,11 +3857,19 @@ function renderWorkspaceBrowser() {
       error.textContent = activeFolder.lastError;
       fragment.append(error);
     } else if (activeFolder.entries.length > 0) {
+      const treeRows = buildWorkspaceTreeRows(activeFolder, { filterQuery: workspaceFilterQuery });
+
+      if (treeRows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "workspace-browser-empty";
+        empty.textContent = "No files match your filter.";
+        fragment.append(empty);
+      } else {
       const entryList = document.createElement("ul");
       entryList.className = "workspace-browser-list";
       entryList.dataset.workspaceRootPath = activeFolder.rootPath;
 
-      buildWorkspaceTreeRows(activeFolder).forEach((entry) => {
+      treeRows.forEach((entry) => {
         const item = document.createElement("li");
         item.className = "workspace-browser-row";
 
@@ -3719,6 +3909,7 @@ function renderWorkspaceBrowser() {
       });
 
       fragment.append(entryList);
+      }
     } else {
       const empty = document.createElement("div");
       empty.className = "workspace-browser-empty";
@@ -4785,6 +4976,7 @@ function moveDraggedNode(event) {
   nodeRecord.x = dragState.originX + (deltaX / viewportScale);
   nodeRecord.y = dragState.originY + (deltaY / viewportScale);
   positionNode(nodeRecord);
+  scheduleMinimapRender();
 }
 
 function moveResizedNode(event) {
@@ -4831,6 +5023,7 @@ function moveResizedNode(event) {
   nodeRecord.y = (nextNorth + nextSouth) / 2;
   applyNodeSize(nodeRecord, nextEast - nextWest, nextSouth - nextNorth);
   positionNode(nodeRecord);
+  scheduleMinimapRender();
 }
 
 function createTerminalElement(nodeRecord) {
@@ -4847,6 +5040,10 @@ function createTerminalElement(nodeRecord) {
   const grabHandle = document.createElement("span");
   grabHandle.className = "terminal-node-grab-handle";
   grabHandle.setAttribute("aria-hidden", "true");
+
+  const leadDot = document.createElement("span");
+  leadDot.className = "terminal-node-lead-dot";
+  leadDot.setAttribute("aria-hidden", "true");
 
   const titleGroup = document.createElement("div");
   titleGroup.className = "terminal-node-title-group";
@@ -4874,11 +5071,18 @@ function createTerminalElement(nodeRecord) {
 
   metaRow.append(meta, copySessionButton);
   titleGroup.append(titleInput, metaRow);
-  dragArea.append(grabHandle, titleGroup);
+  dragArea.append(grabHandle, leadDot, titleGroup);
 
   const status = document.createElement("span");
   status.className = "terminal-node-meta terminal-node-status";
-  status.textContent = "Booting";
+  const statusDot = document.createElement("span");
+  statusDot.className = "terminal-node-status-dot";
+  statusDot.setAttribute("aria-hidden", "true");
+  const statusLabel = document.createElement("span");
+  statusLabel.className = "terminal-node-status-label";
+  statusLabel.textContent = "Booting";
+  status.append(statusDot, statusLabel);
+  status.dataset.state = "pending";
 
   const actions = document.createElement("div");
   actions.className = "terminal-node-actions";
@@ -4946,6 +5150,7 @@ function createTerminalElement(nodeRecord) {
     meta,
     copySessionButton,
     status,
+    statusLabel,
     titleInput,
     titleGroup,
     maximizeButton,
@@ -5003,6 +5208,7 @@ async function createTerminalNode(options) {
     meta: null,
     copySessionButton: null,
     status: null,
+    statusLabel: null,
     titleInput: null,
     titleGroup: null,
     maximizeButton: null,
@@ -5042,6 +5248,7 @@ async function createTerminalNode(options) {
   nodeRecord.meta = elements.meta;
   nodeRecord.copySessionButton = elements.copySessionButton;
   nodeRecord.status = elements.status;
+  nodeRecord.statusLabel = elements.statusLabel;
   nodeRecord.titleInput = elements.titleInput;
   nodeRecord.titleGroup = elements.titleGroup;
   nodeRecord.maximizeButton = elements.maximizeButton;
@@ -5318,7 +5525,7 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
   } catch (error) {
     console.error(error);
     setNodeExitedState(nodeRecord, null, null);
-    nodeRecord.status.textContent = "Attach failed";
+    setTerminalNodeStatus(nodeRecord, "Attach failed");
     nodeRecord.meta.textContent = `Could not attach to ${nextTmuxSessionName}`;
   }
 }

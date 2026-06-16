@@ -42,7 +42,13 @@ test("panel edge controls keep toggle and resize handles separate", () => {
 
   assert.match(
     html,
-    /<div class="canvas-topbar-leading">[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-brand"/i
+    /<div class="canvas-topbar-leading">[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-breadcrumb"/i
+  );
+
+  // The brand mark now lives in the far-left project rail, not the topbar.
+  assert.match(
+    html,
+    /<aside class="app-rail"[\s\S]*?<div class="canvas-brand app-rail-brand"/i
   );
 
   const toggleTag = getElementOpenTagById(html, "sidebar-toggle-button");

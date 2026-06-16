@@ -81,7 +81,7 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
   assert.match(styles, /\.canvas-brand-name\s*\{[\s\S]*font-size:\s*1rem;/);
   assert.match(styles, /\.canvas-brand-tagline\s*\{[\s\S]*letter-spacing:\s*0\.12em;/);
   assert.match(styles, /\.canvas-strip-item\s*\{[\s\S]*font-size:\s*0\.8rem;/);
-  assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.5rem 0\.6875rem;/);
+  assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.5rem 0\.75rem;/);
   assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*font-size:\s*0\.9rem;/);
   assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*cursor:\s*inherit;/);
   assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*gap:\s*0;/);
@@ -89,25 +89,23 @@ test("topbar and terminal typography gain a calmer hierarchy and tighter spacing
   assert.match(styles, /\.terminal-node-title-input\.is-editing\s*\{[\s\S]*cursor:\s*text;/);
 });
 
-test("topbar is a single left-flowing row that groups canvas and terminal tabs", () => {
+test("vertical rail holds the canvas switcher so the topbar is a single row", () => {
   const styles = readStyles();
 
-  assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*grid-column:\s*1\s*\/\s*-1;/);
+  // Far-left vertical project rail owns the canvas switcher + file actions.
+  assert.match(styles, /\.app-rail\s*\{[\s\S]*flex-direction:\s*column;/);
+  assert.match(styles, /\.canvas-switcher-rail-section\s*\{[\s\S]*flex-direction:\s*column;/);
+  assert.match(styles, /\.app-rail-file-actions\s*\{[\s\S]*flex-direction:\s*column;/);
+  // The topbar shell holds one flex row, never stacked.
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*width:\s*100%;/);
   assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*border-radius:\s*1\.05rem;/);
-  // One flex row, never stacked.
   assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*display:\s*flex;/);
   assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*flex-wrap:\s*nowrap;/);
   assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*2\.72rem;/);
-  // Canvas switcher is a flat inline group, no boxed container.
-  assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*display:\s*flex;/);
-  assert.match(styles, /\.canvas-switcher-topbar-section\s*\{[\s\S]*background:\s*transparent;/);
-  // Terminal strip flows inline next to the canvas tabs, separated by a divider.
+  // Terminal strip flows inline next to the breadcrumb, separated by a divider.
   assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*display:\s*flex;/);
   assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*border-left:\s*1px solid var\(--color-sidebar-rule\);/);
   assert.match(styles, /\.terminal-strip-topbar-section\s*\{[\s\S]*min-height:\s*2\.05rem;/);
-  // File actions sit at the far right of the row.
-  assert.match(styles, /\.canvas-topbar-file-actions\s*\{[\s\S]*margin-left:\s*auto;/);
   assert.match(styles, /\.terminal-strip-shell\s*\{[\s\S]*background:\s*rgba\(8, 11, 15, 0\.18\);/);
   assert.match(styles, /\.terminal-strip-item\.is-active\s*\{[\s\S]*background:\s*rgba\(18, 26, 32, 0\.98\);/);
 });
