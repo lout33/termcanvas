@@ -1,5 +1,30 @@
 # UI Plan — "Classic" layout pass (dark theme retained)
 
+## ✅ Consolidated onto `main` — rail + one-row synthesis (2026-06-16)
+
+Two parallel UI lines existed: a git worktree branch (`tier1-lite-restyle`,
+committed) and main's uncommitted header work. Merged into one tree on `main`
+(merge `9a27726`). The synthesis: the **far-left vertical project rail** (from the
+worktree) is what *enables* the one-row topbar — it holds the canvas switcher + file
+actions, leaving the topbar as a single flex row (toggle + breadcrumb + terminal strip).
+
+Now live on `main` (verified: build + 140 tests + screenshot):
+- **Vertical project rail** (`.app-rail`) — brand, `+`, canvas switcher, export/import.
+- **One-row topbar** — toggle + `TermCanvas · <canvas>` breadcrumb + inline terminal strip.
+- **Explorer** left panel with hover-reveal toolbar.
+- **CM6 code editor** (`createCodeEditor`) in the file inspector (read-only preview).
+- **Canvas minimap** with viewport indicator (bottom-right).
+- **Terminal status dots** on node cards + restyled cards.
+- **File-filter search** in the workspace explorer.
+
+Dropped in the merge: a bad self-referential `node_modules` symlink the worktree had
+committed; the duplicate `createCodeViewer`; dead `canvas-project-breadcrumb` /
+`canvas-switcher-topbar-section` CSS. Safety branch: `backup/pre-rail-merge`.
+
+**Next up (per Luis):** improving the infinite canvas itself.
+
+---
+
 ## ✅ Shipped — Phase 1 (2026-06-15)
 
 - **Header → one row.** Terminal strip relocated inline into the primary row; added
