@@ -34,6 +34,17 @@ test("topbar, board hints, and terminal cards adopt fluid dark-ink surfaces", ()
   assert.match(styles, /\.terminal-node\s*\{[\s\S]*background:\s*var\(--color-terminal-card\);/);
 });
 
+test("terminal surfaces keep xterm glyph rendering crisp", () => {
+  const styles = readStyles();
+
+  assert.match(styles, /--color-terminal-text:\s*#f1f5f2;/);
+  assert.match(styles, /--terminal-font-size:\s*13;/);
+  assert.match(styles, /--terminal-line-height:\s*1\.22;/);
+  assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*font-variant-ligatures:\s*none;/);
+  assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*-webkit-font-smoothing:\s*antialiased;/);
+  assert.match(styles, /\.terminal-node-terminal \.xterm-rows\s*\{[\s\S]*letter-spacing:\s*0;/);
+});
+
 test("drawer, inspector, and HUD surfaces share the quiet phosphor chrome language", () => {
   const styles = readStyles();
 

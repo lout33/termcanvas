@@ -73,3 +73,35 @@ test("createDirectorySnapshot treats symlinked directories inside the workspace 
 
   assert.equal(linkedEntry?.kind, "directory");
 }));
+
+test("createDirectorySnapshot can list only root entries for lazy workspace browsing", () => withTempDirectory((rootPath) => {
+  fs.mkdirSync(path.join(rootPath, "src", "app"), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, "src", "app", "index.js"), "console.log('hi');\n", "utf8");
+  fs.writeFileSync(path.join(rootPath, "README.md"), "# Test\n", "utf8");
+
+  const snapshot = createDirectorySnapshot(rootPath, { expandedDirectoryPaths: [] });
+
+  assert.deepEqual(snapshot.loadedDirectoryPaths, [""]);
+  assert.deepEqual(snapshot.entries.map((entry) => entry.relativePath), ["README.md", "src"]);
+}));
+
+test("createDirectorySnapshot loads expanded deep directory chains on demand", () => withTempDirectory((rootPath) => {
+  fs.mkdirSync(path.join(rootPath, "src", "features", "auth", "screens"), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, "src", "features", "auth", "screens", "login.js"), "export {};\n", "utf8");
+  fs.mkdirSync(path.join(rootPath, "src", "features", "billing", "screens"), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, "src", "features", "billing", "screens", "invoice.js"), "export {};\n", "utf8");
+
+  const snapshot = createDirectorySnapshot(rootPath, {
+    expandedDirectoryPaths: ["src/features/auth/screens"]
+  });
+
+  assert.deepEqual(snapshot.loadedDirectoryPaths, [
+    "",
+    "src",
+    "src/features",
+    "src/features/auth",
+    "src/features/auth/screens"
+  ]);
+  assert.equal(snapshot.entries.some((entry) => entry.relativePath === "src/features/auth/screens/login.js"), true);
+  assert.equal(snapshot.entries.some((entry) => entry.relativePath === "src/features/billing/screens/invoice.js"), false);
+}));

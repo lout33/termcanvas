@@ -54,10 +54,15 @@ test("preload exposes chooseCanvasWorkspace over the canvas IPC channel", () => 
 
   assert.equal(exposedApi.appName, "TermCanvas");
   assert.equal(typeof exposedApi.chooseCanvasWorkspace, "function");
+  assert.equal(typeof exposedApi.refreshWorkspaceDirectory, "function");
 
   exposedApi.chooseCanvasWorkspace();
+  exposedApi.refreshWorkspaceDirectory({ expandedDirectoryPaths: ["src", 1, "src/app"] });
 
-  assert.deepEqual(invokeCalls, [["workspace-directory:choose-canvas"]]);
+  assert.deepEqual(invokeCalls, [
+    ["workspace-directory:choose-canvas"],
+    ["workspace-directory:refresh", { expandedDirectoryPaths: ["src", "src/app"] }]
+  ]);
   delete require.cache[preloadPath];
 });
 

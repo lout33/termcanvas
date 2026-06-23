@@ -26,6 +26,73 @@ function createWorkspaceService({
   const fsp = fs.promises;
   const workspaceRegistries = new Map();
   const workspaceWatchers = new Map();
+  const workspaceSnapshotExpansionPaths = new Map();
+
+  function getWorkspaceSnapshotExpansionKey(ownerWebContentsId, folderId) {
+    return `${ownerWebContentsId}:${folderId}`;
+  }
+
+  function normalizeExpandedDirectoryPaths(expandedDirectoryPaths) {
+    if (!Array.isArray(expandedDirectoryPaths)) {
+      return [];
+    }
+
+    const normalizedPaths = [];
+    const seenPaths = new Set();
+
+    expandedDirectoryPaths.forEach((directoryPath) => {
+      if (typeof directoryPath !== "string") {
+        return;
+      }
+
+      const normalizedPath = directoryPath
+        .split(/[\\/]+/u)
+        .filter((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+        .join("/");
+
+      if (normalizedPath.length === 0 || seenPaths.has(normalizedPath)) {
+        return;
+      }
+
+      seenPaths.add(normalizedPath);
+      normalizedPaths.push(normalizedPath);
+    });
+
+    return normalizedPaths;
+  }
+
+  function setWorkspaceSnapshotExpansionPaths(ownerWebContentsId, folderId, expandedDirectoryPaths) {
+    workspaceSnapshotExpansionPaths.set(
+      getWorkspaceSnapshotExpansionKey(ownerWebContentsId, folderId),
+      normalizeExpandedDirectoryPaths(expandedDirectoryPaths)
+    );
+  }
+
+  function getWorkspaceSnapshotExpansionPaths(ownerWebContentsId, folderId, expandedDirectoryPaths) {
+    const expansionKey = getWorkspaceSnapshotExpansionKey(ownerWebContentsId, folderId);
+
+    if (Array.isArray(expandedDirectoryPaths)) {
+      const normalizedPaths = normalizeExpandedDirectoryPaths(expandedDirectoryPaths);
+      workspaceSnapshotExpansionPaths.set(expansionKey, normalizedPaths);
+      return normalizedPaths;
+    }
+
+    return workspaceSnapshotExpansionPaths.get(expansionKey) ?? [];
+  }
+
+  function deleteWorkspaceSnapshotExpansionPaths(ownerWebContentsId, folderId) {
+    workspaceSnapshotExpansionPaths.delete(getWorkspaceSnapshotExpansionKey(ownerWebContentsId, folderId));
+  }
+
+  function deleteOwnedWorkspaceSnapshotExpansionPaths(ownerWebContentsId) {
+    const ownerPrefix = `${ownerWebContentsId}:`;
+
+    for (const expansionKey of workspaceSnapshotExpansionPaths.keys()) {
+      if (expansionKey.startsWith(ownerPrefix)) {
+        workspaceSnapshotExpansionPaths.delete(expansionKey);
+      }
+    }
+  }
 
   function getExistingOwnerWorkspaceRegistry(ownerWebContentsId) {
     return workspaceRegistries.get(ownerWebContentsId) ?? null;
@@ -241,6 +308,8 @@ function createWorkspaceService({
   }
 
   function destroyWorkspaceWatcher(ownerWebContentsId, folderId) {
+    deleteWorkspaceSnapshotExpansionPaths(ownerWebContentsId, folderId);
+
     const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
 
     if (ownerWatchers == null) {
@@ -266,6 +335,8 @@ function createWorkspaceService({
   }
 
   function destroyOwnedWorkspaceWatchers(ownerWebContentsId) {
+    deleteOwnedWorkspaceSnapshotExpansionPaths(ownerWebContentsId);
+
     const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
 
     if (ownerWatchers == null) {
@@ -297,7 +368,7 @@ function createWorkspaceService({
     sendToOwner(ownerWebContentsId, "workspace-directory:data", serializeWorkspaceRegistry(workspaceRegistry));
   }
 
-  async function refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId) {
+  async function refreshWorkspaceFolderForOwner(ownerWebContentsId, folderId, options = {}) {
     const workspaceRegistry = getExistingOwnerWorkspaceRegistry(ownerWebContentsId);
 
     if (workspaceRegistry === null) {
@@ -322,8 +393,14 @@ function createWorkspaceService({
     }
 
     try {
+      const expandedDirectoryPaths = getWorkspaceSnapshotExpansionPaths(
+        ownerWebContentsId,
+        folderId,
+        options.expandedDirectoryPaths
+      );
+
       updateWorkspaceFolderSnapshot(workspaceRegistry, folderId, {
-        ...await createDirectorySnapshotAsync(resolvedDirectoryPath),
+        ...await createDirectorySnapshotAsync(resolvedDirectoryPath, { expandedDirectoryPaths }),
         lastError: ""
       });
     } catch {
@@ -334,6 +411,10 @@ function createWorkspaceService({
   }
 
   async function requestWorkspaceFolderRefresh(ownerWebContentsId, folderId, options = {}) {
+    if (Array.isArray(options.expandedDirectoryPaths)) {
+      setWorkspaceSnapshotExpansionPaths(ownerWebContentsId, folderId, options.expandedDirectoryPaths);
+    }
+
     const ownerWatchers = workspaceWatchers.get(ownerWebContentsId);
     const workspaceWatcher = ownerWatchers?.get(folderId);
 
@@ -454,7 +535,7 @@ function createWorkspaceService({
     const canonicalDirectoryPath = fs.realpathSync(resolvedDirectoryPath);
     const workspaceRegistry = getOwnerWorkspaceRegistry(ownerWebContentsId);
     const snapshot = {
-      ...await createDirectorySnapshotAsync(canonicalDirectoryPath),
+      ...await createDirectorySnapshotAsync(canonicalDirectoryPath, { expandedDirectoryPaths: [] }),
       lastError: ""
     };
     const importResult = importWorkspaceFolder(workspaceRegistry, snapshot);
@@ -477,7 +558,7 @@ function createWorkspaceService({
     const canonicalDirectoryPath = fs.realpathSync(resolvedDirectoryPath);
     const workspaceRegistry = createWorkspaceRegistry();
     const snapshot = {
-      ...await createDirectorySnapshotAsync(canonicalDirectoryPath),
+      ...await createDirectorySnapshotAsync(canonicalDirectoryPath, { expandedDirectoryPaths: [] }),
       lastError: ""
     };
     const importResult = importWorkspaceFolder(workspaceRegistry, snapshot);
@@ -496,6 +577,15 @@ function createWorkspaceService({
       ? snapshot.importedRootPaths.filter((rootPath) => typeof rootPath === "string")
       : [];
     const activeRootPath = typeof snapshot?.activeRootPath === "string" ? snapshot.activeRootPath : null;
+    const expandedDirectoriesByRootPath = new Map(
+      Array.isArray(snapshot?.expandedDirectoriesByRootPath)
+        ? snapshot.expandedDirectoriesByRootPath.flatMap((entry) => {
+            return typeof entry?.rootPath === "string"
+              ? [[entry.rootPath, normalizeExpandedDirectoryPaths(entry.directoryPaths)]]
+              : [];
+          })
+        : []
+    );
     let lastState = {
       importedFolders: [],
       activeFolderId: null
@@ -533,13 +623,19 @@ function createWorkspaceService({
 
       if (matchingFolder !== null) {
         activateWorkspaceFolder(workspaceRegistry, matchingFolder.id);
-        return requestWorkspaceFolderRefresh(ownerWebContentsId, matchingFolder.id);
+        return requestWorkspaceFolderRefresh(ownerWebContentsId, matchingFolder.id, {
+          expandedDirectoryPaths: expandedDirectoriesByRootPath.get(activeRootPath) ?? []
+        });
       }
     }
 
     return workspaceRegistry.activeFolderId === null
       ? serializeWorkspaceRegistry(workspaceRegistry)
-      : requestWorkspaceFolderRefresh(ownerWebContentsId, workspaceRegistry.activeFolderId);
+      : requestWorkspaceFolderRefresh(ownerWebContentsId, workspaceRegistry.activeFolderId, {
+          expandedDirectoryPaths: expandedDirectoriesByRootPath.get(
+            getWorkspaceFolder(workspaceRegistry, workspaceRegistry.activeFolderId)?.rootPath
+          ) ?? []
+        });
   }
 
   async function refreshWorkspaceRegistryAfterMutation(ownerWebContentsId, folderId) {
@@ -663,14 +759,14 @@ function createWorkspaceService({
     return reorderWorkspaceFolder(workspaceRegistry, folderId, targetIndex).state;
   }
 
-  function refreshActiveFolder(ownerWebContentsId) {
+  function refreshActiveFolder(ownerWebContentsId, options = {}) {
     const workspaceFolder = getActiveWorkspaceFolderForOwner(ownerWebContentsId);
 
     if (workspaceFolder === null) {
       return null;
     }
 
-    return requestWorkspaceFolderRefresh(ownerWebContentsId, workspaceFolder.id);
+    return requestWorkspaceFolderRefresh(ownerWebContentsId, workspaceFolder.id, options);
   }
 
   async function readFile(ownerWebContentsId, folderId, relativePath) {

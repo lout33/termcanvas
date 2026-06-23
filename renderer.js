@@ -147,12 +147,15 @@ let isWindowUnloading = false;
 let renderedCanvasId = null;
 let viewportRenderFrame = 0;
 let terminalSizeSyncFrame = 0;
+let terminalRefreshFrame = 0;
+let shouldRefreshTerminalsAfterViewportRender = false;
 let zoomIndicatorTimeout = 0;
 let canvasStripOverflowSyncFrame = 0;
 let terminalStripOverflowSyncFrame = 0;
 let shouldEnsureActiveCanvasStripItemVisible = false;
 let shouldEnsureActiveTerminalStripItemVisible = false;
 const pendingTerminalSizeNodes = new Set();
+const pendingTerminalRefreshNodes = new Set();
 let pendingCanvasListFocus = null;
 let isCanvasSwitcherMenuOpen = false;
 let lastExportedCanvasDebugPayload = null;
@@ -160,6 +163,7 @@ let workspacePreviewRequestId = 0;
 let workspacePreviewObjectUrl = null;
 let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
+let pendingWorkspaceDirectoryRefresh = false;
 let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
 let workspaceFilterQuery = "";
@@ -189,6 +193,11 @@ const workspaceSelectionState = {
   folderId: null,
   relativePath: null,
   kind: null
+};
+
+const workspaceDirectoryLoadState = {
+  folderId: null,
+  relativePath: null
 };
 
 let workspaceActionDialogState = createWorkspaceActionDialogState();
@@ -802,8 +811,15 @@ async function bindTerminalSession(nodeRecord, options = {}) {
   const terminal = new TerminalConstructor({
     cursorBlink: true,
     convertEol: true,
+    allowTransparency: false,
+    customGlyphs: true,
     fontFamily: terminalTheme.fontFamily,
     fontSize: terminalTheme.fontSize,
+    fontWeight: 400,
+    fontWeightBold: 700,
+    letterSpacing: 0,
+    lineHeight: terminalTheme.lineHeight,
+    minimumContrastRatio: 1,
     scrollback: 1200,
     theme: terminalTheme.theme
   });
@@ -817,12 +833,13 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       activeNodeElement: activeNodeRecord?.element ?? null
     });
   });
-  fitAddon.fit();
-
   nodeRecord.terminalId = terminalId;
   nodeRecord.terminal = terminal;
   nodeRecord.fitAddon = fitAddon;
   terminalNodeMap.set(terminalId, nodeRecord);
+
+  fitAddon.fit();
+  scheduleTerminalRefresh([nodeRecord]);
 
   const initialCols = Math.max(terminal.cols, 20);
   const initialRows = Math.max(terminal.rows, 8);
@@ -885,6 +902,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
         }
 
         fitAddon.fit();
+        scheduleTerminalRefresh([nodeRecord]);
         void window.noteCanvas.resizeTerminal(terminalId, Math.max(terminal.cols, 20), Math.max(terminal.rows, 8));
       });
     };
@@ -1257,9 +1275,16 @@ function setActiveCanvasViewport(nextX, nextY, nextScale) {
     return false;
   }
 
+  const didScaleChange = activeCanvas.viewportScale !== resolvedScale;
+
   activeCanvas.viewportOffset.x = nextX;
   activeCanvas.viewportOffset.y = nextY;
   activeCanvas.viewportScale = resolvedScale;
+
+  if (didScaleChange) {
+    shouldRefreshTerminalsAfterViewportRender = true;
+  }
+
   requestViewportRender();
   scheduleAppSessionSave();
   return true;
@@ -1837,10 +1862,11 @@ function getTerminalTheme() {
   return {
     fontFamily: readVar("--font-mono", '"SFMono-Regular", Menlo, Monaco, Consolas, monospace'),
     fontSize: Number.parseFloat(readVar("--terminal-font-size", "13")) || 13,
+    lineHeight: Number.parseFloat(readVar("--terminal-line-height", "1.22")) || 1.22,
     theme: {
       background: readVar("--color-terminal-surface-top", "#121212"),
-      foreground: readVar("--color-terminal-ink", "#f5f5f4"),
-      cursor: readVar("--color-terminal-ink", "#f5f5f4"),
+      foreground: readVar("--color-terminal-text", "#f5f5f4"),
+      cursor: readVar("--color-terminal-text", "#f5f5f4"),
       black: "#1c1917",
       red: "#f87171",
       green: "#4ade80",
@@ -1907,6 +1933,20 @@ function toWorldPoint(position) {
   };
 }
 
+function snapWorldCoordinateToDevicePixel(worldValue, viewportOffset, viewportScale) {
+  if (!Number.isFinite(worldValue) || !Number.isFinite(viewportOffset) || !Number.isFinite(viewportScale) || viewportScale <= 0) {
+    return worldValue;
+  }
+
+  const devicePixelRatio = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+    ? window.devicePixelRatio
+    : 1;
+  const screenValue = viewportOffset + (worldValue * viewportScale);
+  const snappedScreenValue = Math.round(screenValue * devicePixelRatio) / devicePixelRatio;
+
+  return (snappedScreenValue - viewportOffset) / viewportScale;
+}
+
 function positionNode(nodeRecord) {
   if (nodeRecord.isMaximized) {
     nodeRecord.element.style.left = "";
@@ -1916,8 +1956,18 @@ function positionNode(nodeRecord) {
     return;
   }
 
-  const nextLeft = `${nodeRecord.x}px`;
-  const nextTop = `${nodeRecord.y}px`;
+  const snappedX = snapWorldCoordinateToDevicePixel(
+    nodeRecord.x,
+    nodeRecord.canvas.viewportOffset.x,
+    nodeRecord.canvas.viewportScale
+  );
+  const snappedY = snapWorldCoordinateToDevicePixel(
+    nodeRecord.y,
+    nodeRecord.canvas.viewportOffset.y,
+    nodeRecord.canvas.viewportScale
+  );
+  const nextLeft = `${snappedX}px`;
+  const nextTop = `${snappedY}px`;
 
   if (nodeRecord.element.style.left !== nextLeft) {
     nodeRecord.element.style.left = nextLeft;
@@ -2030,6 +2080,37 @@ function scheduleTerminalSizeSync(nodeRecords) {
   });
 }
 
+function scheduleTerminalRefresh(nodeRecords) {
+  nodeRecords.forEach((nodeRecord) => {
+    pendingTerminalRefreshNodes.add(nodeRecord);
+  });
+
+  if (terminalRefreshFrame !== 0) {
+    return;
+  }
+
+  terminalRefreshFrame = requestAnimationFrame(() => {
+    terminalRefreshFrame = 0;
+    const activeCanvas = getActiveCanvas();
+    const nodesToRefresh = [...pendingTerminalRefreshNodes];
+
+    pendingTerminalRefreshNodes.clear();
+
+    nodesToRefresh.forEach((nodeRecord) => {
+      if (
+        activeCanvas !== null
+        && nodeRecord.canvas.id === activeCanvas.id
+        && nodeRecord.element instanceof HTMLElement
+        && !nodeRecord.element.hidden
+        && nodeRecord.terminal !== null
+        && nodeRecord.terminal.rows > 0
+      ) {
+        nodeRecord.terminal.refresh(0, nodeRecord.terminal.rows - 1);
+      }
+    });
+  });
+}
+
 function setNodeCanvasVisibility(nodeRecord, shouldShow) {
   if (!(nodeRecord.element instanceof HTMLElement)) {
     return false;
@@ -2073,7 +2154,12 @@ function flushViewportRender() {
 
   cancelAnimationFrame(viewportRenderFrame);
   viewportRenderFrame = 0;
-  renderCanvas({ syncNodePositions: false });
+  renderCanvas();
+  const activeCanvas = getActiveCanvas();
+  if (activeCanvas !== null && shouldRefreshTerminalsAfterViewportRender) {
+    shouldRefreshTerminalsAfterViewportRender = false;
+    scheduleTerminalRefresh(activeCanvas.nodes);
+  }
 }
 
 function requestViewportRender() {
@@ -2083,7 +2169,12 @@ function requestViewportRender() {
 
   viewportRenderFrame = requestAnimationFrame(() => {
     viewportRenderFrame = 0;
-    renderCanvas({ syncNodePositions: false });
+    renderCanvas();
+    const activeCanvas = getActiveCanvas();
+    if (activeCanvas !== null && shouldRefreshTerminalsAfterViewportRender) {
+      shouldRefreshTerminalsAfterViewportRender = false;
+      scheduleTerminalRefresh(activeCanvas.nodes);
+    }
   });
 }
 
@@ -2516,6 +2607,9 @@ function normalizeWorkspaceFolders(folders) {
       rootPath: folder.rootPath,
       rootName: typeof folder.rootName === "string" && folder.rootName.length > 0 ? folder.rootName : folder.rootPath,
       entries: normalizeWorkspaceEntries(folder.entries),
+      loadedDirectoryPaths: Array.isArray(folder.loadedDirectoryPaths)
+        ? folder.loadedDirectoryPaths.filter((directoryPath) => typeof directoryPath === "string")
+        : [""],
       isTruncated: folder.isTruncated === true,
       lastError: typeof folder.lastError === "string" ? folder.lastError : ""
     }];
@@ -2558,6 +2652,27 @@ function getWorkspaceFilePaths(folderRecord) {
       .filter((entry) => entry.kind === "file")
       .map((entry) => entry.relativePath)
   );
+}
+
+function getWorkspaceLoadedDirectoryPaths(folderRecord) {
+  if (folderRecord === null) {
+    return new Set();
+  }
+
+  const loadedDirectoryPaths = Array.isArray(folderRecord.loadedDirectoryPaths)
+    ? folderRecord.loadedDirectoryPaths
+    : [""];
+
+  return new Set(loadedDirectoryPaths.filter((directoryPath) => typeof directoryPath === "string"));
+}
+
+function hasWorkspaceDirectoryLoaded(folderRecord, relativePath) {
+  return getWorkspaceLoadedDirectoryPaths(folderRecord).has(relativePath);
+}
+
+function getActiveWorkspaceExpandedDirectoryPaths() {
+  const activeCanvas = getActiveCanvas();
+  return activeCanvas === null ? [] : getCanvasWorkspaceExpandedDirectories(activeCanvas);
 }
 
 function clearWorkspaceSelection() {
@@ -3151,6 +3266,8 @@ function buildWorkspaceTreeRows(folderRecord, options = {}) {
         ...entry,
         depth,
         isExpanded,
+        isLoading: workspaceDirectoryLoadState.folderId === folderRecord.id
+          && workspaceDirectoryLoadState.relativePath === entry.relativePath,
         isSelected: selectedRelativePath === entry.relativePath
       });
 
@@ -3765,7 +3882,7 @@ async function deleteSelectedWorkspaceEntry() {
   return response ?? null;
 }
 
-function toggleWorkspaceDirectory(relativePath) {
+async function toggleWorkspaceDirectory(relativePath) {
   const activeFolder = getActiveWorkspaceFolder();
   const activeCanvas = getActiveCanvas();
 
@@ -3773,11 +3890,35 @@ function toggleWorkspaceDirectory(relativePath) {
     return;
   }
 
+  const wasExpanded = getCanvasWorkspaceExpandedDirectories(activeCanvas).includes(relativePath);
+  const needsDirectoryRefresh = !wasExpanded && !hasWorkspaceDirectoryLoaded(activeFolder, relativePath);
+
   toggleCanvasWorkspaceExpandedDirectory(activeCanvas, relativePath);
 
   captureActiveCanvasWorkspaceSnapshot();
   renderWorkspaceBrowser();
   scheduleAppSessionSave();
+
+  if (!needsDirectoryRefresh) {
+    return;
+  }
+
+  workspaceDirectoryLoadState.folderId = activeFolder.id;
+  workspaceDirectoryLoadState.relativePath = relativePath;
+  renderWorkspaceBrowser();
+
+  try {
+    await refreshWorkspaceDirectory({ silent: true });
+  } finally {
+    if (
+      workspaceDirectoryLoadState.folderId === activeFolder.id
+      && workspaceDirectoryLoadState.relativePath === relativePath
+    ) {
+      workspaceDirectoryLoadState.folderId = null;
+      workspaceDirectoryLoadState.relativePath = null;
+      renderWorkspaceBrowser();
+    }
+  }
 }
 
 function updateWorkspaceControls() {
@@ -3826,6 +3967,7 @@ function createWorkspaceEntryDecoration(entry) {
 
   if (entry.kind === "directory") {
     disclosure.classList.toggle("is-expanded", entry.isExpanded);
+    disclosure.classList.toggle("is-loading", entry.isLoading === true);
     disclosure.innerHTML = '<svg class="workspace-browser-entry-disclosure-icon" viewBox="0 0 16 16"><path d="M6 3.75 10.75 8 6 12.25"></path></svg>';
   } else {
     disclosure.classList.add("is-placeholder");
@@ -3969,6 +4111,11 @@ function renderWorkspaceBrowser() {
         button.title = entry.relativePath;
         button.setAttribute("aria-label", entry.kind === "directory" ? `${entry.isExpanded ? "Collapse" : "Expand"} ${entry.relativePath}` : `Preview ${entry.relativePath}`);
         button.classList.toggle("is-selected", entry.isSelected);
+        button.classList.toggle("is-loading", entry.isLoading === true);
+
+        if (entry.isLoading === true) {
+          button.setAttribute("aria-busy", "true");
+        }
 
         const decoration = createWorkspaceEntryDecoration(entry);
 
@@ -3982,7 +4129,9 @@ function renderWorkspaceBrowser() {
           button.setAttribute("aria-expanded", entry.isExpanded ? "true" : "false");
           button.addEventListener("click", () => {
             setWorkspaceSelection(activeFolder.id, entry.relativePath, "directory");
-            toggleWorkspaceDirectory(entry.relativePath);
+            void toggleWorkspaceDirectory(entry.relativePath).catch((error) => {
+              console.error(error);
+            });
           });
         } else {
           button.addEventListener("click", () => {
@@ -4039,6 +4188,14 @@ function applyWorkspaceState(nextState, options = {}) {
 
   if (workspaceState.activeFolderId !== null && getWorkspaceFolderById(workspaceState.activeFolderId) === null) {
     workspaceState.activeFolderId = workspaceState.importedFolders[0]?.id ?? null;
+  }
+
+  if (
+    workspaceDirectoryLoadState.folderId !== null
+    && getWorkspaceFolderById(workspaceDirectoryLoadState.folderId) === null
+  ) {
+    workspaceDirectoryLoadState.folderId = null;
+    workspaceDirectoryLoadState.relativePath = null;
   }
 
   if (activeCanvas !== null) {
@@ -4134,7 +4291,12 @@ function applyWorkspaceState(nextState, options = {}) {
 }
 
 async function refreshWorkspaceDirectory(options = {}) {
-  if (!hasWorkspaceDirectory() || workspaceState.isRefreshing) {
+  if (!hasWorkspaceDirectory()) {
+    return null;
+  }
+
+  if (workspaceState.isRefreshing) {
+    pendingWorkspaceDirectoryRefresh = true;
     return null;
   }
 
@@ -4142,7 +4304,9 @@ async function refreshWorkspaceDirectory(options = {}) {
   updateWorkspaceControls();
 
   try {
-    const nextState = await window.noteCanvas.refreshWorkspaceDirectory();
+    const nextState = await window.noteCanvas.refreshWorkspaceDirectory({
+      expandedDirectoryPaths: getActiveWorkspaceExpandedDirectoryPaths()
+    });
 
     if (nextState === null) {
       return null;
@@ -4159,6 +4323,13 @@ async function refreshWorkspaceDirectory(options = {}) {
   } finally {
     workspaceState.isRefreshing = false;
     updateWorkspaceControls();
+
+    if (pendingWorkspaceDirectoryRefresh) {
+      pendingWorkspaceDirectoryRefresh = false;
+      void refreshWorkspaceDirectory({ silent: true }).catch((error) => {
+        console.error(error);
+      });
+    }
   }
 }
 
@@ -6628,12 +6799,8 @@ if (window.noteCanvas.isSmokeTest) {
     },
     getDefaultTerminalWorkingDirectory: () => getDefaultTerminalWorkingDirectory(),
     toggleWorkspaceDirectory: async (relativePath) => {
-      const workspaceButton = workspaceBrowser.querySelector(`[data-workspace-kind="directory"][data-workspace-path="${CSS.escape(relativePath)}"]`);
-
-      if (workspaceButton instanceof HTMLButtonElement) {
-        workspaceButton.click();
-        await waitForAnimationFrame();
-      }
+      await toggleWorkspaceDirectory(relativePath);
+      await waitForAnimationFrame();
 
       return getCanvasSnapshot();
     },

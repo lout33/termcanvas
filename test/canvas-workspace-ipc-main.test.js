@@ -408,6 +408,58 @@ test("workspace-directory:choose-canvas preserves the current workspace when the
   }
 });
 
+test("workspace-directory:refresh loads expanded deep workspace directories", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const deepFilePath = path.join(workspacePath, "src", "features", "auth", "screens", "login.js");
+  const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+
+  fs.mkdirSync(path.dirname(deepFilePath), { recursive: true });
+  fs.writeFileSync(deepFilePath, "export {};\n", "utf8");
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  const debugOpenHandler = handlers.get("workspace-directory:debug-open");
+  const refreshHandler = handlers.get("workspace-directory:refresh");
+  const restoreHandler = handlers.get("workspace-session:restore");
+
+  process.env.CANVAS_SMOKE_TEST = "1";
+
+  const initialState = await debugOpenHandler({ sender: { id: 29 } }, { directoryPath: workspacePath });
+  assert.equal(initialState.importedFolders[0].entries.some((entry) => entry.relativePath === "src"), true);
+  assert.equal(initialState.importedFolders[0].entries.some((entry) => entry.relativePath === "src/features"), false);
+
+  const refreshedState = await refreshHandler(
+    { sender: { id: 29 } },
+    { expandedDirectoryPaths: ["src/features/auth/screens"] }
+  );
+
+  assert.deepEqual(refreshedState.importedFolders[0].loadedDirectoryPaths, [
+    "",
+    "src",
+    "src/features",
+    "src/features/auth",
+    "src/features/auth/screens"
+  ]);
+  assert.equal(
+    refreshedState.importedFolders[0].entries.some((entry) => entry.relativePath === "src/features/auth/screens/login.js"),
+    true
+  );
+
+  await restoreHandler({ sender: { id: 29 } }, { importedRootPaths: [], activeRootPath: null });
+  delete require.cache[mainPath];
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  if (originalSmokeTest === undefined) {
+    delete process.env.CANVAS_SMOKE_TEST;
+  } else {
+    process.env.CANVAS_SMOKE_TEST = originalSmokeTest;
+  }
+});
+
 test("workspace-file:open-external opens a file inside the owner workspace and rejects cross-owner access", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
   const ownerWorkspacePath = path.join(tempRoot, "owner-workspace");

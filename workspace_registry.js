@@ -11,6 +11,9 @@ function normalizeWorkspaceFolderSnapshot(snapshot) {
       ? snapshot.rootName
       : snapshot.rootPath,
     entries: Array.isArray(snapshot.entries) ? snapshot.entries.map((entry) => ({ ...entry })) : [],
+    loadedDirectoryPaths: Array.isArray(snapshot.loadedDirectoryPaths)
+      ? snapshot.loadedDirectoryPaths.filter((directoryPath) => typeof directoryPath === "string")
+      : [""],
     isTruncated: snapshot.isTruncated === true,
     lastError: typeof snapshot.lastError === "string" ? snapshot.lastError : ""
   };
@@ -19,7 +22,10 @@ function normalizeWorkspaceFolderSnapshot(snapshot) {
 function cloneFolderRecord(folderRecord) {
   return {
     ...folderRecord,
-    entries: folderRecord.entries.map((entry) => ({ ...entry }))
+    entries: folderRecord.entries.map((entry) => ({ ...entry })),
+    loadedDirectoryPaths: Array.isArray(folderRecord.loadedDirectoryPaths)
+      ? [...folderRecord.loadedDirectoryPaths]
+      : [""]
   };
 }
 

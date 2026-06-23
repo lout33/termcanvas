@@ -1594,8 +1594,12 @@ ipcMain.handle("workspace-folder:reorder", (event, payload) => {
   );
 });
 
-ipcMain.handle("workspace-directory:refresh", async (event) => {
-  return workspaceService.refreshActiveFolder(event.sender.id);
+ipcMain.handle("workspace-directory:refresh", async (event, payload) => {
+  return workspaceService.refreshActiveFolder(event.sender.id, {
+    expandedDirectoryPaths: Array.isArray(payload?.expandedDirectoryPaths)
+      ? payload.expandedDirectoryPaths.filter((directoryPath) => typeof directoryPath === "string")
+      : []
+  });
 });
 
 ipcMain.handle("workspace-file:read", async (event, payload) => {

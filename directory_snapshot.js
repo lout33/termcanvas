@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const DEFAULT_ENTRY_LIMIT = 400;
+const DEFAULT_ENTRY_LIMIT = 5000;
 const DEFAULT_IGNORED_DIRECTORY_NAMES = new Set([
   ".git",
   "node_modules"
@@ -17,6 +17,45 @@ function normalizeEntryLimit(entryLimit) {
   }
 
   return Math.max(1, Math.floor(entryLimit));
+}
+
+function normalizeExpandedDirectoryPaths(expandedDirectoryPaths) {
+  if (!Array.isArray(expandedDirectoryPaths)) {
+    return [];
+  }
+
+  const normalizedPaths = [];
+  const seenPaths = new Set();
+
+  expandedDirectoryPaths.forEach((directoryPath) => {
+    if (typeof directoryPath !== "string") {
+      return;
+    }
+
+    const normalizedPath = directoryPath
+      .split(/[\\/]+/u)
+      .filter((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+      .join("/");
+
+    if (normalizedPath.length === 0 || seenPaths.has(normalizedPath)) {
+      return;
+    }
+
+    seenPaths.add(normalizedPath);
+    normalizedPaths.push(normalizedPath);
+  });
+
+  return normalizedPaths;
+}
+
+function shouldReadExpandedDirectory(relativePath, expandedDirectoryPaths) {
+  if (relativePath.length === 0) {
+    return true;
+  }
+
+  return expandedDirectoryPaths.some((expandedDirectoryPath) => {
+    return expandedDirectoryPath === relativePath || expandedDirectoryPath.startsWith(`${relativePath}/`);
+  });
 }
 
 function isPathWithinDirectory(rootPath, targetPath) {
@@ -87,7 +126,10 @@ function createDirectorySnapshot(rootPath, options = {}) {
 
   const entryLimit = normalizeEntryLimit(options.entryLimit);
   const ignoredDirectoryNames = new Set(options.ignoredDirectoryNames ?? DEFAULT_IGNORED_DIRECTORY_NAMES);
+  const usesExplicitExpansion = Array.isArray(options.expandedDirectoryPaths);
+  const expandedDirectoryPaths = normalizeExpandedDirectoryPaths(options.expandedDirectoryPaths);
   const entries = [];
+  const loadedDirectoryPaths = [];
   const pendingDirectories = [{
     directoryPath: resolvedRootPath,
     parentRelativePath: "",
@@ -113,6 +155,8 @@ function createDirectorySnapshot(rootPath, options = {}) {
 
       continue;
     }
+
+    loadedDirectoryPaths.push(currentDirectory.parentRelativePath);
 
     const childDirectories = [];
 
@@ -140,7 +184,7 @@ function createDirectorySnapshot(rootPath, options = {}) {
         break;
       }
 
-      if (isDirectory) {
+      if (isDirectory && (!usesExplicitExpansion || shouldReadExpandedDirectory(relativePath, expandedDirectoryPaths))) {
         childDirectories.push({
           directoryPath: resolvedEntry.directoryPath,
           parentRelativePath: relativePath,
@@ -156,6 +200,7 @@ function createDirectorySnapshot(rootPath, options = {}) {
     rootPath: resolvedRootPath,
     rootName: path.basename(resolvedRootPath) || resolvedRootPath,
     entries,
+    loadedDirectoryPaths,
     isTruncated
   };
 }

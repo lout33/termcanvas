@@ -36,6 +36,7 @@
   --color-terminal-shell-bottom: rgba(9, 11, 15, 0.98);
   --color-terminal-rule: rgba(214, 238, 243, 0.055);
   --color-terminal-ink: rgba(241, 245, 242, 0.94);
+  --color-terminal-text: #f1f5f2;
   --color-terminal-muted: rgba(176, 188, 197, 0.54);
   --color-terminal-surface-top: rgba(6, 8, 10, 0.995);
   --color-terminal-surface-bottom: rgba(7, 8, 11, 0.995);
@@ -92,7 +93,8 @@
   --text-sidebar-copy: 0.95rem;
   --text-sidebar-item: 0.98rem;
   --text-sidebar-meta: 0.68rem;
-  --terminal-font-size: 12.5;
+  --terminal-font-size: 13;
+  --terminal-line-height: 1.22;
 
   --note-width: 18rem;
   --note-min-height: 10rem;
@@ -106,7 +108,7 @@
   --drawer-panel-min-width: 14rem;
   --drawer-panel-max-width: calc(100vw - 1.5rem - var(--drawer-offset));
   --drawer-panel-rendered-width: clamp(var(--drawer-panel-min-width), var(--drawer-panel-width), var(--drawer-panel-max-width));
-  --drawer-offset: 1rem;
+  --drawer-offset: 0rem;
   --grid-size: 1.25rem;
   --measure-hairline: 0.0625rem;
   --measure-focus-ring: 0.0625rem;
@@ -323,9 +325,7 @@ button {
 }
 
 .app-shell:not(.is-sidebar-collapsed) {
-  --workspace-left-inset: calc(
-    var(--drawer-offset) + var(--drawer-panel-rendered-width) + var(--measure-board-gap)
-  );
+  --workspace-left-inset: var(--drawer-panel-rendered-width);
 }
 
 .app-shell.has-file-inspector {
@@ -494,16 +494,14 @@ button {
   gap: var(--space-3);
   width: var(--drawer-panel-rendered-width);
   padding: var(--space-4);
-  border: 1px solid rgba(186, 213, 221, 0.08);
-  border-radius: calc(var(--radius-lg) + 0.25rem);
-  background:
-    linear-gradient(180deg, rgba(13, 16, 21, 0.96), rgba(8, 10, 14, 0.95)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 24%);
-  box-shadow: 0 1.35rem 2.8rem rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(1rem);
+  border: none;
+  border-right: 1px solid var(--color-sidebar-rule);
+  border-radius: 0;
+  background: linear-gradient(180deg, #0d1015, #0b0e12);
+  box-shadow: none;
   overflow: hidden;
   pointer-events: auto;
-  transform: translateX(calc(-100% - var(--drawer-offset)));
+  transform: translateX(-100%);
   opacity: 0;
   transition:
     opacity 180ms ease,
@@ -512,12 +510,7 @@ button {
 }
 
 .canvas-sidebar-panel::after {
-  content: "";
-  position: absolute;
-  inset: 0 0 0 auto;
-  width: var(--measure-hairline);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 20%, transparent 80%, rgba(15, 23, 42, 0.24));
-  pointer-events: none;
+  content: none;
 }
 
 .app-shell:not(.is-sidebar-collapsed) .canvas-sidebar-panel {
@@ -884,6 +877,8 @@ button {
   margin: 0;
   padding: var(--space-2) var(--space-2) var(--space-3);
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   list-style: none;
 }
 
@@ -948,10 +943,31 @@ button {
   width: 0.875rem;
   height: 0.875rem;
   color: rgba(191, 219, 254, 0.72);
+  transition:
+    color var(--transition-base),
+    transform var(--transition-base);
 }
 
 .workspace-browser-entry-disclosure.is-expanded {
   transform: rotate(90deg);
+}
+
+.workspace-browser-entry-disclosure.is-loading {
+  transform: none;
+}
+
+.workspace-browser-entry-disclosure.is-loading .workspace-browser-entry-disclosure-icon {
+  display: none;
+}
+
+.workspace-browser-entry-disclosure.is-loading::before {
+  width: 0.625rem;
+  height: 0.625rem;
+  border: 1px solid rgba(143, 220, 255, 0.22);
+  border-top-color: var(--color-phosphor-accent-strong);
+  border-radius: 999px;
+  animation: workspace-browser-spin 0.7s linear infinite;
+  content: "";
 }
 
 .workspace-browser-entry-disclosure.is-placeholder {
@@ -999,6 +1015,12 @@ button {
   overflow-wrap: anywhere;
 }
 
+@keyframes workspace-browser-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .file-inspector {
   position: absolute;
   top: var(--drawer-offset);
@@ -1011,17 +1033,15 @@ button {
   width: auto;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid rgba(186, 213, 221, 0.1);
-  border-radius: calc(var(--radius-lg) + 0.35rem);
-  background:
-    radial-gradient(circle at 16% 0%, rgba(146, 196, 172, 0.09), transparent 24rem),
-    linear-gradient(180deg, rgba(14, 17, 22, 0.98), rgba(8, 10, 14, 0.97));
-  box-shadow: 0 1.6rem 3.4rem rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(1rem);
+  border: none;
+  border-left: 1px solid var(--color-sidebar-rule);
+  border-radius: 0;
+  background: linear-gradient(180deg, #0e1116, #0b0e12);
+  box-shadow: none;
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
-  transform: translateX(calc(100% + var(--drawer-offset)));
+  transform: translateX(100%);
   transition:
     opacity var(--transition-base),
     transform 220ms ease,
@@ -2836,6 +2856,16 @@ button {
 
 .terminal-node-terminal .xterm {
   height: 100%;
+  font-family: var(--font-mono);
+  font-kerning: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.terminal-node-terminal .xterm-rows {
+  letter-spacing: 0;
 }
 
 .terminal-node-terminal .xterm-viewport,
