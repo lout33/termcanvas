@@ -74,6 +74,13 @@ const boardWelcomeOpenButton = document.getElementById("board-welcome-open-butto
 const boardMinimap = document.getElementById("board-minimap");
 const boardMinimapCanvas = document.getElementById("board-minimap-canvas");
 const boardMinimapViewport = document.getElementById("board-minimap-viewport");
+const canvasBreadcrumb = document.getElementById("canvas-breadcrumb");
+const canvasPanelTitle = document.getElementById("canvas-panel-title");
+const canvasPanelPills = document.getElementById("canvas-panel-pills");
+const canvasActionsMenuRoot = document.getElementById("canvas-actions-menu-root");
+const canvasActionsMenuButton = document.getElementById("canvas-actions-menu-button");
+const canvasActionsMenu = document.getElementById("canvas-actions-menu");
+const closeActiveCanvasButton = document.getElementById("close-active-canvas-button");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
 const canvasStripList = document.getElementById("canvas-strip-list");
 const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
@@ -85,6 +92,7 @@ const terminalStripNextButton = document.getElementById("terminal-strip-next-but
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
+const focusWorkspaceSearchButton = document.getElementById("focus-workspace-search-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
 const createWorkspaceFileButton = document.getElementById("create-workspace-file-button");
@@ -119,18 +127,20 @@ const CANVAS_SCALE_STEP = 0.0022;
 const CANVAS_SCALE_STEP_FACTOR = 1.22;
 const CANVAS_SCALE_PRECISION = 1000;
 const CANVAS_ZOOM_WHEEL_DELTA_LIMIT = 140;
-const DEFAULT_NODE_WIDTH = 544;
-const DEFAULT_NODE_HEIGHT = 352;
-const MIN_NODE_WIDTH = 320;
-const MIN_NODE_HEIGHT = 220;
+const DEFAULT_NODE_WIDTH = 424;
+const DEFAULT_NODE_HEIGHT = 276;
+const MIN_NODE_WIDTH = 288;
+const MIN_NODE_HEIGHT = 184;
 const MIN_SIDEBAR_PANEL_WIDTH = 224;
 const MIN_FILE_INSPECTOR_WIDTH = 240;
 const PANEL_VIEWPORT_MARGIN = 24;
+const MIN_CANVAS_COLUMN_WIDTH = 360;
 const ZOOM_INDICATOR_VISIBLE_MS = 1200;
 const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 const APP_SESSION_VERSION = 1;
 const APP_SESSION_SAVE_DEBOUNCE_MS = 180;
 const CANVAS_AGENT_SYNC_INTERVAL_MS = 6000;
+const MAX_WORKSPACE_PREVIEW_TABS = 5;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -157,10 +167,12 @@ let shouldEnsureActiveTerminalStripItemVisible = false;
 const pendingTerminalSizeNodes = new Set();
 const pendingTerminalRefreshNodes = new Set();
 let pendingCanvasListFocus = null;
+let isCanvasActionsMenuOpen = false;
 let isCanvasSwitcherMenuOpen = false;
 let lastExportedCanvasDebugPayload = null;
 let workspacePreviewRequestId = 0;
 let workspacePreviewObjectUrl = null;
+let workspacePreviewTabs = [];
 let workspaceStateHydrationToken = 0;
 let activeCanvasWorkspaceRestoreToken = 0;
 let pendingWorkspaceDirectoryRefresh = false;
@@ -361,6 +373,14 @@ function getManagedAgentRoleLabel(role) {
   }
 
   return "Agent";
+}
+
+function getTerminalNodeRoleLabel(nodeRecord) {
+  if (nodeRecord?.managedAgentName !== null && nodeRecord?.managedAgentName !== undefined) {
+    return getManagedAgentRoleLabel(normalizeManagedAgentRole(nodeRecord.managedAgentRole, nodeRecord.isManager));
+  }
+
+  return "Terminal";
 }
 
 function getManagedAgentNodeTitle(options = {}) {
@@ -703,6 +723,11 @@ function syncTerminalMeta(nodeRecord) {
   const metaText = formatTerminalMeta(nodeRecord);
   nodeRecord.meta.textContent = metaText;
   nodeRecord.meta.title = metaText;
+  if (nodeRecord.roleBadge !== null) {
+    const roleLabel = getTerminalNodeRoleLabel(nodeRecord);
+    nodeRecord.roleBadge.textContent = roleLabel;
+    nodeRecord.roleBadge.dataset.role = roleLabel.toLowerCase();
+  }
   const sessionIdentifier = getNodeSessionIdentifier(nodeRecord);
   if (nodeRecord.copySessionButton !== null) {
     nodeRecord.copySessionButton.title = `Copy session id: ${sessionIdentifier}`;
@@ -1526,6 +1551,31 @@ function toggleSidebar() {
   setSidebarCollapsed(!isSidebarCollapsed);
 }
 
+function setCanvasActionsMenuOpen(nextValue, options = {}) {
+  isCanvasActionsMenuOpen = nextValue === true && getActiveCanvas() !== null;
+
+  if (canvasActionsMenu instanceof HTMLElement) {
+    canvasActionsMenu.hidden = !isCanvasActionsMenuOpen;
+  }
+
+  if (canvasActionsMenuButton instanceof HTMLButtonElement) {
+    canvasActionsMenuButton.setAttribute("aria-expanded", isCanvasActionsMenuOpen ? "true" : "false");
+    canvasActionsMenuButton.classList.toggle("is-active", isCanvasActionsMenuOpen);
+
+    if (options.restoreFocus === true) {
+      canvasActionsMenuButton.focus();
+    }
+  }
+}
+
+function closeCanvasActionsMenu(options = {}) {
+  setCanvasActionsMenuOpen(false, options);
+}
+
+function toggleCanvasActionsMenu() {
+  setCanvasActionsMenuOpen(!isCanvasActionsMenuOpen);
+}
+
 function setCanvasSwitcherMenuOpen(nextValue, options = {}) {
   isCanvasSwitcherMenuOpen = nextValue === true;
 
@@ -1831,6 +1881,107 @@ function renderTerminalStrip() {
   terminalStripList.replaceChildren(...viewModel.items.map((itemView) => createTerminalStripItem(itemView)));
   terminalStripSection?.classList.toggle("is-empty", viewModel.isEmpty);
   scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
+}
+
+function getActiveProjectDisplayName() {
+  const activeFolder = getActiveWorkspaceFolder();
+
+  if (typeof activeFolder?.rootName === "string" && activeFolder.rootName.length > 0) {
+    return activeFolder.rootName;
+  }
+
+  const activeCanvas = getActiveCanvas();
+  const canvasWorkspace = normalizeCanvasWorkspaceRecord(activeCanvas?.workspace);
+
+  if (typeof canvasWorkspace?.rootName === "string" && canvasWorkspace.rootName.length > 0) {
+    return canvasWorkspace.rootName;
+  }
+
+  if (typeof canvasWorkspace?.rootPath === "string" && canvasWorkspace.rootPath.length > 0) {
+    return canvasWorkspace.rootPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? canvasWorkspace.rootPath;
+  }
+
+  return "project";
+}
+
+function getVisibleCanvasNodes(canvasRecord) {
+  return Array.isArray(canvasRecord?.nodes)
+    ? canvasRecord.nodes.filter((nodeRecord) => nodeRecord?.isRemoved !== true)
+    : [];
+}
+
+function createCanvasPanelPill(label, modifier = "") {
+  const pill = document.createElement("span");
+  pill.className = modifier.length > 0 ? `canvas-panel-pill ${modifier}` : "canvas-panel-pill";
+  pill.textContent = label;
+  return pill;
+}
+
+function renderCanvasOverviewHeader() {
+  const activeCanvas = getActiveCanvas();
+  const projectName = getActiveProjectDisplayName();
+
+  if (canvasBreadcrumb instanceof HTMLElement) {
+    const product = document.createElement("span");
+    product.className = "canvas-breadcrumb-project";
+    product.textContent = "TermCanvas";
+
+    const context = document.createElement("span");
+    context.className = "canvas-breadcrumb-context";
+    context.textContent = activeCanvas === null ? "project" : `project / ${projectName}`;
+
+    canvasBreadcrumb.replaceChildren(product, context);
+  }
+
+  if (canvasPanelTitle instanceof HTMLElement) {
+    canvasPanelTitle.textContent = activeCanvas === null
+      ? "No canvas"
+      : `${projectName} · ${activeCanvas.name}`;
+  }
+
+  if (canvasActionsMenuButton instanceof HTMLButtonElement) {
+    canvasActionsMenuButton.disabled = activeCanvas === null;
+    canvasActionsMenuButton.setAttribute(
+      "aria-label",
+      activeCanvas === null ? "Canvas actions" : `Canvas actions for ${activeCanvas.name}`
+    );
+    canvasActionsMenuButton.title = activeCanvas === null ? "Canvas actions" : `${activeCanvas.name} actions`;
+  }
+
+  if (activeCanvas === null) {
+    closeCanvasActionsMenu();
+  }
+
+  if (closeActiveCanvasButton instanceof HTMLButtonElement) {
+    closeActiveCanvasButton.disabled = activeCanvas === null;
+    closeActiveCanvasButton.setAttribute(
+      "aria-label",
+      activeCanvas === null ? "Close current canvas" : `Close ${activeCanvas.name}`
+    );
+    closeActiveCanvasButton.title = activeCanvas === null ? "Close current canvas" : `Close ${activeCanvas.name}`;
+  }
+
+  if (canvasPanelPills instanceof HTMLElement) {
+    if (activeCanvas === null) {
+      canvasPanelPills.replaceChildren(
+        createCanvasPanelPill("open a project"),
+        createCanvasPanelPill("0 agents", "is-muted")
+      );
+      return;
+    }
+
+    const visibleNodes = getVisibleCanvasNodes(activeCanvas);
+    const managedAgentCount = visibleNodes.filter((nodeRecord) => nodeRecord.managedAgentName !== null).length;
+    const count = managedAgentCount > 0 ? managedAgentCount : visibleNodes.length;
+    const countNoun = managedAgentCount > 0
+      ? (managedAgentCount === 1 ? "agent" : "agents")
+      : (visibleNodes.length === 1 ? "terminal" : "terminals");
+
+    canvasPanelPills.replaceChildren(
+      createCanvasPanelPill(managedAgentCount > 0 ? "delegation tree" : "terminal canvas"),
+      createCanvasPanelPill(`${count} ${countNoun}`, count > 0 ? "is-active" : "is-muted")
+    );
+  }
 }
 
 function openWorkspaceDrawer() {
@@ -2301,9 +2452,67 @@ function clearCanvasDelegationEdges() {
   }
 }
 
-// Draw the agentmux delegation graph (commander -> worker) as lines between
-// node centers. The SVG layer shares the viewport transform, so we work in
-// world coordinates and let pan/zoom come for free.
+function getNodeBounds(nodeRecord) {
+  return {
+    left: nodeRecord.x - (nodeRecord.width / 2),
+    top: nodeRecord.y - (nodeRecord.height / 2),
+    right: nodeRecord.x + (nodeRecord.width / 2),
+    bottom: nodeRecord.y + (nodeRecord.height / 2),
+    centerX: nodeRecord.x,
+    centerY: nodeRecord.y
+  };
+}
+
+function getDelegationEdgePath(fromNode, toNode) {
+  const from = getNodeBounds(fromNode);
+  const to = getNodeBounds(toNode);
+  const verticalGap = to.top - from.bottom;
+  const childIsBelow = verticalGap >= -24;
+
+  if (childIsBelow) {
+    const startX = from.centerX;
+    const startY = from.bottom;
+    const endX = to.centerX;
+    const endY = to.top;
+    const midY = startY + Math.max(42, verticalGap * 0.52);
+
+    return `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`;
+  }
+
+  const childIsRight = to.centerX >= from.centerX;
+  const startX = childIsRight ? from.right : from.left;
+  const endX = childIsRight ? to.left : to.right;
+  const startY = from.centerY;
+  const endY = to.centerY;
+  const horizontalGap = Math.abs(endX - startX);
+  const midX = startX + (childIsRight ? 1 : -1) * Math.max(48, horizontalGap * 0.5);
+
+  return `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
+}
+
+function createCanvasEdgeMarker() {
+  const defs = document.createElementNS(CANVAS_EDGE_SVG_NS, "defs");
+  const marker = document.createElementNS(CANVAS_EDGE_SVG_NS, "marker");
+  marker.setAttribute("id", "canvas-edge-arrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "8");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "5");
+  marker.setAttribute("markerHeight", "5");
+  marker.setAttribute("orient", "auto-start-reverse");
+
+  const arrow = document.createElementNS(CANVAS_EDGE_SVG_NS, "path");
+  arrow.setAttribute("class", "canvas-edge-arrow");
+  arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  marker.append(arrow);
+  defs.append(marker);
+
+  return defs;
+}
+
+// Draw the agentmux delegation graph (commander -> worker) as branch paths
+// anchored to node edges. The SVG layer shares the viewport transform, so pan
+// and zoom come for free.
 function renderCanvasDelegationEdges() {
   if (canvasEdgeLayer === null || typeof deriveCanvasDelegationEdges !== "function") {
     return;
@@ -2332,6 +2541,7 @@ function renderCanvasDelegationEdges() {
   }
 
   const fragment = document.createDocumentFragment();
+  fragment.append(createCanvasEdgeMarker());
 
   for (const edge of edges) {
     const fromNode = nodes[edge.fromId];
@@ -2341,13 +2551,11 @@ function renderCanvasDelegationEdges() {
       continue;
     }
 
-    const line = document.createElementNS(CANVAS_EDGE_SVG_NS, "line");
-    line.setAttribute("class", "canvas-edge-line");
-    line.setAttribute("x1", String(fromNode.x + (fromNode.width / 2)));
-    line.setAttribute("y1", String(fromNode.y + (fromNode.height / 2)));
-    line.setAttribute("x2", String(toNode.x + (toNode.width / 2)));
-    line.setAttribute("y2", String(toNode.y + (toNode.height / 2)));
-    fragment.append(line);
+    const path = document.createElementNS(CANVAS_EDGE_SVG_NS, "path");
+    path.setAttribute("class", "canvas-edge-path");
+    path.setAttribute("d", getDelegationEdgePath(fromNode, toNode));
+    path.setAttribute("marker-end", "url(#canvas-edge-arrow)");
+    fragment.append(path);
   }
 
   canvasEdgeLayer.replaceChildren(fragment);
@@ -2362,8 +2570,12 @@ function renderCanvas(options = {}) {
   }
 
   const activeCanvas = getActiveCanvas();
+  renderCanvasOverviewHeader();
 
   if (activeCanvas === null) {
+    if (boardNavigation instanceof HTMLElement) {
+      boardNavigation.hidden = true;
+    }
     board.style.setProperty("--grid-offset-x", "0px");
     board.style.setProperty("--grid-offset-y", "0px");
     board.style.setProperty("--viewport-scale", "1");
@@ -2375,6 +2587,10 @@ function renderCanvas(options = {}) {
     scheduleMinimapRender();
     scheduleCanvasEdgeRender();
     return;
+  }
+
+  if (boardNavigation instanceof HTMLElement) {
+    boardNavigation.hidden = false;
   }
 
   board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
@@ -2468,6 +2684,7 @@ function createCanvasStripItem(itemView) {
   switchButton.setAttribute("aria-label", `Open ${canvasRecord.name}`);
   switchButton.dataset.canvasId = canvasRecord.id;
   switchButton.dataset.canvasPart = "strip-switch";
+  switchButton.dataset.railLabel = canvasRecord.name.trim().charAt(0).toUpperCase() || "C";
 
   if (itemView.isActive) {
     switchButton.setAttribute("aria-current", "true");
@@ -2490,25 +2707,7 @@ function createCanvasStripItem(itemView) {
     }
   });
 
-  const actions = document.createElement("span");
-  actions.className = "canvas-strip-actions";
-
-  if (itemView.canDelete) {
-    const deleteButton = document.createElement("button");
-    deleteButton.className = "canvas-strip-action canvas-strip-delete";
-    deleteButton.type = "button";
-    deleteButton.setAttribute("aria-label", `Delete ${canvasRecord.name}`);
-    deleteButton.title = `Delete ${canvasRecord.name}`;
-    deleteButton.textContent = "×";
-    deleteButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void deleteCanvas(canvasRecord.id);
-    });
-    actions.append(deleteButton);
-  }
-
-  stripItem.append(switchButton, actions);
+  stripItem.append(switchButton);
 
   const itemIndex = canvases.findIndex((candidate) => candidate.id === canvasRecord.id);
 
@@ -2553,6 +2752,7 @@ function renderCanvasSwitcher() {
   canvasStripList.replaceChildren(...stripItems);
   focusPendingCanvasListControl();
   scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
+  renderCanvasOverviewHeader();
   renderTerminalStrip();
 }
 
@@ -2919,8 +3119,232 @@ function isWorkspacePreviewOpen() {
     && workspacePreviewState.relativePath.length > 0;
 }
 
+function getWorkspacePreviewTabKey(folderId, relativePath) {
+  return `${folderId}::${relativePath}`;
+}
+
+function isWorkspacePreviewTabMatch(tab, folderId, relativePath) {
+  return tab?.folderId === folderId && tab?.relativePath === relativePath;
+}
+
+function createWorkspacePreviewTab(folderRecord, relativePath) {
+  if (
+    folderRecord === null
+    || typeof folderRecord?.id !== "string"
+    || typeof relativePath !== "string"
+    || relativePath.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    folderId: folderRecord.id,
+    rootPath: folderRecord.rootPath,
+    rootName: folderRecord.rootName,
+    relativePath,
+    fileName: getWorkspaceEntryName(relativePath)
+  };
+}
+
+function trimWorkspacePreviewTabs(activeTabKey = null) {
+  while (workspacePreviewTabs.length > MAX_WORKSPACE_PREVIEW_TABS) {
+    const removableIndex = workspacePreviewTabs.findIndex((tab) => {
+      return getWorkspacePreviewTabKey(tab.folderId, tab.relativePath) !== activeTabKey;
+    });
+
+    workspacePreviewTabs.splice(removableIndex === -1 ? 0 : removableIndex, 1);
+  }
+}
+
+function pruneWorkspacePreviewTabs() {
+  const filePathsByFolderId = new Map();
+
+  workspacePreviewTabs = workspacePreviewTabs.flatMap((tab) => {
+    const folderRecord = getWorkspaceFolderById(tab.folderId);
+
+    if (folderRecord === null) {
+      return [];
+    }
+
+    if (!filePathsByFolderId.has(folderRecord.id)) {
+      filePathsByFolderId.set(folderRecord.id, getWorkspaceFilePaths(folderRecord));
+    }
+
+    if (!filePathsByFolderId.get(folderRecord.id).has(tab.relativePath)) {
+      return [];
+    }
+
+    const normalizedTab = createWorkspacePreviewTab(folderRecord, tab.relativePath);
+    return normalizedTab === null ? [] : [normalizedTab];
+  });
+}
+
+function rememberWorkspacePreviewTab(folderRecord, relativePath) {
+  const tab = createWorkspacePreviewTab(folderRecord, relativePath);
+
+  if (tab === null) {
+    return;
+  }
+
+  const activeTabKey = getWorkspacePreviewTabKey(tab.folderId, tab.relativePath);
+  workspacePreviewTabs = workspacePreviewTabs.filter((existingTab) => {
+    return getWorkspacePreviewTabKey(existingTab.folderId, existingTab.relativePath) !== activeTabKey;
+  });
+  workspacePreviewTabs.push(tab);
+  trimWorkspacePreviewTabs(activeTabKey);
+}
+
+function ensureActiveWorkspacePreviewTab() {
+  if (!isWorkspacePreviewOpen()) {
+    return;
+  }
+
+  const folderRecord = getWorkspaceFolderById(workspacePreviewState.folderId);
+  const activeTabKey = getWorkspacePreviewTabKey(workspacePreviewState.folderId, workspacePreviewState.relativePath);
+
+  if (
+    folderRecord === null
+    || workspacePreviewTabs.some((tab) => getWorkspacePreviewTabKey(tab.folderId, tab.relativePath) === activeTabKey)
+  ) {
+    return;
+  }
+
+  const tab = createWorkspacePreviewTab(folderRecord, workspacePreviewState.relativePath);
+
+  if (tab !== null) {
+    workspacePreviewTabs.push(tab);
+    trimWorkspacePreviewTabs(activeTabKey);
+  }
+}
+
+function getWorkspacePreviewTabs() {
+  ensureActiveWorkspacePreviewTab();
+  pruneWorkspacePreviewTabs();
+  return workspacePreviewTabs.slice();
+}
+
+function getWorkspacePreviewTabTitle(tab) {
+  const rootLabel = typeof tab.rootName === "string" && tab.rootName.length > 0
+    ? tab.rootName
+    : tab.rootPath;
+  return rootLabel ? `${rootLabel} / ${tab.relativePath}` : tab.relativePath;
+}
+
+function renderWorkspacePreviewTabs() {
+  const tabs = getWorkspacePreviewTabs();
+
+  if (tabs.length === 0) {
+    return null;
+  }
+
+  const tabbar = document.createElement("div");
+  tabbar.className = "file-inspector-tabbar";
+  tabbar.setAttribute("role", "tablist");
+  tabbar.setAttribute("aria-label", "Open file previews");
+
+  tabs.forEach((tab) => {
+    const isActive = isWorkspacePreviewTabMatch(tab, workspacePreviewState.folderId, workspacePreviewState.relativePath);
+    const tabItem = document.createElement("div");
+    tabItem.className = isActive ? "file-inspector-tab is-active" : "file-inspector-tab";
+    tabItem.dataset.workspacePreviewTab = "true";
+
+    const tabButton = document.createElement("button");
+    tabButton.className = "file-inspector-tab-main";
+    tabButton.type = "button";
+    tabButton.setAttribute("role", "tab");
+    tabButton.setAttribute("aria-selected", isActive ? "true" : "false");
+    tabButton.title = getWorkspacePreviewTabTitle(tab);
+    tabButton.addEventListener("click", () => {
+      void switchWorkspacePreviewTab(tab);
+    });
+
+    const label = document.createElement("span");
+    label.className = "file-inspector-tab-label";
+    label.textContent = tab.fileName;
+    tabButton.append(label);
+
+    const closeButton = document.createElement("button");
+    closeButton.className = "file-inspector-tab-close";
+    closeButton.type = "button";
+    closeButton.innerHTML = `
+      <svg class="file-inspector-tab-close-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M4.75 4.75 11.25 11.25"></path>
+        <path d="M11.25 4.75 4.75 11.25"></path>
+      </svg>
+    `;
+    closeButton.setAttribute("aria-label", `Close ${tab.fileName}`);
+    closeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void closeWorkspacePreviewTab(tab);
+    });
+
+    tabItem.append(tabButton, closeButton);
+    tabbar.append(tabItem);
+  });
+
+  return tabbar;
+}
+
+async function switchWorkspacePreviewTab(tab) {
+  if (tab === null || typeof tab !== "object") {
+    return null;
+  }
+
+  if (isWorkspacePreviewTabMatch(tab, workspacePreviewState.folderId, workspacePreviewState.relativePath)) {
+    return workspacePreviewState.data;
+  }
+
+  const folderRecord = getWorkspaceFolderById(tab.folderId);
+
+  if (folderRecord === null || !getWorkspaceFilePaths(folderRecord).has(tab.relativePath)) {
+    workspacePreviewTabs = workspacePreviewTabs.filter((existingTab) => {
+      return !isWorkspacePreviewTabMatch(existingTab, tab.folderId, tab.relativePath);
+    });
+    renderFileInspector();
+    return null;
+  }
+
+  if (workspaceState.activeFolderId !== tab.folderId) {
+    await activateWorkspaceFolderById(tab.folderId);
+  }
+
+  return loadWorkspaceFilePreview(tab.relativePath, { preserveViewMode: true });
+}
+
+async function closeWorkspacePreviewTab(tab) {
+  if (tab === null || typeof tab !== "object") {
+    return;
+  }
+
+  const wasActive = isWorkspacePreviewTabMatch(tab, workspacePreviewState.folderId, workspacePreviewState.relativePath);
+  workspacePreviewTabs = workspacePreviewTabs.filter((existingTab) => {
+    return !isWorkspacePreviewTabMatch(existingTab, tab.folderId, tab.relativePath);
+  });
+
+  if (!wasActive) {
+    renderFileInspector();
+    return;
+  }
+
+  const nextTab = workspacePreviewTabs.slice().reverse().find((candidate) => {
+    const folderRecord = getWorkspaceFolderById(candidate.folderId);
+    return folderRecord !== null && getWorkspaceFilePaths(folderRecord).has(candidate.relativePath);
+  }) ?? null;
+
+  if (nextTab !== null) {
+    await switchWorkspacePreviewTab(nextTab);
+    return;
+  }
+
+  closeWorkspacePreview();
+}
+
 function isMarkdownWorkspacePreview() {
   return workspacePreviewState.data?.language === "markdown";
+}
+
+function isRenderableWorkspacePreview() {
+  return isMarkdownWorkspacePreview() || workspacePreviewState.data?.kind === "svg";
 }
 
 function isEditableWorkspacePreviewData(previewData) {
@@ -3088,16 +3512,10 @@ function setScopedWorkspacePreviewActionErrorMessage({ folderId, relativePath, m
 }
 
 function setWorkspacePreviewViewMode(viewMode) {
-  if (isMarkdownWorkspacePreview()) {
-    workspacePreviewState.viewMode = viewMode === "source" ? "source" : "render";
-    workspacePreviewState.isEditing = viewMode === "source";
-    workspacePreviewState.saveErrorMessage = "";
-    renderFileInspector();
-    return;
-  }
-
   workspacePreviewState.viewMode = viewMode === "source" ? "source" : "render";
-  workspacePreviewState.isEditing = isMarkdownWorkspacePreview() && workspacePreviewState.viewMode === "source";
+  workspacePreviewState.isEditing = workspacePreviewState.viewMode === "source"
+    && isEditableWorkspacePreviewData(workspacePreviewState.data)
+    && isRenderableWorkspacePreview();
   workspacePreviewState.saveErrorMessage = "";
   renderFileInspector();
 }
@@ -3116,7 +3534,7 @@ function startWorkspacePreviewEdit() {
 
 function cancelWorkspacePreviewEdit() {
   workspacePreviewState.isEditing = false;
-  workspacePreviewState.viewMode = isMarkdownWorkspacePreview() ? "render" : workspacePreviewState.viewMode;
+  workspacePreviewState.viewMode = isRenderableWorkspacePreview() ? "render" : workspacePreviewState.viewMode;
   updateWorkspacePreviewDraftText(
     typeof workspacePreviewState.data?.textContents === "string"
       ? workspacePreviewState.data.textContents
@@ -3197,8 +3615,145 @@ async function saveWorkspacePreviewText() {
   }
 }
 
+async function closeWorkspacePreviewSafely() {
+  if (workspacePreviewState.isSaving) {
+    return;
+  }
+
+  if (workspacePreviewState.isDirty) {
+    await saveWorkspacePreviewText();
+
+    if (workspacePreviewState.isDirty || workspacePreviewState.saveErrorMessage.length > 0) {
+      return;
+    }
+  }
+
+  closeWorkspacePreview();
+}
+
 function syncAppShellWorkspaceState() {
   appShell?.classList.toggle("has-file-inspector", isWorkspacePreviewOpen());
+}
+
+function createFileInspectorIconButton({ className = "", label, title = label, iconMarkup, onClick, disabled = false }) {
+  const button = document.createElement("button");
+  button.className = className.length > 0
+    ? `file-inspector-icon-button ${className}`
+    : "file-inspector-icon-button";
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  button.title = title;
+  button.disabled = disabled;
+  button.innerHTML = `<svg class="file-inspector-action-icon" viewBox="0 0 16 16" aria-hidden="true">${iconMarkup}</svg>`;
+  button.addEventListener("click", () => {
+    onClick();
+  });
+  return button;
+}
+
+function createFileInspectorModeButton({ label, viewMode, isActive, disabled = false, onClick }) {
+  const button = document.createElement("button");
+  button.className = isActive
+    ? "file-inspector-mode-button is-active"
+    : "file-inspector-mode-button";
+  button.type = "button";
+  button.textContent = label;
+  button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  button.disabled = disabled;
+  button.dataset.viewMode = viewMode;
+  button.addEventListener("click", () => {
+    onClick();
+  });
+  return button;
+}
+
+function renderFileInspectorActions(previewViewModel) {
+  const actions = document.createElement("div");
+  actions.className = "file-inspector-actions";
+
+  if (previewViewModel.canRender) {
+    const modeGroup = document.createElement("div");
+    modeGroup.className = "file-inspector-action-group";
+
+    modeGroup.append(
+      createFileInspectorModeButton({
+        label: "Preview",
+        viewMode: "render",
+        isActive: previewViewModel.viewMode === "render" && !workspacePreviewState.isEditing,
+        disabled: workspacePreviewState.isDirty || workspacePreviewState.isSaving,
+        onClick: () => {
+          setWorkspacePreviewViewMode("render");
+        }
+      }),
+      createFileInspectorModeButton({
+        label: "Source",
+        viewMode: "source",
+        isActive: previewViewModel.viewMode === "source" || workspacePreviewState.isEditing,
+        disabled: workspacePreviewState.isSaving,
+        onClick: () => {
+          startWorkspacePreviewEdit();
+        }
+      })
+    );
+
+    actions.append(modeGroup);
+  }
+
+  const editGroup = document.createElement("div");
+  editGroup.className = "file-inspector-action-group";
+
+  if (workspacePreviewState.isEditing) {
+    editGroup.append(
+      createFileInspectorIconButton({
+        className: "is-save",
+        label: "Save file",
+        title: "Save file",
+        disabled: !workspacePreviewState.isDirty || workspacePreviewState.isSaving,
+        iconMarkup: '<path d="M3.25 2.75h7.5l2 2v8.5h-9.5v-10.5Z"></path><path d="M5.25 2.75v3.5h4.25v-3.5"></path><path d="M5.25 13.25v-4h5.5v4"></path>',
+        onClick: () => {
+          void saveWorkspacePreviewText();
+        }
+      }),
+      createFileInspectorIconButton({
+        className: "is-cancel",
+        label: "Cancel editing",
+        title: "Cancel editing",
+        disabled: workspacePreviewState.isSaving,
+        iconMarkup: '<path d="M4.75 4.75 11.25 11.25"></path><path d="M11.25 4.75 4.75 11.25"></path>',
+        onClick: () => {
+          cancelWorkspacePreviewEdit();
+        }
+      })
+    );
+  } else if (previewViewModel.canEdit) {
+    editGroup.append(createFileInspectorIconButton({
+      className: "is-edit",
+      label: "Edit source",
+      title: "Edit source",
+      disabled: workspacePreviewState.isSaving,
+      iconMarkup: '<path d="M3.25 12.75h2.5l6-6-2.5-2.5-6 6v2.5Z"></path><path d="M8.75 4.25 11.25 6.75"></path>',
+      onClick: () => {
+        startWorkspacePreviewEdit();
+      }
+    }));
+  }
+
+  if (editGroup.childElementCount > 0) {
+    actions.append(editGroup);
+  }
+
+  actions.append(createFileInspectorIconButton({
+    className: "is-close",
+    label: "Close preview",
+    title: "Close preview",
+    disabled: workspacePreviewState.isSaving,
+    iconMarkup: '<path d="M4.25 4.25 11.75 11.75"></path><path d="M11.75 4.25 4.25 11.75"></path>',
+    onClick: () => {
+      void closeWorkspacePreviewSafely();
+    }
+  }));
+
+  return actions;
 }
 
 function buildWorkspaceTreeRows(folderRecord, options = {}) {
@@ -3318,15 +3873,17 @@ function renderFileInspector() {
   })();
 
   const fragment = document.createDocumentFragment();
+  const tabbar = renderWorkspacePreviewTabs();
+
+  if (tabbar !== null) {
+    fragment.append(tabbar);
+  }
+
   const header = document.createElement("div");
   header.className = "file-inspector-header";
 
   const heading = document.createElement("div");
   heading.className = "file-inspector-heading";
-
-  const eyebrow = document.createElement("div");
-  eyebrow.className = "file-inspector-eyebrow";
-  eyebrow.textContent = "Document Preview";
 
   const title = document.createElement("div");
   title.className = "file-inspector-title";
@@ -3367,9 +3924,9 @@ function renderFileInspector() {
   statusBadge.textContent = statusLabel;
 
   metaRow.append(typeBadge, statusBadge);
-  heading.append(eyebrow, title, pathMeta, metaRow);
+  heading.append(title, pathMeta, metaRow);
 
-  header.append(heading);
+  header.append(heading, renderFileInspectorActions(previewViewModel));
   fragment.append(header);
 
   const body = document.createElement("div");
@@ -3623,6 +4180,7 @@ async function loadWorkspaceFilePreview(relativePath, options = {}) {
   const previewFolderId = activeFolder.id;
   const previewRootPath = activeFolder.rootPath;
   const nextViewMode = options.preserveViewMode === true ? workspacePreviewState.viewMode : "auto";
+  rememberWorkspacePreviewTab(activeFolder, relativePath);
   destroyWorkspaceMarkdownEditor();
   clearWorkspacePreviewObjectUrl();
   workspacePreviewState.folderId = previewFolderId;
@@ -3923,6 +4481,14 @@ async function toggleWorkspaceDirectory(relativePath) {
 
 function updateWorkspaceControls() {
   const workspaceActionContext = getWorkspaceActionContext();
+  const canSearchWorkspace = hasWorkspaceDirectory() && (getActiveWorkspaceFolder()?.entries.length ?? 0) > 0;
+
+  if (focusWorkspaceSearchButton instanceof HTMLButtonElement) {
+    focusWorkspaceSearchButton.disabled = !canSearchWorkspace;
+    focusWorkspaceSearchButton.classList.toggle("is-active", workspaceFilterQuery.trim().length > 0);
+    focusWorkspaceSearchButton.setAttribute("aria-pressed", workspaceFilterQuery.trim().length > 0 ? "true" : "false");
+    focusWorkspaceSearchButton.title = canSearchWorkspace ? "Search workspace files" : "Open a workspace to search files";
+  }
 
   if (openWorkspaceButton instanceof HTMLButtonElement) {
     const actionLabel = hasWorkspaceDirectory() ? "Replace workspace" : "Choose workspace";
@@ -3955,6 +4521,30 @@ function updateWorkspaceControls() {
   if (deleteWorkspaceEntryButton instanceof HTMLButtonElement) {
     deleteWorkspaceEntryButton.disabled = !workspaceActionContext.canDelete;
   }
+}
+
+function focusWorkspaceSearch(options = {}) {
+  if (!hasWorkspaceDirectory()) {
+    openWorkspaceDrawer();
+    return false;
+  }
+
+  openWorkspaceDrawer();
+  renderWorkspaceBrowser();
+
+  window.requestAnimationFrame(() => {
+    const searchInput = workspaceBrowser.querySelector(".workspace-browser-search-input");
+
+    if (searchInput instanceof HTMLInputElement) {
+      searchInput.focus();
+
+      if (options.select === true) {
+        searchInput.select();
+      }
+    }
+  });
+
+  return true;
 }
 
 function createWorkspaceEntryDecoration(entry) {
@@ -4066,12 +4656,29 @@ function renderWorkspaceBrowser() {
       searchInput.addEventListener("input", () => {
         workspaceFilterQuery = searchInput.value;
         renderWorkspaceBrowser();
+        updateWorkspaceControls();
         const refreshedInput = workspaceBrowser.querySelector(".workspace-browser-search-input");
         if (refreshedInput instanceof HTMLInputElement) {
           refreshedInput.focus();
           const caret = refreshedInput.value.length;
           refreshedInput.setSelectionRange(caret, caret);
         }
+      });
+      searchInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") {
+          return;
+        }
+
+        if (workspaceFilterQuery.length === 0) {
+          searchInput.blur();
+          return;
+        }
+
+        event.preventDefault();
+        workspaceFilterQuery = "";
+        renderWorkspaceBrowser();
+        updateWorkspaceControls();
+        focusWorkspaceSearch();
       });
 
       search.append(searchInput);
@@ -4190,6 +4797,8 @@ function applyWorkspaceState(nextState, options = {}) {
     workspaceState.activeFolderId = workspaceState.importedFolders[0]?.id ?? null;
   }
 
+  pruneWorkspacePreviewTabs();
+
   if (
     workspaceDirectoryLoadState.folderId !== null
     && getWorkspaceFolderById(workspaceDirectoryLoadState.folderId) === null
@@ -4219,11 +4828,14 @@ function applyWorkspaceState(nextState, options = {}) {
   }
 
   if (previousActiveFolderId !== workspaceState.activeFolderId) {
+    workspaceFilterQuery = "";
     clearWorkspacePreview({
       skipCanvasWorkspaceSync: options.skipCanvasWorkspaceSync,
       skipSessionSave: options.skipCanvasWorkspaceSync
     });
   }
+
+  renderCanvasOverviewHeader();
 
   const previewFolder = workspacePreviewState.folderId === null ? null : getWorkspaceFolderById(workspacePreviewState.folderId);
   const previewFileStillExists = previewFolder !== null
@@ -4997,10 +5609,15 @@ function resetPointerInteractions() {
 function getPanelResizeBounds(panelKind) {
   const minimumWidth = panelKind === "sidebar" ? MIN_SIDEBAR_PANEL_WIDTH : MIN_FILE_INSPECTOR_WIDTH;
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || minimumWidth;
+  const railWidth = appShell?.querySelector(".app-rail")?.getBoundingClientRect().width ?? 0;
+  const otherPanelWidth = panelKind === "sidebar"
+    ? (isWorkspacePreviewOpen() ? fileInspector?.getBoundingClientRect().width ?? 0 : 0)
+    : (!isSidebarCollapsed ? sidebarPanel?.getBoundingClientRect().width ?? 0 : 0);
+  const maximumWidth = viewportWidth - railWidth - otherPanelWidth - MIN_CANVAS_COLUMN_WIDTH - PANEL_VIEWPORT_MARGIN;
 
   return {
     minimumWidth,
-    maximumWidth: Math.max(minimumWidth, viewportWidth - PANEL_VIEWPORT_MARGIN)
+    maximumWidth: Math.max(minimumWidth, maximumWidth)
   };
 }
 
@@ -5218,6 +5835,30 @@ async function deleteCanvas(canvasId) {
   scheduleAppSessionSave();
 }
 
+async function closeActiveCanvasWithConfirmation() {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return;
+  }
+
+  const visibleNodes = getVisibleCanvasNodes(activeCanvas);
+  const terminalWarning = visibleNodes.length > 0
+    ? ` This also closes ${visibleNodes.length} ${visibleNodes.length === 1 ? "terminal" : "terminals"}.`
+    : "";
+  const confirmed = await confirmWorkspaceAction(
+    "Close canvas",
+    `Close ${activeCanvas.name}? This removes it from TermCanvas.${terminalWarning}`,
+    "Close canvas"
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  await deleteCanvas(activeCanvas.id);
+}
+
 function startNodeDrag(event, nodeRecord, handleElement) {
   if (event.button !== 0 || panState.pointerId !== null || nodeRecord.isMaximized || getVisibleMaximizedNode() !== null) {
     return;
@@ -5377,12 +6018,17 @@ function createTerminalElement(nodeRecord) {
   const metaRow = document.createElement("div");
   metaRow.className = "terminal-node-meta-row";
 
+  const roleBadge = document.createElement("span");
+  roleBadge.className = "terminal-node-role-badge";
+  roleBadge.textContent = getTerminalNodeRoleLabel(nodeRecord);
+  roleBadge.dataset.role = roleBadge.textContent.toLowerCase();
+
   const copySessionButton = document.createElement("button");
   copySessionButton.className = "terminal-node-copy-session terminal-node-control";
   copySessionButton.type = "button";
   copySessionButton.textContent = "ID";
 
-  metaRow.append(meta, copySessionButton);
+  metaRow.append(roleBadge, meta, copySessionButton);
   titleGroup.append(titleInput, metaRow);
   dragArea.append(grabHandle, leadDot, titleGroup);
 
@@ -5461,6 +6107,7 @@ function createTerminalElement(nodeRecord) {
     terminalMount,
     interactionOverlay,
     meta,
+    roleBadge,
     copySessionButton,
     status,
     statusLabel,
@@ -5519,6 +6166,7 @@ async function createTerminalNode(options) {
     syncSize: () => {},
     disposeInput: () => {},
     meta: null,
+    roleBadge: null,
     copySessionButton: null,
     status: null,
     statusLabel: null,
@@ -5562,6 +6210,7 @@ async function createTerminalNode(options) {
   nodeRecord.overlayTitle = elements.overlayTitle;
   nodeRecord.overlayMeta = elements.overlayMeta;
   nodeRecord.meta = elements.meta;
+  nodeRecord.roleBadge = elements.roleBadge;
   nodeRecord.copySessionButton = elements.copySessionButton;
   nodeRecord.status = elements.status;
   nodeRecord.statusLabel = elements.statusLabel;
@@ -5736,6 +6385,9 @@ async function createTerminalNode(options) {
     runtime_state: nodeRecord.managedRuntimeState,
     agent_state: nodeRecord.managedAgentState,
     tmux_session: nodeRecord.tmuxSessionName,
+    parent_agent: nodeRecord.managedParentAgent,
+    commander_agent: nodeRecord.managedCommanderAgent,
+    depth: nodeRecord.managedDepth,
     workdir: nodeRecord.cwd,
     is_project_manager: nodeRecord.isManager
   });
@@ -5764,6 +6416,10 @@ function getManagedCanvasNodes(canvasRecord) {
   return canvasRecord.nodes.filter((nodeRecord) => nodeRecord.managedAgentName !== null && !nodeRecord.isRemoved);
 }
 
+function getManagedAgentParentName(agentSnapshot) {
+  return normalizeManagedAgentName(agentSnapshot?.parent_agent) ?? normalizeManagedAgentName(agentSnapshot?.commander_agent);
+}
+
 function sortManagedAgentSnapshots(agentSnapshots) {
   return [...agentSnapshots].sort((left, right) => {
     const leftRank = left?.is_project_manager === true ? 0 : 1;
@@ -5781,23 +6437,34 @@ function sortManagedAgentSnapshots(agentSnapshots) {
 
 function getManagedNodePlacement(canvasRecord, agentSnapshot) {
   const managerNode = canvasRecord.nodes.find((nodeRecord) => nodeRecord.isManager && !nodeRecord.isRemoved) ?? null;
-  const existingManagedCount = getManagedCanvasNodes(canvasRecord).length;
 
   if (agentSnapshot?.is_project_manager === true || managerNode === null) {
-    const centerPoint = toWorldPoint(getBoardViewportCenterPoint());
-    return {
-      x: centerPoint.x - (DEFAULT_NODE_WIDTH / 2),
-      y: centerPoint.y - (DEFAULT_NODE_HEIGHT / 2)
-    };
+    return toWorldPoint(getBoardViewportCenterPoint());
   }
 
-  const workerIndex = Math.max(0, existingManagedCount - 1);
-  const column = workerIndex % 2;
-  const row = Math.floor(workerIndex / 2);
+  const parentName = getManagedAgentParentName(agentSnapshot);
+  const parentNode = canvasRecord.nodes.find((nodeRecord) => (
+    !nodeRecord.isRemoved
+    && nodeRecord.managedAgentName !== null
+    && nodeRecord.managedAgentName === parentName
+  )) ?? managerNode;
+  const siblingCount = canvasRecord.nodes.filter((nodeRecord) => {
+    if (nodeRecord.isRemoved || nodeRecord.managedAgentName === null || nodeRecord === parentNode) {
+      return false;
+    }
+
+    const nodeParentName = nodeRecord.managedParentAgent ?? nodeRecord.managedCommanderAgent;
+    return nodeParentName === parentNode.managedAgentName;
+  }).length;
+  const branchOffsets = [0, -1, 1];
+  const branchIndex = siblingCount % branchOffsets.length;
+  const row = Math.floor(siblingCount / branchOffsets.length);
+  const branchGap = DEFAULT_NODE_WIDTH + 72;
+  const rowGap = DEFAULT_NODE_HEIGHT + 108;
 
   return {
-    x: managerNode.x + DEFAULT_NODE_WIDTH + 48 + (column * (DEFAULT_NODE_WIDTH + 32)),
-    y: managerNode.y + (row * (DEFAULT_NODE_HEIGHT + 28))
+    x: parentNode.x + (branchOffsets[branchIndex] * branchGap),
+    y: parentNode.y + ((row + 1) * rowGap)
   };
 }
 
@@ -6172,6 +6839,18 @@ function handleWindowPointerCancel(event) {
 }
 
 function handleWindowClick(event) {
+  if (!(event.target instanceof Node)) {
+    return;
+  }
+
+  if (
+    isCanvasActionsMenuOpen
+    && canvasActionsMenuRoot instanceof HTMLElement
+    && !canvasActionsMenuRoot.contains(event.target)
+  ) {
+    closeCanvasActionsMenu();
+  }
+
   if (!isCanvasSwitcherMenuOpen || !(canvasSwitcherSection instanceof HTMLElement)) {
     return;
   }
@@ -6212,6 +6891,12 @@ function handleWindowKeyDown(event) {
       return;
     }
 
+    if (isCanvasActionsMenuOpen) {
+      event.preventDefault();
+      closeCanvasActionsMenu({ restoreFocus: true });
+      return;
+    }
+
     if (isWorkspacePreviewOpen()) {
       event.preventDefault();
       closeWorkspacePreview();
@@ -6236,6 +6921,18 @@ function handleWindowKeyDown(event) {
   const shortcutKey = String(event.key).toLowerCase();
   const isCommandShortcut = event.metaKey && !event.ctrlKey && !event.altKey;
   const isViewportShortcut = (event.metaKey || event.ctrlKey) && !event.altKey;
+  const isFileSearchShortcut = shortcutKey === "f"
+    && !event.altKey
+    && (
+      (event.metaKey && !event.ctrlKey)
+      || (event.ctrlKey && !event.metaKey && !isTypingTarget(event.target))
+    );
+
+  if (isFileSearchShortcut) {
+    event.preventDefault();
+    focusWorkspaceSearch({ select: true });
+    return;
+  }
 
   if (isViewportShortcut && !isTypingTarget(event.target)) {
     if (shortcutKey === "=" || shortcutKey === "+") {
@@ -6434,6 +7131,8 @@ if (window.noteCanvas.isSmokeTest) {
         workspacePreviewCanOpenExternally: fileInspector?.querySelector(".file-inspector-fallback-actions button:nth-child(1)")?.textContent === "Open externally"
           || [...(fileInspector?.querySelectorAll(".file-inspector-fallback-actions .file-inspector-button") ?? [])].some((button) => button.textContent === "Open externally"),
         workspacePreviewCanRevealInFinder: [...(fileInspector?.querySelectorAll(".file-inspector-fallback-actions .file-inspector-button") ?? [])].some((button) => button.textContent === "Reveal in Finder"),
+        workspacePreviewTabLabels: [...(fileInspector?.querySelectorAll(".file-inspector-tab-label") ?? [])].map((label) => label.textContent ?? ""),
+        workspacePreviewTabCount: fileInspector?.querySelectorAll("[data-workspace-preview-tab]").length ?? 0,
         fileInspectorVisible: appShell?.classList.contains("has-file-inspector") === true,
         workspaceSectionVisible: Boolean(
           sidebarRect
@@ -6948,6 +7647,17 @@ importCanvasButton?.addEventListener("click", () => {
   });
 });
 
+canvasActionsMenuButton?.addEventListener("click", () => {
+  toggleCanvasActionsMenu();
+});
+
+closeActiveCanvasButton?.addEventListener("click", () => {
+  closeCanvasActionsMenu();
+  void closeActiveCanvasWithConfirmation().catch((error) => {
+    void showWorkspaceActionError(error);
+  });
+});
+
 canvasStripList?.addEventListener("scroll", () => {
   scheduleCanvasStripOverflowControlsSync();
 });
@@ -6987,6 +7697,10 @@ refreshWorkspaceButton?.addEventListener("click", () => {
   void refreshWorkspaceDirectory().catch((error) => {
     console.error(error);
   });
+});
+
+focusWorkspaceSearchButton?.addEventListener("click", () => {
+  focusWorkspaceSearch({ select: true });
 });
 
 createWorkspaceFileButton?.addEventListener("click", () => {

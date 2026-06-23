@@ -65,30 +65,58 @@ test("panel edge controls keep toggle and resize handles separate", () => {
   assertLacksClasses(rightResizeTag, ["sidebar-edge-handle"]);
 });
 
-test("file inspector lives inside the board so it does not occupy the header", () => {
+test("side panels are docked outside the board so they never cover the canvas", () => {
   const html = readIndexHtml();
+  const sidebarIndex = html.indexOf('<aside class="canvas-sidebar"');
+  const workspaceIndex = html.indexOf('<main class="workspace-shell">');
   const boardOpenIndex = html.indexOf('<section class="board" id="board">');
   const mainCloseIndex = html.indexOf("</main>", boardOpenIndex);
   const boardCloseIndex = html.lastIndexOf("</section>", mainCloseIndex);
+  const inspectorResizeIndex = html.indexOf('id="file-inspector-resize-handle"');
+  const inspectorIndex = html.indexOf('<aside class="file-inspector"');
 
+  assert.notEqual(sidebarIndex, -1, "Expected docked sidebar");
+  assert.notEqual(workspaceIndex, -1, "Expected workspace shell");
   assert.notEqual(boardOpenIndex, -1, "Expected board section");
   assert.notEqual(mainCloseIndex, -1, "Expected main closing tag");
   assert.notEqual(boardCloseIndex, -1, "Expected board closing tag");
+  assert.notEqual(inspectorResizeIndex, -1, "Expected docked inspector resize handle");
+  assert.notEqual(inspectorIndex, -1, "Expected docked inspector");
+  assert.ok(sidebarIndex < workspaceIndex, "Expected Explorer before the canvas column");
   assert.ok(boardCloseIndex > boardOpenIndex, "Expected board closing tag after board open tag");
+  assert.ok(inspectorResizeIndex > mainCloseIndex, "Expected inspector resize handle outside the board");
+  assert.ok(inspectorIndex > mainCloseIndex, "Expected inspector outside the board");
 
   const boardHtml = html.slice(boardOpenIndex, boardCloseIndex);
 
-  assert.match(boardHtml, /id="file-inspector-resize-handle"/i);
-  assert.match(boardHtml, /id="file-inspector"/i);
+  assert.doesNotMatch(boardHtml, /class="canvas-sidebar"/i);
+  assert.doesNotMatch(boardHtml, /id="file-inspector-resize-handle"/i);
+  assert.doesNotMatch(boardHtml, /id="file-inspector"/i);
 });
 
-test("terminal strip row keeps the inner shell without a heading label", () => {
+test("canvas header replaces the cramped topbar terminal strip", () => {
   const html = readIndexHtml();
 
   assert.match(
     html,
-    /<section class="terminal-strip-topbar-section" id="terminal-strip-section"[\s\S]*?<div class="terminal-strip-shell">[\s\S]*?<div class="terminal-strip-list" id="terminal-strip-list"/i
+    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
   );
 
+  assert.doesNotMatch(html, /terminal-strip-topbar-section/i);
+  assert.doesNotMatch(html, /id="terminal-strip-section"/i);
   assert.doesNotMatch(html, /terminal-strip-heading/i);
+});
+
+test("board navigation exposes visible icon controls and a labeled minimap", () => {
+  const html = readIndexHtml();
+
+  assert.match(
+    html,
+    /<div class="board-navigation" id="board-navigation"[\s\S]*?<button class="board-nav-button" id="board-zoom-out-button"[\s\S]*?<svg class="board-nav-icon"[\s\S]*?<button class="board-nav-button board-zoom-indicator" id="board-zoom-indicator"[\s\S]*?<button class="board-nav-button" id="board-zoom-in-button"[\s\S]*?<span class="board-nav-separator"[\s\S]*?<button class="board-nav-button" id="board-center-view-button"/i
+  );
+  assert.match(
+    html,
+    /<div class="board-minimap" id="board-minimap"[\s\S]*?<div class="board-minimap-label">map<\/div>[\s\S]*?<div class="board-minimap-canvas" id="board-minimap-canvas"/i
+  );
+  assert.doesNotMatch(html, /board-nav-label-button/i);
 });

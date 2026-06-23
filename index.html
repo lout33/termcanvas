@@ -46,6 +46,82 @@
         </div>
       </aside>
 
+      <aside class="canvas-sidebar" aria-label="Canvas manager">
+        <div class="panel-resize-handle sidebar-resize-handle" id="sidebar-resize-handle" aria-hidden="true"></div>
+
+        <div class="canvas-sidebar-panel">
+          <div class="canvas-sidebar-content">
+            <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
+              <div class="sidebar-section-header-row">
+                <div class="sidebar-section-header">Explorer</div>
+
+                <div class="sidebar-section-header-controls" aria-label="Explorer controls">
+                  <button class="canvas-list-action sidebar-section-action sidebar-section-search-action" id="focus-workspace-search-button" type="button" aria-label="Search workspace files" aria-keyshortcuts="Meta+F Control+F" title="Search workspace files">
+                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="7" cy="7" r="3.75"></circle>
+                      <path d="m9.75 9.75 3 3"></path>
+                    </svg>
+                  </button>
+
+                  <div class="sidebar-section-actions sidebar-section-actions-reveal" aria-label="Workspace actions">
+                    <button class="canvas-list-action sidebar-section-action" id="open-workspace-button" type="button" aria-label="Open workspace" title="Open workspace">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M2.5 5h3.5l1.25-1.5h5.25a1 1 0 0 1 1 1v1"></path>
+                        <path d="M2.5 5h11a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="refresh-workspace-button" type="button" aria-label="Refresh workspace" title="Refresh workspace">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M12.75 5V2.75H10.5"></path>
+                        <path d="M12.75 2.75A5.5 5.5 0 1 0 13.5 9"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="create-workspace-file-button" type="button" aria-label="New file" title="New file">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M4 2.75h5.25L12.5 6v7.25c0 .55-.45 1-1 1H4c-.55 0-1-.45-1-1v-9.5c0-.55.45-1 1-1Z"></path>
+                        <path d="M9.25 2.75V6h3.25"></path>
+                        <path d="M8 8v3.5"></path>
+                        <path d="M6.25 9.75h3.5"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="create-workspace-directory-button" type="button" aria-label="New folder" title="New folder">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M2.5 5h3.5l1.25-1.5h5.25a1 1 0 0 1 1 1v1"></path>
+                        <path d="M2.5 5h11a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"></path>
+                        <path d="M8 7.5v3"></path>
+                        <path d="M6.5 9h3"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="rename-workspace-entry-button" type="button" aria-label="Rename selected entry" title="Rename selected entry">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M3.25 12.75h2.5l6-6-2.5-2.5-6 6v2.5Z"></path>
+                        <path d="M8.75 4.25 11.25 6.75"></path>
+                      </svg>
+                    </button>
+
+                    <button class="canvas-list-action sidebar-section-action" id="delete-workspace-entry-button" type="button" aria-label="Delete selected entry" title="Delete selected entry">
+                      <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M3.75 4.5h8.5"></path>
+                        <path d="M6.25 4.5V3.25h3.5V4.5"></path>
+                        <path d="M5 4.5v7.25c0 .55.45 1 1 1h4c.55 0 1-.45 1-1V4.5"></path>
+                        <path d="M6.75 6.75v4"></path>
+                        <path d="M9.25 6.75v4"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
+            </section>
+          </div>
+        </div>
+      </aside>
+
       <main class="workspace-shell">
         <div class="canvas-topbar" id="canvas-topbar">
           <div class="canvas-topbar-shell">
@@ -59,93 +135,73 @@
                   <span class="canvas-breadcrumb-project">TermCanvas</span>
                 </div>
               </div>
-
-              <section class="terminal-strip-topbar-section" id="terminal-strip-section" aria-label="Active canvas terminals">
-                <div class="terminal-strip-shell">
-                  <button class="terminal-strip-overflow-button" id="terminal-strip-prev-button" type="button" aria-label="Show previous terminals" title="Show previous terminals" hidden>&lt;</button>
-                  <div class="terminal-strip-list" id="terminal-strip-list" role="toolbar" aria-label="Terminal navigator"></div>
-                  <button class="terminal-strip-overflow-button" id="terminal-strip-next-button" type="button" aria-label="Show more terminals" title="Show more terminals" hidden>&gt;</button>
-                </div>
-              </section>
             </div>
           </div>
         </div>
 
-        <section class="board" id="board">
-          <aside class="canvas-sidebar" aria-label="Canvas manager">
-            <div class="panel-resize-handle sidebar-resize-handle" id="sidebar-resize-handle" aria-hidden="true"></div>
+        <header class="canvas-panel-header" id="canvas-panel-header" aria-label="Canvas overview">
+          <div class="canvas-panel-context">
+            <div class="canvas-panel-title" id="canvas-panel-title">No canvas</div>
+            <div class="canvas-panel-pills" id="canvas-panel-pills" aria-label="Canvas status"></div>
+          </div>
 
-            <div class="canvas-sidebar-panel">
-              <div class="canvas-sidebar-content">
-                <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
-                  <div class="sidebar-section-header-row">
-                    <div class="sidebar-section-header">Explorer</div>
+          <div class="canvas-panel-actions" aria-label="Canvas actions">
+            <div class="canvas-panel-menu" id="canvas-actions-menu-root">
+              <button class="canvas-panel-icon-button" id="canvas-actions-menu-button" type="button" aria-label="Canvas actions" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-actions-menu" title="Canvas actions" disabled>
+                <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="4" cy="8" r="0.85"></circle>
+                  <circle cx="8" cy="8" r="0.85"></circle>
+                  <circle cx="12" cy="8" r="0.85"></circle>
+                </svg>
+              </button>
 
-                    <div class="sidebar-section-actions sidebar-section-actions-reveal" aria-label="Workspace actions">
-                      <button class="canvas-list-action sidebar-section-action" id="open-workspace-button" type="button" aria-label="Open workspace" title="Open workspace">
-                        <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M2.5 5h3.5l1.25-1.5h5.25a1 1 0 0 1 1 1v1"></path>
-                          <path d="M2.5 5h11a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"></path>
-                        </svg>
-                      </button>
-
-                      <button class="canvas-list-action sidebar-section-action" id="refresh-workspace-button" type="button" aria-label="Refresh workspace" title="Refresh workspace">
-                        <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M12.75 5V2.75H10.5"></path>
-                          <path d="M12.75 2.75A5.5 5.5 0 1 0 13.5 9"></path>
-                        </svg>
-                      </button>
-
-                      <button class="canvas-list-action sidebar-section-action" id="create-workspace-file-button" type="button" aria-label="New file" title="New file">
-                        <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M4 2.75h5.25L12.5 6v7.25c0 .55-.45 1-1 1H4c-.55 0-1-.45-1-1v-9.5c0-.55.45-1 1-1Z"></path>
-                          <path d="M9.25 2.75V6h3.25"></path>
-                          <path d="M8 8v3.5"></path>
-                          <path d="M6.25 9.75h3.5"></path>
-                        </svg>
-                      </button>
-
-                      <button class="canvas-list-action sidebar-section-action" id="create-workspace-directory-button" type="button" aria-label="New folder" title="New folder">
-                        <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M2.5 5h3.5l1.25-1.5h5.25a1 1 0 0 1 1 1v1"></path>
-                          <path d="M2.5 5h11a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"></path>
-                          <path d="M8 7.5v3"></path>
-                          <path d="M6.5 9h3"></path>
-                        </svg>
-                      </button>
-
-                      <button class="canvas-list-action sidebar-section-action" id="rename-workspace-entry-button" type="button" aria-label="Rename selected entry" title="Rename selected entry">
-                        <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M3.25 12.75h2.5l6-6-2.5-2.5-6 6v2.5Z"></path>
-                          <path d="M8.75 4.25 11.25 6.75"></path>
-                        </svg>
-                      </button>
-
-                      <button class="canvas-list-action sidebar-section-action" id="delete-workspace-entry-button" type="button" aria-label="Delete selected entry" title="Delete selected entry">
-                        <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M3.75 4.5h8.5"></path>
-                          <path d="M6.25 4.5V3.25h3.5V4.5"></path>
-                          <path d="M5 4.5v7.25c0 .55.45 1 1 1h4c.55 0 1-.45 1-1V4.5"></path>
-                          <path d="M6.75 6.75v4"></path>
-                          <path d="M9.25 6.75v4"></path>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
-                </section>
+              <div class="canvas-panel-menu-popover" id="canvas-actions-menu" role="menu" aria-label="Canvas actions" hidden>
+                <button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button" type="button" role="menuitem" aria-label="Close current canvas" title="Close current canvas" disabled>
+                  <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3.75 4.5h8.5"></path>
+                    <path d="M6.25 4.5V3.25h3.5V4.5"></path>
+                    <path d="M5 4.5v7.25c0 .55.45 1 1 1h4c.55 0 1-.45 1-1V4.5"></path>
+                    <path d="M6.75 6.75v4"></path>
+                    <path d="M9.25 6.75v4"></path>
+                  </svg>
+                  <span>Close canvas</span>
+                </button>
               </div>
             </div>
-          </aside>
+          </div>
+        </header>
 
+        <section class="board" id="board">
           <div class="board-grid" aria-hidden="true"></div>
 
           <div class="board-navigation" id="board-navigation" role="toolbar" aria-label="Canvas navigation" hidden>
-            <button class="board-nav-button" id="board-zoom-out-button" type="button" aria-label="Zoom out" title="Zoom out (Cmd/Ctrl+-)">-</button>
+            <button class="board-nav-button" id="board-zoom-out-button" type="button" aria-label="Zoom out" title="Zoom out (Cmd/Ctrl+-)">
+              <svg class="board-nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="6.75" cy="6.75" r="4.25"></circle>
+                <path d="m10 10 3.25 3.25"></path>
+                <path d="M4.5 6.75H9"></path>
+              </svg>
+            </button>
             <button class="board-nav-button board-zoom-indicator" id="board-zoom-indicator" type="button" aria-live="polite" aria-atomic="true" aria-label="Reset zoom to 100%" title="Reset zoom to 100% (Cmd/Ctrl+0)">100%</button>
-            <button class="board-nav-button" id="board-zoom-in-button" type="button" aria-label="Zoom in" title="Zoom in (Cmd/Ctrl+=)">+</button>
-            <button class="board-nav-button board-nav-label-button" id="board-center-view-button" type="button" aria-label="Center canvas content" title="Center canvas content">Center</button>
+            <button class="board-nav-button" id="board-zoom-in-button" type="button" aria-label="Zoom in" title="Zoom in (Cmd/Ctrl+=)">
+              <svg class="board-nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="6.75" cy="6.75" r="4.25"></circle>
+                <path d="m10 10 3.25 3.25"></path>
+                <path d="M4.5 6.75H9"></path>
+                <path d="M6.75 4.5V9"></path>
+              </svg>
+            </button>
+            <span class="board-nav-separator" aria-hidden="true"></span>
+            <button class="board-nav-button" id="board-center-view-button" type="button" aria-label="Center canvas content" title="Center canvas content">
+              <svg class="board-nav-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="8" cy="3.5" r="1.35"></circle>
+                <circle cx="4.75" cy="11.5" r="1.35"></circle>
+                <circle cx="11.25" cy="11.5" r="1.35"></circle>
+                <path d="M8 4.85v2.4"></path>
+                <path d="M8 7.25H4.75v2.9"></path>
+                <path d="M8 7.25h3.25v2.9"></path>
+              </svg>
+            </button>
           </div>
 
           <button class="board-fullscreen-exit" id="board-fullscreen-exit" type="button" aria-label="Exit terminal fullscreen">
@@ -153,6 +209,7 @@
           </button>
 
           <div class="board-minimap" id="board-minimap" aria-hidden="true" hidden>
+            <div class="board-minimap-label">map</div>
             <div class="board-minimap-canvas" id="board-minimap-canvas">
               <div class="board-minimap-viewport" id="board-minimap-viewport"></div>
             </div>
@@ -180,11 +237,11 @@
           <svg class="canvas-edge-layer" id="canvas-edge-layer" aria-hidden="true"></svg>
 
           <section class="nodes-layer" id="nodes-layer" aria-label="Infinite terminal canvas"></section>
-
-          <div class="panel-resize-handle inspector-resize-handle" id="file-inspector-resize-handle" aria-hidden="true"></div>
-          <aside class="file-inspector" id="file-inspector" aria-label="File preview"></aside>
         </section>
       </main>
+
+      <div class="panel-resize-handle inspector-resize-handle" id="file-inspector-resize-handle" aria-hidden="true"></div>
+      <aside class="file-inspector" id="file-inspector" aria-label="File preview"></aside>
 
       <div class="workspace-action-dialog" id="workspace-action-dialog" hidden>
         <div class="workspace-action-dialog-backdrop" id="workspace-action-dialog-backdrop"></div>

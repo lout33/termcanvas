@@ -39,6 +39,21 @@ test("terminal strip items attach reorder handling for active canvas terminals",
   assert.match(renderer, /onMove: async \(_nodeId, targetIndex\) => reorderTerminalNodeById\(itemView\.id, targetIndex\)/);
 });
 
+test("canvas close is guarded by the header menu instead of the vertical rail", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const canvasActionsMenuButton = document\.getElementById\("canvas-actions-menu-button"\);/);
+  assert.match(renderer, /const closeActiveCanvasButton = document\.getElementById\("close-active-canvas-button"\);/);
+  assert.match(renderer, /function toggleCanvasActionsMenu\(\) \{/);
+  assert.match(renderer, /function closeActiveCanvasWithConfirmation\(\) \{/);
+  assert.match(renderer, /confirmWorkspaceAction\([\s\S]*"Close canvas"[\s\S]*"Close canvas"[\s\S]*\)/);
+  assert.match(renderer, /canvasActionsMenuButton\?\.addEventListener\("click", \(\) => \{[\s\S]*toggleCanvasActionsMenu\(\);[\s\S]*\}\);/);
+  assert.match(renderer, /closeActiveCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\);[\s\S]*closeActiveCanvasWithConfirmation\(\)/);
+  assert.match(renderer, /closeActiveCanvasButton\?\.addEventListener\("click", \(\) => \{/);
+  assert.doesNotMatch(renderer, /canvas-strip-delete/);
+  assert.doesNotMatch(renderer, /void deleteCanvas\(canvasRecord\.id\);/);
+});
+
 test("managed agent snapshots reconcile managers before workers", () => {
   const renderer = readRenderer();
 
@@ -52,8 +67,14 @@ test("managed agent labels use commander and worker roles", () => {
   const renderer = readRenderer();
 
   assert.match(renderer, /function normalizeManagedAgentRole\(value, isManager = false\) \{/);
+  assert.match(renderer, /function getTerminalNodeRoleLabel\(nodeRecord\) \{/);
   assert.match(renderer, /return "commander";/);
   assert.match(renderer, /return "worker";/);
   assert.match(renderer, /return "Commander";/);
   assert.match(renderer, /return "Worker";/);
+  assert.match(renderer, /roleBadge\.className = "terminal-node-role-badge";/);
+  assert.match(renderer, /nodeRecord\.roleBadge\.textContent = roleLabel;/);
+  assert.match(renderer, /nodeRecord\.roleBadge\.dataset\.role = roleLabel\.toLowerCase\(\);/);
+  assert.match(renderer, /parent_agent: nodeRecord\.managedParentAgent,/);
+  assert.match(renderer, /commander_agent: nodeRecord\.managedCommanderAgent,/);
 });
