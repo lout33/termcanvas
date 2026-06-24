@@ -299,3 +299,7 @@ When the `v0.1.1` style tag is pushed, GitHub Actions:
 ## Development
 
 If you want to work on the codebase, read `AGENTS.md` first.
+
+## License
+
+TermCanvas is open source under the [MIT License](./LICENSE).

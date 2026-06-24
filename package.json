@@ -5,6 +5,7 @@
   "private": true,
   "description": "Infinite canvas desktop app for arranging real terminal sessions and tmux-backed developer workflows.",
   "author": "lout",
+  "license": "MIT",
   "homepage": "https://github.com/lout33/termcanvas",
   "bugs": {
     "url": "https://github.com/lout33/termcanvas/issues"
