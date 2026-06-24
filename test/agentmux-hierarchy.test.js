@@ -138,6 +138,12 @@ test("agentmux workers can spawn child workers with parent and depth metadata", 
     assert.ok(grandchildCall.includes("AGENTMUX_DEPTH=2"));
     assert.ok(grandchildCall.includes("AGENTMUX_COMMANDER_AGENT=proj-general"));
     assert.ok(grandchildCall.includes("AGENTMUX_PROJECT=proj"));
+    assert.ok(grandchildCall.includes("-u"));
+    assert.ok(grandchildCall.includes("NO_COLOR"));
+    assert.ok(grandchildCall.includes("COLORTERM=truecolor"));
+    assert.ok(grandchildCall.includes("CLICOLOR=1"));
+    assert.ok(grandchildCall.includes("CLICOLOR_FORCE=1"));
+    assert.ok(grandchildCall.includes("FORCE_COLOR=3"));
 
     const showWorker = runAgentmux(harness, ["show", "worker-a"]);
     assertAgentmuxOk(showWorker);

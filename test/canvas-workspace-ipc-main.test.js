@@ -359,13 +359,89 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
 
 test("terminal:create advertises truecolor support to spawned shells", async () => {
   const ptySpawnCalls = [];
+  const originalNoColor = process.env.NO_COLOR;
+  let mainPath = null;
+
+  process.env.NO_COLOR = "1";
+
+  try {
+    const loaded = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: (command, args) => {
+          if (command === "tmux" && args[0] === "-V") {
+            return { status: 1, stdout: "", stderr: "" };
+          }
+
+          return { status: 0, stdout: "", stderr: "" };
+        }
+      },
+      nodePtyStub: {
+        spawn: (command, args, options) => {
+          ptySpawnCalls.push({ command, args, options });
+          return createMockPtyProcess();
+        }
+      }
+    });
+
+    mainPath = loaded.mainPath;
+
+    const createTerminalHandler = loaded.handlers.get("terminal:create");
+
+    assert.equal(typeof createTerminalHandler, "function");
+
+    await createTerminalHandler(
+      { sender: { id: 42 } },
+      { terminalId: "color-terminal", cols: 100, rows: 30, cwd: os.homedir() }
+    );
+
+    const shellSpawn = ptySpawnCalls.find(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0);
+
+    assert.ok(shellSpawn, "expected plain shell PTY spawn");
+    assert.equal(shellSpawn.options.name, "xterm-256color");
+    assert.equal(shellSpawn.options.env.TERM, "xterm-256color");
+    assert.equal(shellSpawn.options.env.COLORTERM, "truecolor");
+    assert.equal(shellSpawn.options.env.TERM_PROGRAM, "TermCanvas");
+    assert.equal(shellSpawn.options.env.CLICOLOR, "1");
+    assert.equal(shellSpawn.options.env.CLICOLOR_FORCE, "1");
+    assert.equal(shellSpawn.options.env.FORCE_COLOR, "3");
+    assert.equal(shellSpawn.options.env.NO_COLOR, undefined);
+  } finally {
+    if (originalNoColor === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = originalNoColor;
+    }
+
+    if (mainPath !== null) {
+      delete require.cache[mainPath];
+    }
+  }
+});
+
+test("terminal:create repairs tmux color environment before attaching sessions", async () => {
+  const spawnCalls = [];
+  const ptySpawnCalls = [];
+  const existingSessionName = "termcanvas-color-existing";
+
   const { handlers, mainPath } = loadMainWithMocks({
     smokeTest: true,
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
     childProcessStub: {
-      spawnSync: (command, args) => {
+      spawnSync: (command, args, options) => {
+        spawnCalls.push({ command, args, options });
+
         if (command === "tmux" && args[0] === "-V") {
-          return { status: 1, stdout: "", stderr: "" };
+          return { status: 0, stdout: "tmux 3.4", stderr: "" };
+        }
+
+        if (command === "tmux" && args[0] === "show-options" && args.includes("terminal-features")) {
+          return { status: 0, stdout: "terminal-features[0] xterm-256color:RGB\n", stderr: "" };
+        }
+
+        if (command === "tmux" && args[0] === "display-message") {
+          return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
         }
 
         return { status: 0, stdout: "", stderr: "" };
@@ -374,7 +450,14 @@ test("terminal:create advertises truecolor support to spawned shells", async () 
     nodePtyStub: {
       spawn: (command, args, options) => {
         ptySpawnCalls.push({ command, args, options });
-        return createMockPtyProcess();
+        const sessionTarget = Array.isArray(args) ? args[2] : null;
+        const isProbeAttach = command === "tmux"
+          && Array.isArray(args)
+          && args[0] === "attach-session"
+          && typeof sessionTarget === "string"
+          && sessionTarget.startsWith("termcanvas-probe-");
+
+        return createMockPtyProcess({ autoExitCode: isProbeAttach ? 0 : null });
       }
     }
   });
@@ -383,18 +466,55 @@ test("terminal:create advertises truecolor support to spawned shells", async () 
 
   assert.equal(typeof createTerminalHandler, "function");
 
-  await createTerminalHandler(
-    { sender: { id: 42 } },
-    { terminalId: "color-terminal", cols: 100, rows: 30, cwd: os.homedir() }
+  const created = await createTerminalHandler(
+    { sender: { id: 43 } },
+    {
+      terminalId: "tmux-color-terminal",
+      sessionKey: "tmux-color-existing",
+      tmuxSessionName: existingSessionName,
+      cols: 100,
+      rows: 30,
+      cwd: os.homedir()
+    }
   );
 
-  const shellSpawn = ptySpawnCalls.find(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0);
+  const realAttach = ptySpawnCalls.find(({ command, args }) => (
+    command === "tmux"
+    && Array.isArray(args)
+    && args[0] === "attach-session"
+    && args[2] === existingSessionName
+  ));
 
-  assert.ok(shellSpawn, "expected plain shell PTY spawn");
-  assert.equal(shellSpawn.options.name, "xterm-256color");
-  assert.equal(shellSpawn.options.env.TERM, "xterm-256color");
-  assert.equal(shellSpawn.options.env.COLORTERM, "truecolor");
-  assert.equal(shellSpawn.options.env.TERM_PROGRAM, "TermCanvas");
+  assert.equal(created.backend, "tmux");
+  assert.ok(realAttach, "expected tmux attach for existing session");
+  assert.equal(realAttach.options.env.NO_COLOR, undefined);
+  assert.equal(realAttach.options.env.COLORTERM, "truecolor");
+  assert.equal(realAttach.options.env.CLICOLOR_FORCE, "1");
+  assert.equal(realAttach.options.env.FORCE_COLOR, "3");
+
+  const hasTmuxCall = (...expectedArgs) => spawnCalls.some(({ command, args }) => (
+    command === "tmux"
+    && Array.isArray(args)
+    && args.length === expectedArgs.length
+    && expectedArgs.every((expectedArg, index) => args[index] === expectedArg)
+  ));
+
+  assert.ok(
+    hasTmuxCall("set-environment", "-g", "-u", "NO_COLOR"),
+    "expected tmux global NO_COLOR cleanup"
+  );
+  assert.ok(
+    hasTmuxCall("set-environment", "-g", "FORCE_COLOR", "3"),
+    "expected tmux global FORCE_COLOR"
+  );
+  assert.ok(
+    hasTmuxCall("set-environment", "-t", existingSessionName, "-u", "NO_COLOR"),
+    "expected tmux session NO_COLOR cleanup"
+  );
+  assert.ok(
+    hasTmuxCall("set-environment", "-t", existingSessionName, "FORCE_COLOR", "3"),
+    "expected tmux session FORCE_COLOR"
+  );
 
   delete require.cache[mainPath];
 });

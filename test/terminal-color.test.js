@@ -21,6 +21,12 @@ test("terminal sessions advertise truecolor capability", () => {
   assert.match(main, /TERM:\s*"xterm-256color"/);
   assert.match(main, /COLORTERM:\s*"truecolor"/);
   assert.match(main, /TERM_PROGRAM:\s*"TermCanvas"/);
+  assert.match(main, /CLICOLOR:\s*"1"/);
+  assert.match(main, /CLICOLOR_FORCE:\s*"1"/);
+  assert.match(main, /FORCE_COLOR:\s*"3"/);
+  assert.match(main, /delete environment\.NO_COLOR/);
+  assert.match(main, /set-environment",\s*\.\.\.targetArgs,\s*"-u",\s*"NO_COLOR"/);
+  assert.match(main, /set-environment",\s*\.\.\.targetArgs,\s*name,\s*value/);
   assert.match(main, /terminal-features",\s*",xterm-256color:RGB"/);
   assert.match(main, /terminal-overrides",\s*",xterm-256color:Tc"/);
 });

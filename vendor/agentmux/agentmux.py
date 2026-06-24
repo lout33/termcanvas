@@ -479,6 +479,17 @@ def build_session_awareness_env_args(env_values: dict[str, str]) -> list[str]:
     return [f"{key}={value}" for key, value in env_values.items()]
 
 
+def build_interactive_color_env_args() -> list[str]:
+    return [
+        "-u",
+        "NO_COLOR",
+        "COLORTERM=truecolor",
+        "CLICOLOR=1",
+        "CLICOLOR_FORCE=1",
+        "FORCE_COLOR=3",
+    ]
+
+
 def project_manager_name(project: str) -> str:
     return f"{normalize_project(project)}-general"
 
@@ -742,7 +753,18 @@ def create_managed_session(
         )
     )
 
-    tmux("new-session", "-d", "-s", tmux_session, "-c", workdir, "env", *session_env_args, *command_parts)
+    tmux(
+        "new-session",
+        "-d",
+        "-s",
+        tmux_session,
+        "-c",
+        workdir,
+        "env",
+        *build_interactive_color_env_args(),
+        *session_env_args,
+        *command_parts,
+    )
     now = utc_now()
     conn.execute(
         textwrap.dedent(
@@ -1484,7 +1506,18 @@ def resume_session_runtime(
         )
     )
 
-    tmux("new-session", "-d", "-s", session["tmux_session"], "-c", session["workdir"], "env", *session_env_args, *command_parts)
+    tmux(
+        "new-session",
+        "-d",
+        "-s",
+        session["tmux_session"],
+        "-c",
+        session["workdir"],
+        "env",
+        *build_interactive_color_env_args(),
+        *session_env_args,
+        *command_parts,
+    )
     conn.execute(
         """
         UPDATE sessions

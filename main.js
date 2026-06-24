@@ -16,6 +16,21 @@ const activeTerminalShortcutStates = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
 const TMUX_SESSION_PREFIX = "termcanvas";
+const TERMINAL_COLOR_ENV = Object.freeze({
+  TERM: "xterm-256color",
+  COLORTERM: "truecolor",
+  TERM_PROGRAM: "TermCanvas",
+  CLICOLOR: "1",
+  CLICOLOR_FORCE: "1",
+  FORCE_COLOR: "3"
+});
+const TMUX_COLOR_ENV = Object.freeze({
+  COLORTERM: TERMINAL_COLOR_ENV.COLORTERM,
+  TERM_PROGRAM: TERMINAL_COLOR_ENV.TERM_PROGRAM,
+  CLICOLOR: TERMINAL_COLOR_ENV.CLICOLOR,
+  CLICOLOR_FORCE: TERMINAL_COLOR_ENV.CLICOLOR_FORCE,
+  FORCE_COLOR: TERMINAL_COLOR_ENV.FORCE_COLOR
+});
 let cachedTmuxBinary = undefined;
 let cachedTmuxPtyBackendAvailability = null;
 
@@ -67,12 +82,11 @@ function resolveTerminalWorkingDirectory(requestedCwd) {
 function getTerminalEnvironment() {
   const environment = {
     ...process.env,
-    TERM: "xterm-256color",
-    COLORTERM: "truecolor",
-    TERM_PROGRAM: "TermCanvas"
+    ...TERMINAL_COLOR_ENV
   };
 
   delete environment.TMUX;
+  delete environment.NO_COLOR;
   return environment;
 }
 
@@ -239,6 +253,33 @@ function ensureTmuxCommandSucceeded(result, actionLabel) {
   }
 }
 
+function warnIfTmuxCommandFailed(result, actionLabel) {
+  if (result !== null && result.status !== 0) {
+    const details = typeof result.stderr === "string" && result.stderr.trim().length > 0
+      ? result.stderr.trim()
+      : `tmux failed while trying to ${actionLabel}.`;
+    console.warn(details);
+  }
+}
+
+function configureTmuxColorEnvironment(sessionName = null) {
+  const targetArgs = typeof sessionName === "string" && sessionName.trim().length > 0
+    ? ["-t", sessionName.trim()]
+    : ["-g"];
+
+  warnIfTmuxCommandFailed(
+    runTmuxCommand(["set-environment", ...targetArgs, "-u", "NO_COLOR"]),
+    "unset tmux NO_COLOR"
+  );
+
+  Object.entries(TMUX_COLOR_ENV).forEach(([name, value]) => {
+    warnIfTmuxCommandFailed(
+      runTmuxCommand(["set-environment", ...targetArgs, name, value]),
+      `set tmux ${name}`
+    );
+  });
+}
+
 function configureTmuxTruecolorSupport() {
   const currentFeatures = runTmuxCommand(["show-options", "-s", "terminal-features"]);
 
@@ -276,11 +317,13 @@ function configureTmuxSession(sessionName) {
 }
 
 function createTmuxSession(sessionName, cwd) {
+  configureTmuxColorEnvironment();
   ensureTmuxCommandSucceeded(
     runTmuxCommand(["new-session", "-d", "-s", sessionName, "-c", cwd]),
     `create tmux session ${sessionName}`
   );
   configureTmuxSession(sessionName);
+  configureTmuxColorEnvironment(sessionName);
 }
 
 function destroyTmuxSession(sessionName) {
@@ -579,6 +622,7 @@ async function createTmuxClientSession(options) {
   const tmuxSessionName = typeof options.tmuxSessionName === "string" && options.tmuxSessionName.trim().length > 0
     ? options.tmuxSessionName.trim()
     : getTmuxSessionName(options.sessionKey);
+  configureTmuxColorEnvironment();
   const sessionAlreadyExists = hasTmuxSession(tmuxSessionName);
 
   if (!sessionAlreadyExists && options.createIfMissing === false) {
@@ -587,6 +631,8 @@ async function createTmuxClientSession(options) {
 
   if (!sessionAlreadyExists) {
     createTmuxSession(tmuxSessionName, options.cwd);
+  } else {
+    configureTmuxColorEnvironment(tmuxSessionName);
   }
 
   configureTmuxTruecolorSupport();
