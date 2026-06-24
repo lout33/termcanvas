@@ -29,6 +29,8 @@ function loadMainWithMocks({
   openPathResult = "",
   resolveWhenReady = false,
   getPath = () => os.homedir(),
+  isPackaged = false,
+  resourcesPath = null,
   nodePtyStub = {},
   childProcessStub = null
 }) {
@@ -69,6 +71,7 @@ function loadMainWithMocks({
 
   const electronStub = {
     app: {
+      isPackaged,
       whenReady: () => resolveWhenReady ? Promise.resolve() : new Promise(() => {}),
       on: (eventName, handler) => {
         appEventHandlers.set(eventName, handler);
@@ -111,6 +114,7 @@ function loadMainWithMocks({
 
   const originalLoad = Module._load;
   const originalSmokeTest = process.env.CANVAS_SMOKE_TEST;
+  const originalResourcesPath = process.resourcesPath;
   const mainPath = require.resolve("../main.js");
   const agentmuxServicePath = require.resolve("../main_agentmux_service.js");
 
@@ -140,9 +144,14 @@ function loadMainWithMocks({
   delete require.cache[agentmuxServicePath];
 
   try {
+    if (resourcesPath !== null) {
+      process.resourcesPath = resourcesPath;
+    }
+
     require(mainPath);
   } finally {
     Module._load = originalLoad;
+    process.resourcesPath = originalResourcesPath;
 
     if (originalSmokeTest === undefined) {
       delete process.env.CANVAS_SMOKE_TEST;
@@ -417,6 +426,81 @@ test("terminal:create advertises truecolor support to spawned shells", async () 
     if (mainPath !== null) {
       delete require.cache[mainPath];
     }
+  }
+});
+
+test("packaged terminal:create finds tmux in common macOS CLI paths", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-packaged-tmux-"));
+  const spawnCalls = [];
+  const ptySpawnCalls = [];
+
+  try {
+    const loaded = loadMainWithMocks({
+      smokeTest: true,
+      isPackaged: true,
+      resourcesPath: tempRoot,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: (command, args, options = {}) => {
+          spawnCalls.push({ command, args, options });
+
+          if (command === "tmux" && args[0] === "-V") {
+            return typeof options.env?.PATH === "string" && options.env.PATH.includes("/opt/homebrew/bin")
+              ? { status: 0, stdout: "tmux 3.4", stderr: "" }
+              : { status: 1, stdout: "", stderr: "tmux not found" };
+          }
+
+          if (command === "tmux" && args[0] === "display-message") {
+            return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
+          }
+
+          return { status: 0, stdout: "", stderr: "" };
+        }
+      },
+      nodePtyStub: {
+        spawn: (command, args, options) => {
+          ptySpawnCalls.push({ command, args, options });
+          const sessionTarget = Array.isArray(args) ? args[2] : null;
+          const isProbeAttach = command === "tmux"
+            && Array.isArray(args)
+            && args[0] === "attach-session"
+            && typeof sessionTarget === "string"
+            && sessionTarget.startsWith("termcanvas-probe-");
+
+          return createMockPtyProcess({ autoExitCode: isProbeAttach ? 0 : null });
+        }
+      }
+    });
+
+    const createTerminalHandler = loaded.handlers.get("terminal:create");
+
+    assert.equal(typeof createTerminalHandler, "function");
+
+    const created = await createTerminalHandler(
+      { sender: { id: 45 } },
+      {
+        terminalId: "packaged-tmux-terminal",
+        sessionKey: "packaged-path",
+        cols: 100,
+        rows: 30,
+        cwd: os.homedir()
+      }
+    );
+    const tmuxVersionProbe = spawnCalls.find(({ command, args }) => command === "tmux" && args[0] === "-V");
+    const realAttach = ptySpawnCalls.find(({ command, args }) => (
+      command === "tmux"
+      && Array.isArray(args)
+      && args[0] === "attach-session"
+      && args[2] === "termcanvas-packaged-path"
+    ));
+
+    assert.equal(created.backend, "tmux");
+    assert.match(tmuxVersionProbe.options.env.PATH, /\/opt\/homebrew\/bin/u);
+    assert.ok(realAttach, "expected packaged app to attach a tmux-backed terminal");
+
+    delete require.cache[loaded.mainPath];
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

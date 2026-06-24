@@ -8,7 +8,7 @@ const { createDirectorySnapshotAsync } = require("./directory_snapshot");
 const { getNodePtyHelperPaths } = require("./node_pty_runtime");
 const { readWorkspaceFilePreviewAsync, resolveWorkspaceFilePath } = require("./workspace_file_preview");
 const { createWorkspaceService } = require("./main_workspace_service");
-const { createAgentmuxService, isAgentmuxUnavailableError } = require("./main_agentmux_service");
+const { buildPackagedRuntimePath, createAgentmuxService, isAgentmuxUnavailableError } = require("./main_agentmux_service");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessions = new Map();
@@ -233,9 +233,13 @@ function resolveTerminalWorkingDirectory(requestedCwd) {
 }
 
 function getTerminalEnvironment() {
+  const runtimePath = app.isPackaged === true
+    ? buildPackagedRuntimePath(process.env.PATH)
+    : process.env.PATH;
   const environment = {
     ...process.env,
-    ...TERMINAL_COLOR_ENV
+    ...TERMINAL_COLOR_ENV,
+    ...(typeof runtimePath === "string" && runtimePath.length > 0 ? { PATH: runtimePath } : {})
   };
 
   delete environment.TMUX;
