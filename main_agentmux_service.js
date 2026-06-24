@@ -4,9 +4,6 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const DEFAULT_TIMEOUT_MS = 60000;
-const AGENTS_FILE_NAME = "AGENTS.md";
-const MANAGED_BLOCK_START = "<!-- TERMCANVAS_MANAGER_RULES_START -->";
-const MANAGED_BLOCK_END = "<!-- TERMCANVAS_MANAGER_RULES_END -->";
 const AGENTMUX_UNAVAILABLE_CODE = "AGENTMUX_UNAVAILABLE";
 
 function getPackagedRuntimePaths() {
@@ -181,151 +178,6 @@ function createAgentmuxService(options = {}) {
     throw error;
   }
 
-  function buildManagedAgentsBlock(workspaceRootPath, projectTag, canvasId, canvasName) {
-    const agentmuxInvocation = getAgentmuxInvocation() ?? assertAvailable();
-    const workerCommand = `${agentmuxInvocation.displayText} worker \"${projectTag}\" \"<worker-name>\" --workdir \"${workspaceRootPath}\" --harness shell`;
-    const explicitChildWorkerCommand = `${workerCommand} --parent \"<parent-agent-name>\"`;
-    const workerPromptCommand = `${workerCommand} --prompt \"<initial prompt>\"`;
-    const sendCommand = `${agentmuxInvocation.displayText} send \"<agent-or-short-id>\" \"<prompt>\"`;
-    const showCommand = `${agentmuxInvocation.displayText} show \"<agent-or-short-id>\"`;
-    const logsCommand = `${agentmuxInvocation.displayText} logs \"<agent-or-short-id>\"`;
-    const exampleSendCommand = `${agentmuxInvocation.displayText} send \"test-worker\" \"Make a joke\"`;
-
-    return [
-      MANAGED_BLOCK_START,
-      "## TermCanvas Agentmux Rules",
-      "",
-      `This workspace is connected to TermCanvas project \`${projectTag}\`.`,
-      "Managed terminals can be commanders or workers, and any managed terminal may create child workers. Do not assume your role from this file alone.",
-      `Canvas id: \`${canvasId}\``,
-      `Canvas name: \`${canvasName}\``,
-      `Workspace root: \`${workspaceRootPath}\``,
-      "",
-      "### Session Awareness",
-      "",
-      "Every managed terminal receives these environment variables:",
-      "",
-      "```bash",
-      "env | grep '^AGENTMUX_'",
-      "```",
-      "",
-      "Important fields:",
-      "",
-      "- `AGENTMUX_ROLE=commander` means you coordinate the project and may create workers.",
-      "- `AGENTMUX_ROLE=worker` means you do assigned work and may create child workers when the task needs delegation.",
-      "- `AGENTMUX_AGENT_NAME` is your durable agent name.",
-      "- `AGENTMUX_PROJECT` is the project tag shared by all agents on this canvas.",
-      "- `AGENTMUX_PARENT_AGENT` points to the agent that spawned or owns this worker.",
-      "- `AGENTMUX_DEPTH` is `0` for commanders and increases by one for each child level.",
-      "",
-      "Before deciding whether to coordinate or execute, inspect your own record:",
-      "",
-      "```bash",
-      `${showCommand.replace("<agent-or-short-id>", "$AGENTMUX_AGENT_NAME")}`,
-      "```",
-      "",
-      "Role behavior:",
-      "",
-      "- If `AGENTMUX_ROLE=commander`, coordinate the project and create workers when useful.",
-      "- If `AGENTMUX_ROLE=worker`, complete your assigned task and report back; create child workers only when delegation clearly helps.",
-      "- If `AGENTMUX_ROLE` is missing, you are not in a managed agentmux session; do not assume commander privileges.",
-      "",
-      "### Child Worker Creation",
-      "",
-      "Create a worker agent with:",
-      "",
-      "```bash",
-      workerCommand,
-      "```",
-      "",
-      "When you run this from inside a managed terminal, agentmux automatically makes the new worker a child of `$AGENTMUX_AGENT_NAME`.",
-      "",
-      "To choose a specific parent explicitly:",
-      "",
-      "```bash",
-      explicitChildWorkerCommand,
-      "```",
-      "",
-      "With an initial prompt:",
-      "",
-      "```bash",
-      workerPromptCommand,
-      "```",
-      "",
-      "Example:",
-      "",
-      "```bash",
-      `${agentmuxInvocation.displayText} worker \"${projectTag}\" \"test-worker\" --workdir \"${workspaceRootPath}\" --harness shell`,
-      "```",
-      "",
-      "### Prompt An Existing Worker",
-      "",
-      "To send a prompt to an existing worker, run:",
-      "",
-      "```bash",
-      sendCommand,
-      "```",
-      "",
-      "Example:",
-      "",
-      "```bash",
-      exampleSendCommand,
-      "```",
-      "",
-      "### Inspect A Worker",
-      "",
-      "Show detailed worker state:",
-      "",
-      "```bash",
-      showCommand,
-      "```",
-      "",
-      "Read recent worker output:",
-      "",
-      "```bash",
-      logsCommand,
-      "```",
-      "",
-      "### Rules",
-      "",
-      "- Never create raw tmux sessions for workers.",
-      "- Never use `tmux new-session` for worker creation.",
-      "- Keep workers in the same project tag so TermCanvas can materialize them on the same canvas.",
-      "- Commanders may create and coordinate workers.",
-      "- Workers may create child workers, but should keep the tree purposeful and report results back to their parent.",
-      "- When asked to create a worker, execute the worker command directly instead of researching first.",
-      "- When asked to prompt an existing worker, use `agentmux send` directly instead of opening help first.",
-      "- When asked to inspect an existing worker, prefer `agentmux show` and `agentmux logs`.",
-      "- Do not run `agentmux --help` or `agentmux send --help` unless the operator explicitly asks for documentation.",
-      "- After creating a worker, tell the operator the worker name you created.",
-      MANAGED_BLOCK_END,
-      ""
-    ].join("\n");
-  }
-
-  function ensureCanvasManagerToolkit(workspaceRootPath, projectTag, canvasId, canvasName) {
-    const agentsFilePath = path.join(workspaceRootPath, AGENTS_FILE_NAME);
-    const managedBlock = buildManagedAgentsBlock(workspaceRootPath, projectTag, canvasId, canvasName);
-    const existingContents = fs.existsSync(agentsFilePath)
-      ? fs.readFileSync(agentsFilePath, "utf8")
-      : "";
-    const managedBlockPattern = new RegExp(
-      `${MANAGED_BLOCK_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${MANAGED_BLOCK_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n?`,
-      "u"
-    );
-    const nextContents = managedBlockPattern.test(existingContents)
-      ? existingContents.replace(managedBlockPattern, managedBlock)
-      : `${existingContents.replace(/\s*$/u, "")}${existingContents.trim().length > 0 ? "\n\n" : ""}${managedBlock}`;
-
-    if (nextContents !== existingContents) {
-      fs.writeFileSync(agentsFilePath, nextContents, "utf8");
-    }
-
-    return {
-      agentsFilePath
-    };
-  }
-
   function runAgentmuxCommand(args, commandLabel) {
     const invocation = assertAvailable();
 
@@ -399,8 +251,7 @@ function createAgentmuxService(options = {}) {
     }
   }
 
-  async function bootstrapCanvasProject(workspaceRootPath, projectTag, canvasId, canvasName) {
-    ensureCanvasManagerToolkit(workspaceRootPath, projectTag, canvasId, canvasName);
+  async function bootstrapCanvasProject(workspaceRootPath, projectTag) {
     const output = await runAgentmuxCommand(
       [
         "project-sync",
@@ -434,11 +285,10 @@ function createAgentmuxService(options = {}) {
     }
 
     const projectTag = normalizeNonEmptyString(payload?.projectTag) ?? deriveCanvasProjectTag(workspaceRootPath, canvasId);
-    const canvasName = normalizeNonEmptyString(payload?.canvasName) ?? "Canvas";
     const projectCacheKey = `${workspaceRootPath}\n${projectTag}`;
 
     if (!bootstrappedProjectKeys.has(projectCacheKey)) {
-      const snapshot = await bootstrapCanvasProject(workspaceRootPath, projectTag, canvasId, canvasName);
+      const snapshot = await bootstrapCanvasProject(workspaceRootPath, projectTag);
       bootstrappedProjectKeys.add(projectCacheKey);
       return snapshot;
     }
@@ -447,7 +297,7 @@ function createAgentmuxService(options = {}) {
 
     if (snapshot?.manager === null) {
       bootstrappedProjectKeys.delete(projectCacheKey);
-      const nextSnapshot = await bootstrapCanvasProject(workspaceRootPath, projectTag, canvasId, canvasName);
+      const nextSnapshot = await bootstrapCanvasProject(workspaceRootPath, projectTag);
       bootstrappedProjectKeys.add(projectCacheKey);
       return nextSnapshot;
     }

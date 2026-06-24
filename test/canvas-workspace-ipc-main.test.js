@@ -1063,16 +1063,19 @@ test("canvas-agent:sync returns an unavailable marker when agentmux is missing",
   }
 });
 
-test("canvas-agent:sync bootstraps once then polls agentmux read-only status", async () => {
+test("canvas-agent:sync bootstraps once then polls agentmux without rewriting AGENTS.md", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-sync-"));
   const agentmuxRoot = path.join(tempRoot, "agentmux");
   const workspaceRoot = path.join(tempRoot, "workspace");
+  const agentsPath = path.join(workspaceRoot, "AGENTS.md");
+  const originalAgentsContents = "# Existing project guidance\n\nKeep source instructions stable.\n";
   const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
   const spawnCalls = [];
 
   fs.mkdirSync(agentmuxRoot, { recursive: true });
   fs.mkdirSync(workspaceRoot, { recursive: true });
   fs.writeFileSync(path.join(agentmuxRoot, "agentmux.py"), "#!/usr/bin/env python3\n", "utf8");
+  fs.writeFileSync(agentsPath, originalAgentsContents, "utf8");
   process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
 
   try {
@@ -1120,15 +1123,7 @@ test("canvas-agent:sync bootstraps once then polls agentmux read-only status", a
 
     assert.equal(result.project, "canvas-one");
     assert.equal(nextResult.project, "canvas-one");
-    const agentsContents = fs.readFileSync(path.join(workspaceRoot, "AGENTS.md"), "utf8");
-    assert.match(agentsContents, /Do not assume your role from this file alone/u);
-    assert.match(agentsContents, /AGENTMUX_ROLE=commander/u);
-    assert.match(agentsContents, /AGENTMUX_ROLE=worker/u);
-    assert.match(agentsContents, /any managed terminal may create child workers/u);
-    assert.match(agentsContents, /agentmux automatically makes the new worker a child/u);
-    assert.match(agentsContents, /--parent "<parent-agent-name>"/u);
-    assert.doesNotMatch(agentsContents, /You are the TermCanvas commander/u);
-    assert.doesNotMatch(agentsContents, /Agentmux Commander Rules/u);
+    assert.equal(fs.readFileSync(agentsPath, "utf8"), originalAgentsContents);
     assert.deepEqual(spawnCalls, [
       {
         command: "python3",

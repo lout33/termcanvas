@@ -476,9 +476,27 @@ def project_manager_name(project: str) -> str:
     return f"{normalize_project(project)}-general"
 
 
-def project_worker_command_hint(project_name: str, workdir: str) -> str:
-    del project_name, workdir
-    return 'python3 "/absolute/path/to/agentmux.py" worker "<project-tag>" "<worker-name>" --workdir "<workspace-path>" [--prompt "..."]'
+def agentmux_command_hint() -> str:
+    wrapper_path = Path(__file__).resolve().with_name("agentmux")
+    if wrapper_path.exists():
+        return shlex.quote(str(wrapper_path))
+    return f"python3 {shlex.quote(str(Path(__file__).resolve()))}"
+
+
+def project_worker_command_hint(project_name: str, workdir: str, parent_agent: str | None = None) -> str:
+    parts = [
+        agentmux_command_hint(),
+        "worker",
+        shlex.quote(normalize_project(project_name)),
+        '"<worker-name>"',
+        "--workdir",
+        shlex.quote(str(Path(workdir).resolve())),
+        "--harness",
+        "shell",
+    ]
+    if parent_agent:
+        parts.extend(["--parent", shlex.quote(parent_agent)])
+    return " ".join(parts)
 
 
 def resolve_project_worker_parent(
@@ -1685,11 +1703,13 @@ def show_session(args: argparse.Namespace) -> None:
         session = refresh_one(conn, session)
         events = fetch_recent_events(conn, session["id"], limit=8)
         detail = session_summary(session)
+    project_name = session_project_name(session)
+    workdir = session["workdir"]
 
     print(f"name:          {session['name']}")
     print(f"id:            {session['id']}")
     print(f"harness:       {session['harness']}")
-    print(f"project:       {session_project_name(session)}")
+    print(f"project:       {project_name}")
     print(f"role:          {detail['role']}")
     print(f"parent:        {detail['parent_agent'] or '<none>'}")
     print(f"depth:         {detail['depth']}")
@@ -1705,6 +1725,14 @@ def show_session(args: argparse.Namespace) -> None:
     print(f"created:       {session['created_at']}")
     print(f"updated:       {session['updated_at']}")
     print(f"last activity: {session['last_activity_at']}")
+    print()
+    print("session awareness:")
+    print("  env:            env | grep '^AGENTMUX_'")
+    print(f"  inspect self:   {agentmux_command_hint()} show \"$AGENTMUX_AGENT_NAME\"")
+    print(f"  child worker:   {project_worker_command_hint(project_name, workdir)}")
+    print(f"  explicit child: {project_worker_command_hint(project_name, workdir, parent_agent=session['name'])}")
+    print("  note:           from a managed terminal, worker without --parent attaches under $AGENTMUX_AGENT_NAME.")
+    print("  safety:         use agentmux worker/send/logs; do not create raw tmux worker sessions.")
     print()
     print("last output:")
     print(indent_block(session["last_output"] or "<none>", "  "))

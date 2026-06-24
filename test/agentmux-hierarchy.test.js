@@ -135,6 +135,17 @@ test("agentmux workers can spawn child workers with parent and depth metadata", 
     assert.ok(grandchildCall.includes("AGENTMUX_DEPTH=2"));
     assert.ok(grandchildCall.includes("AGENTMUX_COMMANDER_AGENT=proj-general"));
     assert.ok(grandchildCall.includes("AGENTMUX_PROJECT=proj"));
+
+    const showWorker = runAgentmux(harness, ["show", "worker-a"]);
+    assertAgentmuxOk(showWorker);
+    assert.match(showWorker.stdout, /role:\s+worker/u);
+    assert.match(showWorker.stdout, /parent:\s+proj-general/u);
+    assert.match(showWorker.stdout, /depth:\s+1/u);
+    assert.match(showWorker.stdout, /session awareness:/u);
+    assert.match(showWorker.stdout, /env \| grep '\^AGENTMUX_'/u);
+    assert.match(showWorker.stdout, /worker proj "<worker-name>" --workdir/u);
+    assert.match(showWorker.stdout, /--parent worker-a/u);
+    assert.match(showWorker.stdout, /do not create raw tmux worker sessions/u);
   } finally {
     harness.cleanup();
   }

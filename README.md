@@ -113,6 +113,7 @@ TermCanvas has an integrated `agentmux` manager for creating and tracking comman
 - development builds use the vendored runtime in `vendor/agentmux` by default
 - set `TERMCANVAS_AGENTMUX_ROOT` only when testing a different local runtime
 - missing `agentmux` does not block normal terminal canvas use
+- TermCanvas does not write live canvas or agent state into project `AGENTS.md`; agents should inspect runtime state through `AGENTMUX_*` env vars and `agentmux show`
 
 Current agent-canvas behavior:
 
