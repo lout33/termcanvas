@@ -374,6 +374,13 @@ def filter_sessions_by_project(sessions: list[sqlite3.Row], project: str | None)
     return [session for session in sessions if session_project_name(session) == normalized]
 
 
+def project_from_arg_or_env(project: str | None) -> str:
+    normalized = normalize_project(project or os.environ.get("AGENTMUX_PROJECT"))
+    if not normalized:
+        raise SystemExit("Project is required. Pass a project tag or run from a managed AGENTMUX_PROJECT terminal.")
+    return normalized
+
+
 def session_metadata(session: sqlite3.Row | dict[str, str]) -> dict[str, object]:
     raw = session["metadata_json"] if "metadata_json" in session.keys() else session.get("metadata_json", "{}")
     if not raw:
@@ -1246,6 +1253,205 @@ def project_status_payload(conn: sqlite3.Connection, project_name: str) -> dict[
     return project_payload_from_sessions(normalized, sessions)
 
 
+def tree_sort_key(summary: dict[str, object]) -> tuple[int, int, str]:
+    depth = summary.get("depth")
+    return (
+        depth if isinstance(depth, int) else 999,
+        0 if summary.get("is_project_manager") is True else 1,
+        str(summary.get("name") or ""),
+    )
+
+
+def build_project_tree_nodes(summaries: list[dict[str, object]]) -> list[dict[str, object]]:
+    by_name = {
+        str(summary["name"]): summary
+        for summary in summaries
+        if isinstance(summary.get("name"), str) and str(summary.get("name")).strip()
+    }
+    children_by_parent: dict[str, list[dict[str, object]]] = {name: [] for name in by_name}
+    roots: list[dict[str, object]] = []
+
+    for summary in summaries:
+        name = str(summary.get("name") or "")
+        parent_name = str(summary.get("parent_agent") or summary.get("commander_agent") or "").strip()
+
+        if parent_name and parent_name != name and parent_name in by_name:
+            children_by_parent[parent_name].append(summary)
+        else:
+            roots.append(summary)
+
+    def build_node(summary: dict[str, object]) -> dict[str, object]:
+        name = str(summary.get("name") or "")
+        children = sorted(children_by_parent.get(name, []), key=tree_sort_key)
+        return {
+            "agent": summary,
+            "children": [build_node(child) for child in children],
+        }
+
+    return [build_node(summary) for summary in sorted(roots, key=tree_sort_key)]
+
+
+def project_tree_payload(conn: sqlite3.Connection, project_name: str) -> dict[str, object]:
+    normalized = project_from_arg_or_env(project_name)
+    sessions = sort_sessions_for_attention(filter_sessions_by_project(refresh_all(conn), normalized))
+    if not sessions:
+        raise SystemExit(f"No project found for '{normalized}'.")
+
+    summaries = [session_summary(session) for session in sessions]
+    manager = next((summary for summary in summaries if summary.get("is_project_manager") is True), None)
+    runtime_counts: dict[str, int] = {}
+    agent_counts: dict[str, int] = {}
+    attention: list[dict[str, object]] = []
+
+    for summary in summaries:
+        runtime_state = str(summary.get("runtime_state") or "unknown")
+        agent_state = str(summary.get("agent_state") or "unknown")
+        runtime_counts[runtime_state] = runtime_counts.get(runtime_state, 0) + 1
+        agent_counts[agent_state] = agent_counts.get(agent_state, 0) + 1
+        if summary.get("attention"):
+            attention.append(summary)
+
+    return {
+        "project": normalized,
+        "manager": manager,
+        "agent_count": len(summaries),
+        "runtime_counts": runtime_counts,
+        "agent_counts": agent_counts,
+        "attention": sorted(attention, key=tree_sort_key),
+        "tree": build_project_tree_nodes(summaries),
+        "sessions": summaries,
+    }
+
+
+def format_agent_summary(summary: dict[str, object]) -> str:
+    name = str(summary.get("name") or "<unknown>")
+    role = str(summary.get("role") or "agent")
+    agent_state = str(summary.get("agent_state") or "unknown")
+    runtime_state = str(summary.get("runtime_state") or "unknown")
+    depth = summary.get("depth")
+    attention = summary.get("attention")
+    pieces = [
+        f"{name} ({role})",
+        f"{agent_state}/{runtime_state}",
+    ]
+    if isinstance(depth, int):
+        pieces.append(f"depth={depth}")
+    if attention:
+        pieces.append(f"attention={attention}")
+    return "  ".join(pieces)
+
+
+def render_tree_node(node: dict[str, object], prefix: str = "", is_last: bool = True, is_root: bool = False) -> list[str]:
+    summary = node.get("agent")
+    if not isinstance(summary, dict):
+        return []
+
+    connector = "" if is_root else ("`- " if is_last else "|- ")
+    lines = [f"{prefix}{connector}{format_agent_summary(summary)}"]
+    child_prefix = prefix if is_root else prefix + ("   " if is_last else "|  ")
+    children = node.get("children")
+    if not isinstance(children, list):
+        return lines
+
+    for index, child in enumerate(children):
+        if isinstance(child, dict):
+            lines.extend(render_tree_node(child, child_prefix, index == len(children) - 1))
+    return lines
+
+
+def render_project_command_hints(project: str, manager_name: str | None = None) -> list[str]:
+    command = agentmux_command_hint()
+    mission_target = manager_name or project_manager_name(project)
+    return [
+        "Command center:",
+        f"  mission: {command} mission {shlex.quote(project)} \"<mission>\"",
+        f"  child:   {command} child <parent-agent> <worker-name> --prompt \"<task>\"",
+        f"  inspect: {command} show <agent>",
+        f"  logs:    {command} logs <agent> --lines 120",
+        f"  send:    {command} send <agent> \"<prompt>\"",
+        f"  stop:    {command} stop <agent>",
+        f"  manager: {command} show {shlex.quote(mission_target)}",
+    ]
+
+
+def render_project_tree(payload: dict[str, object]) -> str:
+    project = str(payload.get("project") or "")
+    manager = payload.get("manager")
+    manager_name = str(manager.get("name")) if isinstance(manager, dict) and manager.get("name") else None
+    runtime_counts = payload.get("runtime_counts")
+    runtime_text = ", ".join(f"{key}={value}" for key, value in sorted(runtime_counts.items())) if isinstance(runtime_counts, dict) else ""
+    lines = [
+        f"Project: {project}",
+        f"Manager: {manager_name or '<none>'}",
+        f"Agents: {payload.get('agent_count', 0)}" + (f"  runtime: {runtime_text}" if runtime_text else ""),
+        "",
+        "Tree:",
+    ]
+
+    tree = payload.get("tree")
+    if isinstance(tree, list) and tree:
+        for index, node in enumerate(tree):
+            if isinstance(node, dict):
+                lines.extend(render_tree_node(node, is_last=index == len(tree) - 1, is_root=True))
+    else:
+        lines.append("  <empty>")
+
+    lines.append("")
+    lines.extend(render_project_command_hints(project, manager_name=manager_name))
+    return "\n".join(lines)
+
+
+def render_project_status(payload: dict[str, object]) -> str:
+    project = str(payload.get("project") or "")
+    manager = payload.get("manager")
+    manager_name = str(manager.get("name")) if isinstance(manager, dict) and manager.get("name") else None
+    runtime_counts = payload.get("runtime_counts")
+    agent_counts = payload.get("agent_counts")
+    runtime_text = ", ".join(f"{key}={value}" for key, value in sorted(runtime_counts.items())) if isinstance(runtime_counts, dict) else ""
+    agent_text = ", ".join(f"{key}={value}" for key, value in sorted(agent_counts.items())) if isinstance(agent_counts, dict) else ""
+    lines = [
+        f"Project: {project}",
+        f"Manager: {manager_name or '<none>'}",
+        f"Agents: {payload.get('agent_count', 0)}",
+        f"Runtime: {runtime_text or '<none>'}",
+        f"Agent state: {agent_text or '<none>'}",
+        "",
+        "Attention:",
+    ]
+
+    attention = payload.get("attention")
+    if isinstance(attention, list) and attention:
+        for summary in attention:
+            if isinstance(summary, dict):
+                lines.append(f"  - {format_agent_summary(summary)}")
+    else:
+        lines.append("  <none>")
+
+    lines.append("")
+    lines.extend(render_project_command_hints(project, manager_name=manager_name))
+    return "\n".join(lines)
+
+
+def build_mission_prompt(project: str, mission: str) -> str:
+    command = agentmux_command_hint()
+    return "\n".join(
+        [
+            f"Mission for TermCanvas project `{project}`:",
+            "",
+            mission.strip(),
+            "",
+            "You are the manager/commander for this project. Work terminal-first:",
+            f"- Inspect the tree with `{command} tree {shlex.quote(project)}`.",
+            f"- Create child workers when delegation helps with `{command} child \"$AGENTMUX_AGENT_NAME\" <worker-name> --prompt \"<task>\"`.",
+            f"- Send follow-up prompts with `{command} send <agent> \"<prompt>\"`.",
+            f"- Check output with `{command} logs <agent> --lines 120`.",
+            f"- Stop a stuck child with `{command} stop <agent>`.",
+            "- Keep the worker tree purposeful, report progress to the operator, and summarize results when done.",
+            "- Do not create raw tmux sessions for workers.",
+        ]
+    )
+
+
 def send_text_to_session(conn: sqlite3.Connection, session: sqlite3.Row, text: str) -> sqlite3.Row:
     if has_tmux_session(session["tmux_session"]):
         return send_input_to_runtime(conn, session, text)
@@ -1798,7 +2004,7 @@ def project_sync_command(args: argparse.Namespace) -> None:
     with db() as conn:
         payload = project_sync_payload(
             conn,
-            args.project,
+            project_from_arg_or_env(args.project),
             workdir=args.workdir,
             harness_id=args.harness,
         )
@@ -1812,11 +2018,66 @@ def project_sync_command(args: argparse.Namespace) -> None:
     print(f"Agents: {len(payload['sessions'])}")
 
 
+def project_tree_command(args: argparse.Namespace) -> None:
+    with db() as conn:
+        payload = project_tree_payload(conn, project_from_arg_or_env(args.project))
+
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+        return
+
+    print(render_project_tree(payload))
+
+
+def project_status_command(args: argparse.Namespace) -> None:
+    with db() as conn:
+        payload = project_tree_payload(conn, project_from_arg_or_env(args.project))
+
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+        return
+
+    print(render_project_status(payload))
+
+
+def mission_command(args: argparse.Namespace) -> None:
+    values = [str(value).strip() for value in args.values if str(value).strip()]
+    if args.project:
+        project = project_from_arg_or_env(args.project)
+        mission_text = " ".join(values).strip()
+    elif len(values) == 1:
+        project = project_from_arg_or_env(None)
+        mission_text = values[0]
+    else:
+        project = project_from_arg_or_env(values[0] if values else None)
+        mission_text = " ".join(values[1:]).strip()
+
+    if not mission_text:
+        raise SystemExit("Mission text is required.")
+
+    with db() as conn:
+        manager = create_project_manager(
+            conn,
+            project,
+            workdir=args.workdir,
+            harness_id=args.harness,
+        )
+        prompt = build_mission_prompt(project, mission_text)
+        refreshed = send_text_to_session(conn, manager, prompt)
+
+    print(f"Sent mission to {refreshed['name']} ({short_id(refreshed['id'])})")
+    print(f"project: {project}")
+    print(f"tmux:    {refreshed['tmux_session']}")
+    print("next:")
+    print(f"  {agentmux_command_hint()} tree {shlex.quote(project)}")
+    print(f"  {agentmux_command_hint()} logs {shlex.quote(refreshed['name'])} --lines 120")
+
+
 def project_worker_command(args: argparse.Namespace) -> None:
     with db() as conn:
         worker = create_project_worker(
             conn,
-            args.project,
+            project_from_arg_or_env(args.project),
             args.agent,
             args.workdir or os.getcwd(),
             prompt=args.prompt,
@@ -1828,6 +2089,33 @@ def project_worker_command(args: argparse.Namespace) -> None:
     print(f"Created worker {worker['name']} ({short_id(worker['id'])})")
     print(f"tmux: {worker['tmux_session']}")
     print(f"cwd:  {worker['workdir']}")
+
+
+def child_worker_command(args: argparse.Namespace) -> None:
+    with db() as conn:
+        parent = resolve_session(conn, args.parent)
+        project = session_project_name(parent)
+        worker = create_project_worker(
+            conn,
+            project,
+            args.agent,
+            args.workdir or parent["workdir"],
+            prompt=args.prompt,
+            model=args.model,
+            harness_id=args.harness,
+            parent_agent=parent["name"],
+        )
+        worker_summary = session_summary(worker)
+
+    print(f"Created child worker {worker['name']} ({short_id(worker['id'])})")
+    print(f"parent: {parent['name']}")
+    print(f"project: {project}")
+    print(f"depth: {worker_summary['depth']}")
+    print(f"tmux: {worker['tmux_session']}")
+    print(f"cwd:  {worker['workdir']}")
+    print("next:")
+    print(f"  {agentmux_command_hint()} tree {shlex.quote(project)}")
+    print(f"  {agentmux_command_hint()} logs {shlex.quote(worker['name'])} --lines 120")
 
 
 def adapters_command(_: argparse.Namespace) -> None:
@@ -2027,14 +2315,31 @@ def build_parser() -> argparse.ArgumentParser:
     delete.set_defaults(func=delete_agent)
 
     project_sync = sub.add_parser("project-sync", help="Ensure a project manager and emit project session data")
-    project_sync.add_argument("project")
+    project_sync.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
     project_sync.add_argument("--workdir")
     project_sync.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the manager session (default: shell)")
     project_sync.add_argument("--json", action="store_true")
     project_sync.set_defaults(func=project_sync_command)
 
+    tree = sub.add_parser("tree", help="Show a project commander/worker tree with command hints")
+    tree.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
+    tree.add_argument("--json", action="store_true")
+    tree.set_defaults(func=project_tree_command)
+
+    status = sub.add_parser("status", help="Show project status and attention queue")
+    status.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(func=project_status_command)
+
+    mission = sub.add_parser("mission", help="Send a high-level mission to the project commander")
+    mission.add_argument("values", nargs="+", help="Use `<project> <mission>` or, inside a managed terminal, just `<mission>`")
+    mission.add_argument("--project", help="Project tag override, useful when the mission text is the only positional argument")
+    mission.add_argument("--workdir", help="Workspace root when creating a missing project manager")
+    mission.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for a missing manager session (default: shell)")
+    mission.set_defaults(func=mission_command)
+
     worker = sub.add_parser("worker", help="Create a managed project worker")
-    worker.add_argument("project")
+    worker.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
     worker.add_argument("agent")
     worker.add_argument("--workdir")
     worker.add_argument("--parent", help="Existing agent to use as this worker's parent")
@@ -2042,6 +2347,15 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--model")
     worker.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the worker session (default: shell)")
     worker.set_defaults(func=project_worker_command)
+
+    child = sub.add_parser("child", help="Create a child worker under an existing agent")
+    child.add_argument("parent")
+    child.add_argument("agent")
+    child.add_argument("--workdir", help="Workspace root for the child, defaults to the parent's workdir")
+    child.add_argument("--prompt")
+    child.add_argument("--model")
+    child.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the child session (default: shell)")
+    child.set_defaults(func=child_worker_command)
 
     adapters = sub.add_parser("adapters", help="List harness availability")
     adapters.set_defaults(func=adapters_command)

@@ -82,6 +82,10 @@ function sessionsByName(payload) {
 }
 
 function readNewSessionCalls(harness) {
+  return readTmuxCalls(harness).filter((args) => args[0] === "new-session");
+}
+
+function readTmuxCalls(harness) {
   const log = fs.existsSync(harness.tmuxLogPath)
     ? fs.readFileSync(harness.tmuxLogPath, "utf8")
     : "";
@@ -89,8 +93,7 @@ function readNewSessionCalls(harness) {
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line))
-    .filter((args) => args[0] === "new-session");
+    .map((line) => JSON.parse(line));
 }
 
 test("agentmux workers can spawn child workers with parent and depth metadata", () => {
@@ -170,6 +173,98 @@ test("agentmux rejects invalid explicit worker parents", () => {
     const selfParent = runAgentmux(harness, ["worker", "proj", "proj-general", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "proj-general"]);
     assert.notEqual(selfParent.status, 0);
     assert.match(`${selfParent.stderr}\n${selfParent.stdout}`, /Worker cannot use itself as its parent/u);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux command center shows tree and status for child-worker projects", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["project-sync", "proj", "--workdir", harness.workspacePath, "--harness", "shell", "--json"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--prompt", "Handle the subtask"]));
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["worker", "env-child", "--workdir", harness.workspacePath, "--harness", "shell"],
+      { AGENTMUX_PROJECT: "proj" }
+    ));
+
+    const payload = readProjectPayload(harness, "proj");
+    const sessions = sessionsByName(payload);
+
+    assert.equal(sessions.get("child-a").parent_agent, "worker-a");
+    assert.equal(sessions.get("child-a").depth, 2);
+    assert.equal(sessions.get("env-child").parent_agent, "proj-general");
+    assert.equal(sessions.get("env-child").depth, 1);
+
+    const tree = runAgentmux(harness, ["tree", "proj"]);
+    assertAgentmuxOk(tree);
+    assert.match(tree.stdout, /Project: proj/u);
+    assert.match(tree.stdout, /proj-general \(commander\)/u);
+    assert.match(tree.stdout, /worker-a \(worker\)/u);
+    assert.match(tree.stdout, /child-a \(worker\).*depth=2/u);
+    assert.match(tree.stdout, /Command center:/u);
+    assert.match(tree.stdout, /agentmux.* mission proj "<mission>"/u);
+    assert.match(tree.stdout, /agentmux.* child <parent-agent> <worker-name> --prompt "<task>"/u);
+    assert.match(tree.stdout, /agentmux.* logs <agent> --lines 120/u);
+    assert.match(tree.stdout, /agentmux.* send <agent> "<prompt>"/u);
+    assert.match(tree.stdout, /agentmux.* stop <agent>/u);
+
+    const status = runAgentmux(harness, ["status"], { AGENTMUX_PROJECT: "proj" });
+    assertAgentmuxOk(status);
+    assert.match(status.stdout, /Project: proj/u);
+    assert.match(status.stdout, /Runtime:/u);
+    assert.match(status.stdout, /Attention:/u);
+    assert.match(status.stdout, /Command center:/u);
+
+    const treeJson = runAgentmux(harness, ["tree", "proj", "--json"]);
+    assertAgentmuxOk(treeJson);
+    const treePayload = JSON.parse(treeJson.stdout);
+    assert.equal(treePayload.project, "proj");
+    assert.equal(treePayload.manager.name, "proj-general");
+    assert.ok(Array.isArray(treePayload.tree));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux mission sends a delegation-oriented prompt to the project commander", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    const mission = runAgentmux(harness, [
+      "mission",
+      "proj",
+      "Build the next feature",
+      "--workdir",
+      harness.workspacePath,
+      "--harness",
+      "shell"
+    ]);
+    assertAgentmuxOk(mission);
+    assert.match(mission.stdout, /Sent mission to proj-general/u);
+    assert.match(mission.stdout, /agentmux.* tree proj/u);
+    assert.match(mission.stdout, /agentmux.* logs proj-general --lines 120/u);
+
+    const sendLiteralCall = readTmuxCalls(harness).find((args) => (
+      args[0] === "send-keys"
+      && args.includes("-l")
+      && args.some((arg) => typeof arg === "string" && arg.includes("Build the next feature"))
+    ));
+
+    assert.ok(sendLiteralCall, "expected mission text to be sent to the commander");
+    const sentText = sendLiteralCall[sendLiteralCall.indexOf("-l") + 1];
+
+    assert.match(sentText, /Mission for TermCanvas project `proj`:/u);
+    assert.match(sentText, /Create child workers when delegation helps/u);
+    assert.match(sentText, /agentmux.* child "\$AGENTMUX_AGENT_NAME" <worker-name> --prompt "<task>"/u);
+    assert.match(sentText, /Do not create raw tmux sessions/u);
+
+    const envMission = runAgentmux(harness, ["mission", "Follow up from env"], { AGENTMUX_PROJECT: "proj" });
+    assertAgentmuxOk(envMission);
+    assert.match(envMission.stdout, /Sent mission to proj-general/u);
   } finally {
     harness.cleanup();
   }

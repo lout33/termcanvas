@@ -125,6 +125,21 @@ Current agent-canvas behavior:
 
 This is not a manual graph editor. The intent is to show the real agent swarm topology that agentmux knows about.
 
+The manager terminal is the main command center. Use terminal-native `agentmux` commands for orchestration instead of adding a heavy dashboard:
+
+```bash
+vendor/agentmux/agentmux tree <project>
+vendor/agentmux/agentmux status <project>
+vendor/agentmux/agentmux mission <project> "Build the next feature"
+vendor/agentmux/agentmux child <parent-agent> <worker-name> --prompt "Handle this subtask"
+vendor/agentmux/agentmux logs <agent> --lines 120
+vendor/agentmux/agentmux send <agent> "Follow up on X"
+vendor/agentmux/agentmux stop <agent>
+```
+
+When run inside a managed terminal, project-aware commands can infer the project from `AGENTMUX_PROJECT`.
+TermCanvas should stay a minimal visual map of the live tree while the terminal remains the control surface.
+
 ## Current Product Direction
 
 TermCanvas is moving from a generic spatial terminal board toward a project-aware agent orchestration canvas.
@@ -134,6 +149,7 @@ What we are trying to make easy:
 - open a project and immediately get a canvas for that project
 - see terminals, workers, files, and previews without losing context
 - see who spawned whom in an agentmux swarm
+- manage missions and delegation primarily from the manager terminal
 - keep the UI simple enough that the canvas feels faster than juggling tabs
 - preserve live terminal work across app relaunches when `tmux` is available
 
