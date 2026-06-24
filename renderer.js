@@ -115,6 +115,7 @@ const sidebarResizeHandle = document.getElementById("sidebar-resize-handle");
 const sidebarPanel = document.querySelector(".canvas-sidebar-panel");
 const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
+const Unicode11AddonConstructor = window.Unicode11Addon?.Unicode11Addon;
 const DRAG_THRESHOLD = 3;
 const CANVAS_EXPORT_VERSION = 2;
 const LEGACY_CANVAS_EXPORT_VERSION = 1;
@@ -141,6 +142,11 @@ const APP_SESSION_VERSION = 1;
 const APP_SESSION_SAVE_DEBOUNCE_MS = 180;
 const CANVAS_AGENT_SYNC_INTERVAL_MS = 6000;
 const MAX_WORKSPACE_PREVIEW_TABS = 5;
+const TERMINAL_MIN_COLS = 20;
+const TERMINAL_MIN_ROWS = 8;
+const TERMINAL_FALLBACK_COLS = 80;
+const TERMINAL_FALLBACK_ROWS = 24;
+const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 240];
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -608,7 +614,7 @@ function setNodeMaximized(nodeRecord, shouldMaximize, options = {}) {
         candidateRecord.element?.classList.remove("is-maximized");
         positionNode(candidateRecord);
         syncMaximizeButton(candidateRecord);
-        scheduleTerminalSizeSync([candidateRecord]);
+        scheduleTerminalSizeSync([candidateRecord], { settle: true });
       }
     });
 
@@ -625,9 +631,8 @@ function setNodeMaximized(nodeRecord, shouldMaximize, options = {}) {
   positionNode(nodeRecord);
   syncMaximizeButton(nodeRecord);
   applyCanvasFocusMode();
+  scheduleTerminalSizeSync([nodeRecord], { settle: true });
   requestAnimationFrame(() => {
-    nodeRecord.syncSize();
-
     if (!nodeRecord.isExited && nodeRecord.canvas.id === activeCanvasId) {
       nodeRecord.terminal?.focus();
     }
@@ -841,8 +846,9 @@ async function bindTerminalSession(nodeRecord, options = {}) {
   const terminalId = crypto.randomUUID();
   const terminalTheme = getTerminalTheme();
   const terminal = new TerminalConstructor({
+    allowProposedApi: true,
     cursorBlink: true,
-    convertEol: true,
+    convertEol: false,
     allowTransparency: false,
     customGlyphs: true,
     drawBoldTextInBrightColors: true,
@@ -853,12 +859,14 @@ async function bindTerminalSession(nodeRecord, options = {}) {
     letterSpacing: 0,
     lineHeight: terminalTheme.lineHeight,
     minimumContrastRatio: 1,
+    termName: "xterm-256color",
     scrollback: 1200,
     theme: terminalTheme.theme
   });
   const fitAddon = new FitAddonConstructor();
 
   terminal.loadAddon(fitAddon);
+  enableTerminalUnicodeWidthSupport(terminal);
   terminal.open(nodeRecord.terminalMount);
   terminal.attachCustomWheelEventHandler((event) => {
     return shouldTerminalHandleWheel({
@@ -871,18 +879,21 @@ async function bindTerminalSession(nodeRecord, options = {}) {
   nodeRecord.fitAddon = fitAddon;
   terminalNodeMap.set(terminalId, nodeRecord);
 
-  fitAddon.fit();
+  const initialSize = fitTerminalNode(nodeRecord) ?? {
+    cols: TERMINAL_FALLBACK_COLS,
+    rows: TERMINAL_FALLBACK_ROWS
+  };
   scheduleTerminalRefresh([nodeRecord]);
 
-  const initialCols = Math.max(terminal.cols, 20);
-  const initialRows = Math.max(terminal.rows, 8);
   let resizeFrame = 0;
+  let lastSyncedCols = initialSize.cols;
+  let lastSyncedRows = initialSize.rows;
 
   try {
     const created = await window.noteCanvas.createTerminal({
       terminalId,
-      cols: initialCols,
-      rows: initialRows,
+      cols: initialSize.cols,
+      rows: initialSize.rows,
       cwd: nodeRecord.cwd,
       sessionKey: nodeRecord.sessionKey,
       tmuxSessionName: nodeRecord.tmuxSessionName
@@ -930,13 +941,27 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       }
 
       resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+
         if (isWindowUnloading || nodeRecord.isRemoved || nodeRecord.terminal === null) {
           return;
         }
 
-        fitAddon.fit();
+        const fittedSize = fitTerminalNode(nodeRecord);
+
+        if (fittedSize === null) {
+          return;
+        }
+
         scheduleTerminalRefresh([nodeRecord]);
-        void window.noteCanvas.resizeTerminal(terminalId, Math.max(terminal.cols, 20), Math.max(terminal.rows, 8));
+
+        if (fittedSize.cols === lastSyncedCols && fittedSize.rows === lastSyncedRows) {
+          return;
+        }
+
+        lastSyncedCols = fittedSize.cols;
+        lastSyncedRows = fittedSize.rows;
+        void window.noteCanvas.resizeTerminal(terminalId, fittedSize.cols, fittedSize.rows);
       });
     };
 
@@ -944,12 +969,12 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       syncSize();
     });
 
-    resizeObserver.observe(nodeRecord.surface);
+    resizeObserver.observe(nodeRecord.terminalMount);
 
     nodeRecord.resizeObserver = resizeObserver;
     nodeRecord.syncSize = syncSize;
 
-    syncSize();
+    scheduleTerminalSizeSync([nodeRecord], { settle: true });
 
     if (shouldFocus && nodeRecord.canvas.id === activeCanvasId && !nodeRecord.isExited) {
       terminal.focus();
@@ -2249,8 +2274,18 @@ function updateBoardWelcome() {
   }
 }
 
-function scheduleTerminalSizeSync(nodeRecords) {
-  nodeRecords.forEach((nodeRecord) => {
+function scheduleTerminalSizeSync(nodeRecords, options = {}) {
+  const nodes = Array.isArray(nodeRecords) ? nodeRecords : [];
+
+  if (options.settle === true) {
+    TERMINAL_LAYOUT_SETTLE_DELAYS_MS.forEach((delay) => {
+      window.setTimeout(() => {
+        scheduleTerminalSizeSync(nodes);
+      }, delay);
+    });
+  }
+
+  nodes.forEach((nodeRecord) => {
     pendingTerminalSizeNodes.add(nodeRecord);
   });
 
@@ -2271,6 +2306,61 @@ function scheduleTerminalSizeSync(nodeRecords) {
       }
     });
   });
+}
+
+function enableTerminalUnicodeWidthSupport(terminal) {
+  if (typeof Unicode11AddonConstructor !== "function") {
+    return;
+  }
+
+  try {
+    terminal.loadAddon(new Unicode11AddonConstructor());
+    if (terminal.unicode != null) {
+      terminal.unicode.activeVersion = "11";
+    }
+  } catch (error) {
+    console.warn("Terminal Unicode width support failed to load.", error);
+  }
+}
+
+function getTerminalMountRect(nodeRecord) {
+  if (
+    !(nodeRecord?.terminalMount instanceof HTMLElement)
+    || !(nodeRecord?.element instanceof HTMLElement)
+    || nodeRecord.element.hidden
+    || !nodeRecord.element.isConnected
+  ) {
+    return null;
+  }
+
+  const rect = nodeRecord.terminalMount.getBoundingClientRect();
+
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+
+  return rect;
+}
+
+function fitTerminalNode(nodeRecord) {
+  const terminal = nodeRecord?.terminal;
+  const fitAddon = nodeRecord?.fitAddon;
+
+  if (terminal == null || fitAddon == null || getTerminalMountRect(nodeRecord) === null) {
+    return null;
+  }
+
+  try {
+    fitAddon.fit();
+  } catch (error) {
+    console.warn("Terminal fit failed.", error);
+    return null;
+  }
+
+  return {
+    cols: Math.max(terminal.cols, TERMINAL_MIN_COLS),
+    rows: Math.max(terminal.rows, TERMINAL_MIN_ROWS)
+  };
 }
 
 function scheduleTerminalRefresh(nodeRecords) {
@@ -2657,7 +2747,7 @@ function renderCanvas(options = {}) {
   updateEmptyState();
 
   if (syncTerminalSizes || didChangeMountedNodes) {
-    scheduleTerminalSizeSync(activeCanvas.nodes);
+    scheduleTerminalSizeSync(activeCanvas.nodes, { settle: didChangeMountedNodes || syncTerminalSizes });
   }
 
   scheduleMinimapRender();

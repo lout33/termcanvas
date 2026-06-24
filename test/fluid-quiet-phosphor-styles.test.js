@@ -46,7 +46,9 @@ test("terminal surfaces keep xterm glyph rendering crisp", () => {
   assert.match(styles, /--terminal-line-height:\s*1\.22;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*font-variant-ligatures:\s*none;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*-webkit-font-smoothing:\s*antialiased;/);
+  assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*text-rendering:\s*auto;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*color:\s*var\(--color-terminal-text\);/);
+  assert.match(styles, /\.terminal-node-terminal\s*\{[\s\S]*overflow:\s*hidden;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm-rows\s*\{[\s\S]*letter-spacing:\s*0;/);
 });
 
