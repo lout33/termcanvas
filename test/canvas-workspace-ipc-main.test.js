@@ -1124,7 +1124,9 @@ test("canvas-agent:sync bootstraps once then polls agentmux read-only status", a
     assert.match(agentsContents, /Do not assume your role from this file alone/u);
     assert.match(agentsContents, /AGENTMUX_ROLE=commander/u);
     assert.match(agentsContents, /AGENTMUX_ROLE=worker/u);
-    assert.match(agentsContents, /If `AGENTMUX_ROLE=worker`, complete your assigned task/u);
+    assert.match(agentsContents, /any managed terminal may create child workers/u);
+    assert.match(agentsContents, /agentmux automatically makes the new worker a child/u);
+    assert.match(agentsContents, /--parent "<parent-agent-name>"/u);
     assert.doesNotMatch(agentsContents, /You are the TermCanvas commander/u);
     assert.doesNotMatch(agentsContents, /Agentmux Commander Rules/u);
     assert.deepEqual(spawnCalls, [

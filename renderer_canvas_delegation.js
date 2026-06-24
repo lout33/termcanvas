@@ -22,13 +22,13 @@
   }
 
   // Given canvas node descriptors carrying agentmux awareness, derive the
-  // delegation edges (commander -> worker) that the canvas should draw.
+  // delegation edges (parent -> child) that the canvas should draw.
   //
   // Each descriptor: { id, agentName, parentAgent, commanderAgent, isManager, projectTag }
   // Returns: [{ fromId, toId }] with parent first, deduped, self-links excluded.
   //
-  // agentmux is 2-level today (a worker's parent resolves to the project
-  // commander), but this resolves by name, so deeper trees work unchanged.
+  // agentmux reports each worker's parent by name, so commander -> worker ->
+  // grandchild trees use the same edge derivation as the original 2-level case.
   function deriveCanvasDelegationEdges(nodes) {
     if (!Array.isArray(nodes)) {
       return [];

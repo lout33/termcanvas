@@ -394,6 +394,20 @@ def is_project_manager_session(session: sqlite3.Row | dict[str, str]) -> bool:
     return session_role(session) == "project_manager"
 
 
+def metadata_text(metadata: dict[str, object], key: str) -> str:
+    value = metadata.get(key)
+    return str(value).strip() if value is not None else ""
+
+
+def metadata_depth(metadata: dict[str, object], fallback: int) -> int:
+    value = metadata.get("depth")
+    try:
+        depth = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(0, depth)
+
+
 def session_awareness_role_from_metadata(metadata: dict[str, object]) -> str:
     raw_role = str(metadata.get("role") or "").strip()
     if raw_role == "project_manager":
@@ -403,16 +417,30 @@ def session_awareness_role_from_metadata(metadata: dict[str, object]) -> str:
     return "agent"
 
 
-def session_awareness_depth(role: str) -> str:
+def default_depth_for_role(role: str) -> int:
     if role == "commander":
-        return "0"
+        return 0
     if role == "worker":
-        return "1"
-    return "0"
+        return 1
+    return 0
 
 
-def session_awareness_parent(project: str, role: str) -> str:
+def session_awareness_depth(metadata: dict[str, object], role: str) -> int:
+    fallback = default_depth_for_role(role)
+    if "depth" in metadata:
+        return metadata_depth(metadata, fallback=fallback)
+    return fallback
+
+
+def session_awareness_parent(project: str, role: str, metadata: dict[str, object]) -> str:
+    parent_agent = metadata_text(metadata, "parent_agent")
+    if parent_agent:
+        return parent_agent
     return project_manager_name(project) if role == "worker" else ""
+
+
+def session_awareness_commander(project: str, metadata: dict[str, object]) -> str:
+    return metadata_text(metadata, "commander_agent") or project_manager_name(project)
 
 
 def build_session_awareness_env(
@@ -424,16 +452,17 @@ def build_session_awareness_env(
     tmux_session: str,
     metadata: dict[str, object] | None = None,
 ) -> dict[str, str]:
-    role = session_awareness_role_from_metadata(metadata or {})
+    resolved_metadata = metadata or {}
+    role = session_awareness_role_from_metadata(resolved_metadata)
     normalized_project = normalize_project(project)
     return {
         "AGENTMUX_AGENT_ID": session_id,
         "AGENTMUX_AGENT_NAME": name,
         "AGENTMUX_PROJECT": normalized_project,
         "AGENTMUX_ROLE": role,
-        "AGENTMUX_DEPTH": session_awareness_depth(role),
-        "AGENTMUX_PARENT_AGENT": session_awareness_parent(normalized_project, role),
-        "AGENTMUX_COMMANDER_AGENT": project_manager_name(normalized_project),
+        "AGENTMUX_DEPTH": str(session_awareness_depth(resolved_metadata, role)),
+        "AGENTMUX_PARENT_AGENT": session_awareness_parent(normalized_project, role, resolved_metadata),
+        "AGENTMUX_COMMANDER_AGENT": session_awareness_commander(normalized_project, resolved_metadata),
         "AGENTMUX_WORKDIR": workdir,
         "AGENTMUX_TMUX_SESSION": tmux_session,
     }
@@ -452,6 +481,61 @@ def project_worker_command_hint(project_name: str, workdir: str) -> str:
     return 'python3 "/absolute/path/to/agentmux.py" worker "<project-tag>" "<worker-name>" --workdir "<workspace-path>" [--prompt "..."]'
 
 
+def resolve_project_worker_parent(
+    conn: sqlite3.Connection,
+    project_name: str,
+    child_name: str,
+    explicit_parent: str | None = None,
+) -> dict[str, object]:
+    normalized = normalize_project(project_name)
+    commander_agent = project_manager_name(normalized)
+    parent_identifier = (explicit_parent or "").strip()
+    is_explicit_parent = bool(parent_identifier)
+
+    if not parent_identifier:
+        env_project = normalize_project(os.environ.get("AGENTMUX_PROJECT"))
+        env_agent = (os.environ.get("AGENTMUX_AGENT_NAME") or "").strip()
+        if env_agent and (not env_project or env_project == normalized):
+            parent_identifier = env_agent
+
+    if not parent_identifier:
+        if commander_agent == child_name:
+            raise SystemExit("Worker cannot use itself as its parent.")
+        return {
+            "parent_agent": commander_agent,
+            "depth": 1,
+            "commander_agent": commander_agent,
+        }
+
+    try:
+        parent_session = resolve_session(conn, parent_identifier)
+    except SystemExit:
+        if is_explicit_parent:
+            raise
+        if commander_agent == child_name:
+            raise SystemExit("Worker cannot use itself as its parent.")
+        return {
+            "parent_agent": commander_agent,
+            "depth": 1,
+            "commander_agent": commander_agent,
+        }
+
+    parent_project = session_project_name(parent_session)
+    if parent_project != normalized:
+        raise SystemExit(f"Parent agent '{parent_session['name']}' belongs to project '{parent_project}', not '{normalized}'.")
+    if parent_session["name"] == child_name:
+        raise SystemExit("Worker cannot use itself as its parent.")
+
+    parent_metadata = session_metadata(parent_session)
+    parent_role = session_awareness_role_from_metadata(parent_metadata)
+    parent_depth = session_awareness_depth(parent_metadata, parent_role)
+    return {
+        "parent_agent": parent_session["name"],
+        "depth": parent_depth + 1,
+        "commander_agent": session_awareness_commander(normalized, parent_metadata),
+    }
+
+
 def create_project_worker(
     conn: sqlite3.Connection,
     project_name: str,
@@ -460,18 +544,32 @@ def create_project_worker(
     prompt: str | None = None,
     model: str | None = None,
     harness_id: str = "shell",
+    parent_agent: str | None = None,
 ) -> sqlite3.Row:
     normalized = normalize_project(project_name)
+    child_name = slugify(agent_name)
+    parent_context = resolve_project_worker_parent(
+        conn,
+        normalized,
+        child_name,
+        explicit_parent=parent_agent,
+    )
     return create_managed_session(
         conn,
-        name=slugify(agent_name),
+        name=child_name,
         harness=HARNESSES.get(harness_id, HARNESSES["shell"]),
         extra_args=[],
         workdir=str(Path(workdir).resolve()),
         project=normalized,
         model=model,
         prompt=prompt,
-        metadata={"role": "project_worker"},
+        metadata={
+            "role": "project_worker",
+            "project": normalized,
+            "parent_agent": parent_context["parent_agent"],
+            "depth": parent_context["depth"],
+            "commander_agent": parent_context["commander_agent"],
+        },
     )
 
 
@@ -933,9 +1031,9 @@ def session_summary(session: sqlite3.Row) -> dict[str, object]:
         "name": session["name"],
         "role": role,
         "raw_role": session_role(session),
-        "depth": int(session_awareness_depth(role)),
-        "parent_agent": session_awareness_parent(project, role),
-        "commander_agent": project_manager_name(project),
+        "depth": session_awareness_depth(metadata, role),
+        "parent_agent": session_awareness_parent(project, role, metadata),
+        "commander_agent": session_awareness_commander(project, metadata),
         "is_project_manager": is_project_manager_session(session),
         "harness": session["harness"],
         "agent_state": session["agent_state"],
@@ -1080,7 +1178,13 @@ def create_project_manager(
         project=normalized,
         model=None,
         prompt=None,
-        metadata={"role": "project_manager"},
+        metadata={
+            "role": "project_manager",
+            "project": normalized,
+            "parent_agent": "",
+            "depth": 0,
+            "commander_agent": project_manager_name(normalized),
+        },
     )
 
 
@@ -1580,11 +1684,16 @@ def show_session(args: argparse.Namespace) -> None:
         session = resolve_session(conn, args.session)
         session = refresh_one(conn, session)
         events = fetch_recent_events(conn, session["id"], limit=8)
+        detail = session_summary(session)
 
     print(f"name:          {session['name']}")
     print(f"id:            {session['id']}")
     print(f"harness:       {session['harness']}")
     print(f"project:       {session_project_name(session)}")
+    print(f"role:          {detail['role']}")
+    print(f"parent:        {detail['parent_agent'] or '<none>'}")
+    print(f"depth:         {detail['depth']}")
+    print(f"commander:     {detail['commander_agent']}")
     if session["harness"] == "opencode":
         print(f"default model: {default_model_for_harness(session['harness']) or '<none>'}")
     print(f"agent state:   {session['agent_state']}")
@@ -1685,6 +1794,7 @@ def project_worker_command(args: argparse.Namespace) -> None:
             prompt=args.prompt,
             model=args.model,
             harness_id=args.harness,
+            parent_agent=args.parent,
         )
 
     print(f"Created worker {worker['name']} ({short_id(worker['id'])})")
@@ -1899,6 +2009,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("project")
     worker.add_argument("agent")
     worker.add_argument("--workdir")
+    worker.add_argument("--parent", help="Existing agent to use as this worker's parent")
     worker.add_argument("--prompt")
     worker.add_argument("--model")
     worker.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the worker session (default: shell)")

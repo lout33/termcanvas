@@ -272,7 +272,7 @@ When changing terminal behavior, verify at minimum:
 ## TermCanvas Agentmux Rules
 
 This workspace is connected to TermCanvas project `vault1-25596a7f-6`.
-Managed terminals can be commanders or workers. Do not assume your role from this file alone.
+Managed terminals can be commanders or workers, and any managed terminal may create child workers. Do not assume your role from this file alone.
 Canvas id: `25596a7f-6da5-4b55-88db-f4723a4e2c5d`
 Canvas name: `Canvas 3`
 Workspace root: `/Users/pepe/Documents/vault1/projects/termcanvas`
@@ -288,11 +288,11 @@ env | grep '^AGENTMUX_'
 Important fields:
 
 - `AGENTMUX_ROLE=commander` means you coordinate the project and may create workers.
-- `AGENTMUX_ROLE=worker` means you do assigned work and should not create workers unless explicitly asked.
+- `AGENTMUX_ROLE=worker` means you do assigned work and may create child workers when the task needs delegation.
 - `AGENTMUX_AGENT_NAME` is your durable agent name.
 - `AGENTMUX_PROJECT` is the project tag shared by all agents on this canvas.
-- `AGENTMUX_PARENT_AGENT` points to the commander for workers.
-- `AGENTMUX_DEPTH` is `0` for commanders and `1` for workers in this version.
+- `AGENTMUX_PARENT_AGENT` points to the agent that spawned or owns this worker.
+- `AGENTMUX_DEPTH` is `0` for commanders and increases by one for each child level.
 
 Before deciding whether to coordinate or execute, inspect your own record:
 
@@ -303,15 +303,23 @@ Before deciding whether to coordinate or execute, inspect your own record:
 Role behavior:
 
 - If `AGENTMUX_ROLE=commander`, coordinate the project and create workers when useful.
-- If `AGENTMUX_ROLE=worker`, complete your assigned task and report back; do not create workers unless explicitly asked.
+- If `AGENTMUX_ROLE=worker`, complete your assigned task and report back; create child workers only when delegation clearly helps.
 - If `AGENTMUX_ROLE` is missing, you are not in a managed agentmux session; do not assume commander privileges.
 
-### Worker Creation
+### Child Worker Creation
 
-Commanders create worker agents with:
+Create a worker agent with:
 
 ```bash
 "/Users/pepe/Documents/vault1/projects/termcanvas/vendor/agentmux/agentmux" worker "vault1-25596a7f-6" "<worker-name>" --workdir "/Users/pepe/Documents/vault1/projects/termcanvas" --harness shell
+```
+
+When you run this from inside a managed terminal, agentmux automatically makes the new worker a child of `$AGENTMUX_AGENT_NAME`.
+
+To choose a specific parent explicitly:
+
+```bash
+"/Users/pepe/Documents/vault1/projects/termcanvas/vendor/agentmux/agentmux" worker "vault1-25596a7f-6" "<worker-name>" --workdir "/Users/pepe/Documents/vault1/projects/termcanvas" --harness shell --parent "<parent-agent-name>"
 ```
 
 With an initial prompt:
@@ -360,7 +368,7 @@ Read recent worker output:
 - Never use `tmux new-session` for worker creation.
 - Keep workers in the same project tag so TermCanvas can materialize them on the same canvas.
 - Commanders may create and coordinate workers.
-- Workers should complete their assigned task and report back; they should not create workers unless explicitly asked.
+- Workers may create child workers, but should keep the tree purposeful and report results back to their parent.
 - When asked to create a worker, execute the worker command directly instead of researching first.
 - When asked to prompt an existing worker, use `agentmux send` directly instead of opening help first.
 - When asked to inspect an existing worker, prefer `agentmux show` and `agentmux logs`.

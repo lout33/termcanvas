@@ -16,6 +16,19 @@ test("links each worker to its commander by parent_agent name", () => {
   ]);
 });
 
+test("links grandchildren to worker parents in deeper delegation trees", () => {
+  const edges = deriveCanvasDelegationEdges([
+    { id: "c", agentName: "commander", isManager: true, projectTag: "proj" },
+    { id: "w", agentName: "worker", parentAgent: "commander", projectTag: "proj" },
+    { id: "g", agentName: "grandchild", parentAgent: "worker", projectTag: "proj" }
+  ]);
+
+  assert.deepEqual(edges, [
+    { fromId: "c", toId: "w" },
+    { fromId: "w", toId: "g" }
+  ]);
+});
+
 test("falls back to commander_agent when parent_agent is empty", () => {
   const edges = deriveCanvasDelegationEdges([
     { id: "c", agentName: "boss", isManager: true, projectTag: "proj" },

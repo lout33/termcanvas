@@ -44,7 +44,7 @@ Examples:
 - App-session restore across relaunches
 - `tmux`-backed terminal reattach when available
 - Integrated `agentmux` manager for commander and worker AI agent terminals
-- Agent delegation lines that show commander-to-worker relationships on the canvas
+- Agent delegation lines that show commander-to-worker-to-child relationships on the canvas
 - Fresh-start welcome state that prompts for a folder instead of creating an empty phantom canvas
 - Canvas JSON export and import
 - Full app-data JSON export and import for moving setups between installs
@@ -117,10 +117,10 @@ TermCanvas has an integrated `agentmux` manager for creating and tracking comman
 Current agent-canvas behavior:
 
 - managed terminal nodes track agent name, role, project tag, parent agent, commander agent, and depth when agentmux reports them
-- commander-to-worker delegation lines are derived automatically from `parent_agent` or `commander_agent`
+- commander-to-worker-to-child delegation lines are derived automatically from `parent_agent` or `commander_agent`
 - lines are drawn behind node cards and pan or zoom with the canvas
 - edges are project-scoped, deduplicated, and ignore self-links or unknown parents
-- today's agentmux runtime is effectively two levels: one commander and its workers; the edge derivation is name-based so deeper trees can work if the runtime later exposes them
+- any managed agent can spawn child workers; agentmux records parent/depth metadata so the canvas can render deeper trees from the runtime topology
 
 This is not a manual graph editor. The intent is to show the real agent swarm topology that agentmux knows about.
 
@@ -138,7 +138,7 @@ What we are trying to make easy:
 
 Near-term roadmap:
 
-- auto-layout workers under their commander so the delegation graph is readable without manual dragging
+- auto-layout child workers under their parent so the delegation graph is readable without manual dragging
 - make agent cards more role-aware with clearer status, names, and runtime state
 - expose a safe, read-only canvas snapshot so agents can understand who else is on the canvas
 - improve large-canvas feel: fit-to-content, smoother pan/zoom, and no jank with many nodes
