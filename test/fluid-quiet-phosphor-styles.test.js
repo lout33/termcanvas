@@ -29,11 +29,10 @@ test("active navigation and focused terminals use dark amber emphasis", () => {
   assert.match(styles, /\.terminal-node\.is-active,\s*\.terminal-node:focus-within\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
 });
 
-test("topbar, board hints, and terminal cards adopt dark workbench surfaces", () => {
+test("canvas header, board hints, and terminal cards adopt dark workbench surfaces", () => {
   const styles = readStyles();
 
-  assert.match(styles, /\.canvas-topbar\s*\{[\s\S]*background:\s*var\(--color-topbar-shell\);/);
-  assert.match(styles, /\.canvas-panel-header\s*\{[\s\S]*background:\s*rgba\(17, 19, 24, 0\.72\);/);
+  assert.match(styles, /\.canvas-panel-header\s*\{[\s\S]*background:\s*var\(--color-topbar-shell\);/);
   assert.match(styles, /\.board\s*\{[\s\S]*linear-gradient\(180deg, var\(--color-board\) 0%, #07090d 100%\);/);
   assert.match(styles, /\.board-hint-chip\s*\{[\s\S]*background:\s*var\(--color-chip-surface\);/);
   assert.match(styles, /\.terminal-node\s*\{[\s\S]*background:\s*var\(--color-terminal-card\);/);
@@ -61,9 +60,11 @@ test("drawer, inspector, and HUD surfaces share the dark chrome language", () =>
   assert.match(styles, /\.board-navigation\s*\{[\s\S]*background:\s*var\(--color-board-hud\);/);
   assert.match(styles, /\.board-nav-icon\s*\{[\s\S]*stroke:\s*currentColor;/);
   assert.match(styles, /\.board-nav-separator\s*\{[\s\S]*background:\s*rgba\(236, 220, 170, 0\.16\);/);
-  assert.match(styles, /\.board-minimap-label\s*\{[\s\S]*letter-spacing:\s*0;/);
+  assert.match(styles, /\.board-minimap\s*\{[\s\S]*display:\s*none;/);
+  assert.match(styles, /\.board-minimap\s*\{[\s\S]*pointer-events:\s*none;/);
   assert.match(styles, /\.board\.has-maximized-node \.board-navigation,\s*\.board\.has-maximized-node \.board-minimap,[\s\S]*pointer-events:\s*none;/);
-  assert.match(styles, /\.board-fullscreen-exit\s*\{[\s\S]*border:\s*1px solid rgba\(236, 220, 170, 0\.14\);/);
+  assert.match(styles, /\.board-fullscreen-exit\s*\{[\s\S]*display:\s*none;/);
+  assert.match(styles, /\.board\.has-maximized-node \.board-fullscreen-exit\s*\{[\s\S]*pointer-events:\s*none;/);
 });
 
 test("file inspector tabs use compact dark open-file chrome", () => {
@@ -126,7 +127,7 @@ test("workspace selection and chrome controls use restrained amber focus cues", 
   assert.match(styles, /\.canvas-panel-icon-button:hover\s*\{[\s\S]*border-color:\s*var\(--color-sidebar-accent-strong\);/);
 });
 
-test("collapsed sidebar toggle lives in the topbar as a compact control", () => {
+test("collapsed sidebar toggle lives in the merged header as a compact control", () => {
   const styles = readStyles();
 
   assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*position:\s*relative;/);
@@ -138,29 +139,35 @@ test("collapsed sidebar toggle lives in the topbar as a compact control", () => 
   assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines\s*\{[^}]*background:\s*transparent;/);
   assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines::before\s*\{[^}]*rotate\(45deg\);/);
   assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines::after\s*\{[^}]*rotate\(-45deg\);/);
-  assert.match(styles, /\.canvas-topbar\s*\{[^}]*z-index:\s*11;/);
+  assert.match(styles, /\.canvas-panel-header\s*\{[^}]*z-index:\s*11;/);
   assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
   assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*visibility:\s*hidden;/);
   assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*pointer-events:\s*none;/);
 });
 
-test("topbar and terminal typography gain a calmer hierarchy and tighter spacing", () => {
+test("header and terminal typography gain a calmer hierarchy and tighter spacing", () => {
   const styles = readStyles();
 
   assert.match(styles, /\.canvas-brand-name\s*\{[\s\S]*font-size:\s*1rem;/);
   assert.match(styles, /\.canvas-brand-tagline\s*\{[\s\S]*letter-spacing:\s*0\.12em;/);
   assert.match(styles, /\.canvas-strip-item\s*\{[\s\S]*font-size:\s*0\.8rem;/);
-  assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*min-height:\s*2\.35rem;/);
-  assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.38rem 0\.6rem;/);
+  assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*min-height:\s*2\.05rem;/);
+  assert.match(styles, /\.terminal-node-header\s*\{[\s\S]*padding:\s*0\.28rem 0\.46rem;/);
   assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*font-size:\s*0\.82rem;/);
   assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*cursor:\s*inherit;/);
-  assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*gap:\s*0\.05rem;/);
+  assert.match(styles, /\.terminal-node-title-input\s*\{[\s\S]*pointer-events:\s*none;/);
+  assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*gap:\s*0;/);
   assert.match(styles, /\.terminal-node-title-group\s*\{[\s\S]*flex:\s*1 1 9rem;/);
   assert.match(styles, /\.terminal-node-role-badge\s*\{[\s\S]*text-transform:\s*uppercase;/);
   assert.match(styles, /\.terminal-node-title-input\.is-editing\s*\{[\s\S]*cursor:\s*text;/);
+  assert.match(styles, /\.terminal-node-title-input\.is-editing\s*\{[\s\S]*pointer-events:\s*auto;/);
+  assert.match(styles, /\.terminal-node-menu-popover\s*\{[\s\S]*background:\s*rgba\(13, 15, 19, 0\.98\);/);
+  assert.match(styles, /\.terminal-node-menu-item\s*\{[\s\S]*font-size:\s*0\.68rem;/);
+  assert.match(styles, /\.terminal-node\.is-maximized \.terminal-node-maximize\s*\{[\s\S]*min-width:\s*7\.65rem;/);
+  assert.match(styles, /\.terminal-node\.is-maximized \.terminal-node-maximize-label\s*\{[\s\S]*display:\s*inline;/);
 });
 
-test("vertical rail and canvas header keep navigation out of the topbar", () => {
+test("vertical rail and merged canvas header keep navigation out of extra topbar rows", () => {
   const styles = readStyles();
 
   // Far-left vertical project rail owns the canvas switcher + file actions.
@@ -168,15 +175,14 @@ test("vertical rail and canvas header keep navigation out of the topbar", () => 
   assert.match(styles, /\.canvas-switcher-rail-section\s*\{[\s\S]*flex-direction:\s*column;/);
   assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-main::before\s*\{[\s\S]*content:\s*attr\(data-rail-label\);/);
   assert.match(styles, /\.app-rail-file-actions\s*\{[\s\S]*flex-direction:\s*column;/);
-  // The topbar shell holds one global row, while the canvas header owns canvas context.
-  assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*width:\s*100%;/);
-  assert.match(styles, /\.canvas-topbar-shell\s*\{[\s\S]*border-radius:\s*0;/);
-  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*display:\s*flex;/);
-  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*flex-wrap:\s*nowrap;/);
-  assert.match(styles, /\.canvas-topbar-primary-row\s*\{[\s\S]*min-height:\s*2\.35rem;/);
-  assert.match(styles, /\.workspace-shell\s*\{[\s\S]*grid-template-rows:\s*auto auto minmax\(0, 1fr\);/);
+  // One merged header row owns the drawer toggle, canvas identity, status, and menu.
+  assert.doesNotMatch(styles, /\.canvas-topbar\s*\{/);
+  assert.doesNotMatch(styles, /\.canvas-topbar-shell\s*\{/);
+  assert.doesNotMatch(styles, /\.canvas-topbar-primary-row\s*\{/);
+  assert.match(styles, /\.workspace-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\);/);
   assert.match(styles, /\.canvas-panel-header\s*\{[\s\S]*justify-content:\s*space-between;/);
   assert.match(styles, /\.canvas-panel-context\s*\{[\s\S]*display:\s*flex;/);
+  assert.match(styles, /\.canvas-breadcrumb\s*\{[\s\S]*text-transform:\s*uppercase;/);
   assert.match(styles, /\.canvas-panel-title\s*\{[\s\S]*font-family:\s*var\(--font-body\);/);
   assert.match(styles, /\.canvas-panel-pills\s*\{[\s\S]*display:\s*inline-flex;/);
   assert.match(styles, /\.canvas-panel-actions\s*\{[\s\S]*border-left:\s*1px solid rgba\(236, 220, 170, 0\.12\);/);
@@ -187,10 +193,10 @@ test("vertical rail and canvas header keep navigation out of the topbar", () => 
   assert.doesNotMatch(styles, /\.canvas-list-delete/u);
 });
 
-test("inactive topbar controls use dark app-frame surfaces", () => {
+test("inactive app rail controls use dark app-frame surfaces", () => {
   const styles = readStyles();
 
-  assert.match(styles, /\.canvas-topbar-action,[\s\S]*background:\s*rgba\(24, 27, 34, 0\.82\);/);
+  assert.match(styles, /\.app-rail-action,[\s\S]*background:\s*rgba\(24, 27, 34, 0\.82\);/);
   assert.match(styles, /\.canvas-strip-item\s*\{[\s\S]*background:\s*rgba\(24, 27, 34, 0\.72\);/);
   assert.match(styles, /\.canvas-panel-pill\s*\{[\s\S]*background:\s*rgba\(24, 27, 34, 0\.78\);/);
 });

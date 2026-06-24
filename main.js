@@ -918,7 +918,7 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: crowded sidebar content was not scrollable. Snapshot: ${JSON.stringify(sidebarScrollSnapshot)}`);
     }
 
-    logStep("verify top canvas strip owns primary navigator");
+    logStep("verify vertical canvas rail owns primary navigator");
     const topCanvasStripSnapshot = await waitForSnapshot(
       "window.__canvasLearningDebug.getSnapshot()",
       (snapshot) => snapshot.topCanvasStripVisible === true && Array.isArray(snapshot.topCanvasStripNames),
@@ -931,10 +931,10 @@ async function runSmokeTest(window) {
       || topCanvasStripSnapshot.topCanvasStripNames.length !== topCanvasStripSnapshot.canvasNames.length
       || topCanvasStripSnapshot.topCanvasStripNames.join("\n") !== topCanvasStripSnapshot.canvasNames.join("\n")
     ) {
-      throw new Error(`Smoke test failed: top canvas strip did not replace the drawer-owned primary navigator. Snapshot: ${JSON.stringify(topCanvasStripSnapshot)}`);
+      throw new Error(`Smoke test failed: vertical canvas rail did not replace the drawer-owned primary navigator. Snapshot: ${JSON.stringify(topCanvasStripSnapshot)}`);
     }
 
-    logStep("keep top canvas strip usable while terminals are maximized");
+    logStep("keep vertical canvas rail usable while terminals are maximized");
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(0)");
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.renameFirstTerminal('Canvas 1 Maximized Terminal')");
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.toggleMaximizeFirstTerminal()");
@@ -950,7 +950,7 @@ async function runSmokeTest(window) {
       maximizedCanvasOneSnapshot.maximizedNodeTitle !== "Canvas 1 Maximized Terminal"
       || maximizedCanvasOneSnapshot.topCanvasStripVisible !== true
     ) {
-      throw new Error(`Smoke test failed: maximizing the first canvas terminal hid or desynced the top strip. Snapshot: ${JSON.stringify(maximizedCanvasOneSnapshot)}`);
+      throw new Error(`Smoke test failed: maximizing the first canvas terminal hid or desynced the canvas rail. Snapshot: ${JSON.stringify(maximizedCanvasOneSnapshot)}`);
     }
 
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(1)");
@@ -993,7 +993,7 @@ async function runSmokeTest(window) {
       maximizedCanvasTwoSnapshot.maximizedNodeTitle !== "Canvas 2 Maximized Terminal"
       || maximizedCanvasTwoSnapshot.topCanvasStripVisible !== true
     ) {
-      throw new Error(`Smoke test failed: the second canvas did not preserve its own maximized terminal while keeping the top strip visible. Snapshot: ${JSON.stringify(maximizedCanvasTwoSnapshot)}`);
+      throw new Error(`Smoke test failed: the second canvas did not preserve its own maximized terminal while keeping the canvas rail visible. Snapshot: ${JSON.stringify(maximizedCanvasTwoSnapshot)}`);
     }
 
     await window.webContents.executeJavaScript("window.__canvasLearningDebug.clickCanvasStripItem(0)");
@@ -1018,34 +1018,39 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: returning to Canvas 2 did not restore its maximized terminal. Snapshot: ${JSON.stringify(restoredCanvasTwoSnapshot)}`);
     }
 
-    const topCanvasStripLayoutSnapshot = await window.webContents.executeJavaScript(`(() => {
+    const canvasRailLayoutSnapshot = await window.webContents.executeJavaScript(`(() => {
       const boardElement = document.getElementById("board");
+      const appRail = document.querySelector(".app-rail");
       const stripList = document.getElementById("canvas-strip-list");
 
-      if (!(boardElement instanceof HTMLElement) || !(stripList instanceof HTMLElement)) {
+      if (!(boardElement instanceof HTMLElement) || !(appRail instanceof HTMLElement) || !(stripList instanceof HTMLElement)) {
         return null;
       }
 
       const boardRect = boardElement.getBoundingClientRect();
+      const railRect = appRail.getBoundingClientRect();
       const stripRect = stripList.getBoundingClientRect();
-      const availableHeightBelowStrip = window.innerHeight - stripRect.bottom;
+      const boardHeightRatio = window.innerHeight > 0 ? (boardRect.height / window.innerHeight) : 0;
 
       return {
-        boardTop: boardRect.top,
+        boardLeft: boardRect.left,
         boardHeight: boardRect.height,
-        stripBottom: stripRect.bottom,
+        boardHeightRatio,
+        railRight: railRect.right,
+        railHeight: railRect.height,
+        stripRight: stripRect.right,
         stripHeight: stripRect.height,
-        availableHeightBelowStrip,
-        boardHeightRatioBelowStrip: availableHeightBelowStrip > 0 ? (boardRect.height / availableHeightBelowStrip) : 0
+        stripVisible: stripRect.width > 0 && stripRect.height > 0
       };
     })()`);
 
     if (
-      topCanvasStripLayoutSnapshot === null
-      || topCanvasStripLayoutSnapshot.boardTop + 2 < topCanvasStripLayoutSnapshot.stripBottom
-      || topCanvasStripLayoutSnapshot.boardHeightRatioBelowStrip < 0.72
+      canvasRailLayoutSnapshot === null
+      || canvasRailLayoutSnapshot.stripVisible !== true
+      || canvasRailLayoutSnapshot.boardLeft + 2 < canvasRailLayoutSnapshot.railRight
+      || canvasRailLayoutSnapshot.boardHeightRatio < 0.68
     ) {
-      throw new Error(`Smoke test failed: the board no longer keeps most of the vertical space beneath the top strip. Snapshot: ${JSON.stringify(topCanvasStripLayoutSnapshot)}`);
+      throw new Error(`Smoke test failed: the board no longer keeps usable space beside the vertical canvas rail. Snapshot: ${JSON.stringify(canvasRailLayoutSnapshot)}`);
     }
 
     const workspaceOwnerCanvasIndex = workspaceSidebarSnapshot.canvasCount - 1;

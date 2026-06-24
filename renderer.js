@@ -150,6 +150,7 @@ const terminalNodeMap = new Map();
 let activeCanvasId = null;
 let activeNodeRecord = null;
 let activeTitleEditorRecord = null;
+let activeTerminalNodeMenuRecord = null;
 let activeCanvasRenameId = null;
 let isSidebarCollapsed = true;
 let hasDismissedBoardIntro = false;
@@ -530,6 +531,9 @@ function updateNodeTitleInput(nodeRecord) {
 
   nodeRecord.titleInput.value = nodeRecord.titleText;
   nodeRecord.titleInput.title = nodeRecord.titleText;
+  nodeRecord.menuButton?.setAttribute("aria-label", `Terminal actions for ${nodeRecord.titleText}`);
+  nodeRecord.closeButton?.setAttribute("aria-label", `Close terminal ${nodeRecord.titleText}`);
+  nodeRecord.renameButton?.setAttribute("aria-label", `Rename terminal ${nodeRecord.titleText}`);
 }
 
 function setNodeTitleEditing(nodeRecord, isEditing) {
@@ -541,6 +545,7 @@ function setNodeTitleEditing(nodeRecord, isEditing) {
   nodeRecord.titleInput.readOnly = !isEditing;
   nodeRecord.titleInput.tabIndex = isEditing ? 0 : -1;
   nodeRecord.titleInput.classList.toggle("is-editing", isEditing);
+  nodeRecord.renameButton?.setAttribute("aria-pressed", String(isEditing));
 }
 
 function startNodeTitleEditing(nodeRecord) {
@@ -581,11 +586,13 @@ function syncMaximizeButton(nodeRecord) {
   }
 
   const isMaximized = nodeRecord.isMaximized;
-  nodeRecord.maximizeButton.textContent = isMaximized ? "❐" : "□";
-  nodeRecord.maximizeButton.title = isMaximized ? "Restore terminal" : "Maximize terminal";
+  nodeRecord.maximizeButton.innerHTML = isMaximized
+    ? '<svg class="terminal-node-control-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 3.75h7v7"></path><path d="M10.75 12.25h-7v-7"></path><path d="M12.25 3.75 8.75 7.25"></path><path d="M3.75 12.25 7.25 8.75"></path></svg><span class="terminal-node-maximize-label">Exit fullscreen</span>'
+    : '<svg class="terminal-node-control-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.75 6.25v-2.5h2.5"></path><path d="M12.25 9.75v2.5h-2.5"></path><path d="M3.75 3.75 7.25 7.25"></path><path d="M12.25 12.25 8.75 8.75"></path></svg>';
+  nodeRecord.maximizeButton.title = isMaximized ? "Exit fullscreen" : "Maximize terminal";
   nodeRecord.maximizeButton.setAttribute(
     "aria-label",
-    isMaximized ? `Restore ${nodeRecord.titleText}` : `Maximize ${nodeRecord.titleText}`
+    isMaximized ? `Exit fullscreen for ${nodeRecord.titleText}` : `Maximize ${nodeRecord.titleText}`
   );
   nodeRecord.maximizeButton.setAttribute("aria-pressed", String(isMaximized));
 }
@@ -1576,6 +1583,43 @@ function toggleCanvasActionsMenu() {
   setCanvasActionsMenuOpen(!isCanvasActionsMenuOpen);
 }
 
+function setTerminalNodeMenuOpen(nodeRecord, nextValue, options = {}) {
+  if (nextValue === true && activeTerminalNodeMenuRecord !== null && activeTerminalNodeMenuRecord !== nodeRecord) {
+    setTerminalNodeMenuOpen(activeTerminalNodeMenuRecord, false);
+  }
+
+  const isOpen = nextValue === true && nodeRecord !== null && !nodeRecord.isRemoved;
+
+  if (nodeRecord?.menuPopover instanceof HTMLElement) {
+    nodeRecord.menuPopover.hidden = !isOpen;
+  }
+
+  if (nodeRecord?.menuButton instanceof HTMLButtonElement) {
+    nodeRecord.menuButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    nodeRecord.menuButton.classList.toggle("is-active", isOpen);
+
+    if (!isOpen && options.restoreFocus === true) {
+      nodeRecord.menuButton.focus();
+    }
+  }
+
+  activeTerminalNodeMenuRecord = isOpen
+    ? nodeRecord
+    : activeTerminalNodeMenuRecord === nodeRecord
+      ? null
+      : activeTerminalNodeMenuRecord;
+}
+
+function closeTerminalNodeMenu(options = {}) {
+  if (activeTerminalNodeMenuRecord !== null) {
+    setTerminalNodeMenuOpen(activeTerminalNodeMenuRecord, false, options);
+  }
+}
+
+function toggleTerminalNodeMenu(nodeRecord) {
+  setTerminalNodeMenuOpen(nodeRecord, activeTerminalNodeMenuRecord !== nodeRecord);
+}
+
 function setCanvasSwitcherMenuOpen(nextValue, options = {}) {
   isCanvasSwitcherMenuOpen = nextValue === true;
 
@@ -1926,17 +1970,13 @@ function renderCanvasOverviewHeader() {
     product.className = "canvas-breadcrumb-project";
     product.textContent = "TermCanvas";
 
-    const context = document.createElement("span");
-    context.className = "canvas-breadcrumb-context";
-    context.textContent = activeCanvas === null ? "project" : `project / ${projectName}`;
-
-    canvasBreadcrumb.replaceChildren(product, context);
+    canvasBreadcrumb.replaceChildren(product);
   }
 
   if (canvasPanelTitle instanceof HTMLElement) {
     canvasPanelTitle.textContent = activeCanvas === null
-      ? "No canvas"
-      : `${projectName} · ${activeCanvas.name}`;
+      ? "No project open"
+      : `${projectName} / ${activeCanvas.name}`;
   }
 
   if (canvasActionsMenuButton instanceof HTMLButtonElement) {
@@ -2330,6 +2370,7 @@ function requestViewportRender() {
 }
 
 let minimapRenderFrame = 0;
+const isBoardMinimapEnabled = false;
 
 function scheduleMinimapRender() {
   if (minimapRenderFrame !== 0) {
@@ -2343,6 +2384,12 @@ function scheduleMinimapRender() {
 
 function renderMinimap() {
   if (boardMinimap === null || boardMinimapCanvas === null || boardMinimapViewport === null) {
+    return;
+  }
+
+  if (!isBoardMinimapEnabled) {
+    boardMinimap.hidden = true;
+    boardMinimapCanvas.querySelectorAll(".board-minimap-node").forEach((element) => element.remove());
     return;
   }
 
@@ -5709,6 +5756,8 @@ function setActiveCanvas(canvasId) {
       activeTitleEditorRecord = null;
     }
 
+    closeTerminalNodeMenu();
+
     setActiveNode(null);
     activeCanvasId = canvasId;
 
@@ -6014,9 +6063,7 @@ function createTerminalElement(nodeRecord) {
   const meta = document.createElement("div");
   meta.className = "terminal-node-meta";
   meta.textContent = "Starting shell";
-
-  const metaRow = document.createElement("div");
-  metaRow.className = "terminal-node-meta-row";
+  meta.hidden = true;
 
   const roleBadge = document.createElement("span");
   roleBadge.className = "terminal-node-role-badge";
@@ -6024,39 +6071,62 @@ function createTerminalElement(nodeRecord) {
   roleBadge.dataset.role = roleBadge.textContent.toLowerCase();
 
   const copySessionButton = document.createElement("button");
-  copySessionButton.className = "terminal-node-copy-session terminal-node-control";
+  copySessionButton.className = "terminal-node-menu-item terminal-node-copy-session";
   copySessionButton.type = "button";
-  copySessionButton.textContent = "ID";
+  copySessionButton.setAttribute("role", "menuitem");
+  copySessionButton.textContent = "Copy session ID";
 
-  metaRow.append(roleBadge, meta, copySessionButton);
-  titleGroup.append(titleInput, metaRow);
+  titleGroup.append(titleInput);
   dragArea.append(grabHandle, leadDot, titleGroup);
 
-  const status = document.createElement("span");
-  status.className = "terminal-node-meta terminal-node-status";
-  const statusDot = document.createElement("span");
-  statusDot.className = "terminal-node-status-dot";
-  statusDot.setAttribute("aria-hidden", "true");
+  const status = leadDot;
   const statusLabel = document.createElement("span");
   statusLabel.className = "terminal-node-status-label";
   statusLabel.textContent = "Booting";
-  status.append(statusDot, statusLabel);
   status.dataset.state = "pending";
 
   const actions = document.createElement("div");
   actions.className = "terminal-node-actions";
 
+  const renameButton = document.createElement("button");
+  renameButton.className = "terminal-node-control terminal-node-rename";
+  renameButton.type = "button";
+  renameButton.innerHTML = '<svg class="terminal-node-control-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.25 12.75h2.5l6-6-2.5-2.5-6 6v2.5Z"></path><path d="M8.75 4.25 11.25 6.75"></path></svg>';
+  renameButton.setAttribute("aria-label", `Rename terminal ${nodeRecord.id}`);
+  renameButton.setAttribute("aria-pressed", "false");
+  renameButton.title = "Rename terminal";
+
   const maximizeButton = document.createElement("button");
   maximizeButton.className = "terminal-node-control terminal-node-maximize";
   maximizeButton.type = "button";
 
-  const closeButton = document.createElement("button");
-  closeButton.className = "terminal-node-control terminal-node-close";
-  closeButton.type = "button";
-  closeButton.setAttribute("aria-label", `Close terminal ${nodeRecord.id}`);
-  closeButton.textContent = "×";
+  const menuRoot = document.createElement("div");
+  menuRoot.className = "terminal-node-menu";
 
-  actions.append(status, maximizeButton, closeButton);
+  const menuButton = document.createElement("button");
+  menuButton.className = "terminal-node-control terminal-node-menu-button";
+  menuButton.type = "button";
+  menuButton.innerHTML = '<svg class="terminal-node-control-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="8" r="1"></circle><circle cx="8" cy="8" r="1"></circle><circle cx="12" cy="8" r="1"></circle></svg>';
+  menuButton.setAttribute("aria-label", `Terminal actions for ${nodeRecord.titleText}`);
+  menuButton.setAttribute("aria-haspopup", "menu");
+  menuButton.setAttribute("aria-expanded", "false");
+  menuButton.title = "Terminal actions";
+
+  const menuPopover = document.createElement("div");
+  menuPopover.className = "terminal-node-menu-popover";
+  menuPopover.setAttribute("role", "menu");
+  menuPopover.hidden = true;
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "terminal-node-menu-item terminal-node-close";
+  closeButton.type = "button";
+  closeButton.setAttribute("role", "menuitem");
+  closeButton.setAttribute("aria-label", `Close terminal ${nodeRecord.id}`);
+  closeButton.textContent = "Close terminal";
+
+  menuPopover.append(copySessionButton, closeButton);
+  menuRoot.append(menuButton, menuPopover);
+  actions.append(renameButton, maximizeButton, menuRoot);
   header.append(dragArea, actions);
 
   const surface = document.createElement("div");
@@ -6113,7 +6183,11 @@ function createTerminalElement(nodeRecord) {
     statusLabel,
     titleInput,
     titleGroup,
+    renameButton,
     maximizeButton,
+    menuRoot,
+    menuButton,
+    menuPopover,
     closeButton,
     dragArea,
     overlay,
@@ -6172,7 +6246,11 @@ async function createTerminalNode(options) {
     statusLabel: null,
     titleInput: null,
     titleGroup: null,
+    renameButton: null,
     maximizeButton: null,
+    menuRoot: null,
+    menuButton: null,
+    menuPopover: null,
     closeButton: null,
     reopenButton: null,
     resizeHandles: [],
@@ -6216,7 +6294,11 @@ async function createTerminalNode(options) {
   nodeRecord.statusLabel = elements.statusLabel;
   nodeRecord.titleInput = elements.titleInput;
   nodeRecord.titleGroup = elements.titleGroup;
+  nodeRecord.renameButton = elements.renameButton;
   nodeRecord.maximizeButton = elements.maximizeButton;
+  nodeRecord.menuRoot = elements.menuRoot;
+  nodeRecord.menuButton = elements.menuButton;
+  nodeRecord.menuPopover = elements.menuPopover;
   nodeRecord.closeButton = elements.closeButton;
   nodeRecord.reopenButton = elements.reopenButton;
   nodeRecord.resizeHandles = elements.resizeHandles;
@@ -6230,6 +6312,7 @@ async function createTerminalNode(options) {
   elements.closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    closeTerminalNodeMenu({ restoreFocus: true });
     if (nodeRecord.isManager) {
       return;
     }
@@ -6245,16 +6328,31 @@ async function createTerminalNode(options) {
   elements.maximizeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    closeTerminalNodeMenu();
     setNodeMaximized(nodeRecord, !nodeRecord.isMaximized);
+  });
+
+  elements.renameButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeTerminalNodeMenu();
+    startNodeTitleEditing(nodeRecord);
+  });
+
+  elements.menuButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleTerminalNodeMenu(nodeRecord);
   });
 
   elements.copySessionButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    closeTerminalNodeMenu({ restoreFocus: true });
 
     const sessionIdentifier = getNodeSessionIdentifier(nodeRecord);
     const button = elements.copySessionButton;
-    const originalLabel = "ID";
+    const originalLabel = "Copy session ID";
 
     void copyTextToClipboard(sessionIdentifier).then((copied) => {
       button.textContent = copied ? "Copied" : "Failed";
@@ -6275,20 +6373,16 @@ async function createTerminalNode(options) {
       return;
     }
 
-    event.stopPropagation();
     if (shouldSelectTerminal({ reason: "pointer" })) {
       setActiveNode(nodeRecord);
     }
 
     if (!nodeRecord.isTitleEditing) {
       event.preventDefault();
+      return;
     }
-  });
 
-  elements.titleGroup.addEventListener("dblclick", (event) => {
-    event.preventDefault();
     event.stopPropagation();
-    startNodeTitleEditing(nodeRecord);
   });
 
   elements.titleInput.addEventListener("focus", () => {
@@ -6350,11 +6444,16 @@ async function createTerminalNode(options) {
   });
 
   elements.dragArea.addEventListener("pointerdown", (event) => {
+    closeTerminalNodeMenu();
     startNodeDrag(event, nodeRecord, elements.dragArea);
   });
 
   elements.dragArea.addEventListener("dblclick", (event) => {
-    if (!isElement(event.target) || event.target.closest(".terminal-node-title-input, .terminal-node-control") !== null) {
+    if (
+      !isElement(event.target)
+      || event.target.closest(".terminal-node-control, .terminal-node-menu") !== null
+      || (nodeRecord.isTitleEditing && event.target.closest(".terminal-node-title-input") !== null)
+    ) {
       return;
     }
 
@@ -6392,6 +6491,10 @@ async function createTerminalNode(options) {
     is_project_manager: nodeRecord.isManager
   });
   updateEmptyState();
+
+  if (shouldFocus && activeCanvas.id === activeCanvasId) {
+    setActiveNode(nodeRecord);
+  }
 
   try {
     if (nodeRecord.isExited) {
@@ -6646,6 +6749,10 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     activeTitleEditorRecord = null;
   }
 
+  if (activeTerminalNodeMenuRecord === nodeRecord) {
+    closeTerminalNodeMenu();
+  }
+
   if (nodeRecord.isMaximized) {
     setNodeMaximized(nodeRecord, false);
   }
@@ -6851,6 +6958,14 @@ function handleWindowClick(event) {
     closeCanvasActionsMenu();
   }
 
+  if (
+    activeTerminalNodeMenuRecord !== null
+    && activeTerminalNodeMenuRecord.menuRoot instanceof HTMLElement
+    && !activeTerminalNodeMenuRecord.menuRoot.contains(event.target)
+  ) {
+    closeTerminalNodeMenu();
+  }
+
   if (!isCanvasSwitcherMenuOpen || !(canvasSwitcherSection instanceof HTMLElement)) {
     return;
   }
@@ -6878,9 +6993,10 @@ function handleWindowKeyDown(event) {
   }
 
   if (event.key === "Escape" && activeTitleEditorRecord !== null) {
+    const titleEditorRecord = activeTitleEditorRecord;
     event.preventDefault();
-    cancelNodeTitleEditing(activeTitleEditorRecord);
-    activeTitleEditorRecord.titleInput?.blur();
+    cancelNodeTitleEditing(titleEditorRecord);
+    titleEditorRecord.titleInput?.blur();
     return;
   }
 
@@ -6894,6 +7010,12 @@ function handleWindowKeyDown(event) {
     if (isCanvasActionsMenuOpen) {
       event.preventDefault();
       closeCanvasActionsMenu({ restoreFocus: true });
+      return;
+    }
+
+    if (activeTerminalNodeMenuRecord !== null) {
+      event.preventDefault();
+      closeTerminalNodeMenu({ restoreFocus: true });
       return;
     }
 
@@ -7087,7 +7209,7 @@ if (window.noteCanvas.isSmokeTest) {
       exitedNodeTitles: activeNodes.filter((nodeRecord) => nodeRecord.isExited).map((nodeRecord) => nodeRecord.titleText),
       nodeScreenPositions,
       maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
-      firstTerminalText: activeNodes[0]?.element?.textContent || "",
+      firstTerminalText: activeNodes[0]?.terminalMount?.textContent || "",
       visibleNodeCount: [...nodesLayer.querySelectorAll(".terminal-node")].filter((nodeElement) => {
         if (!(nodeElement instanceof HTMLElement)) {
           return false;
@@ -7196,6 +7318,11 @@ if (window.noteCanvas.isSmokeTest) {
 
   window.__canvasLearningDebug = {
     createTerminalAt: async (x, y) => {
+      if (getActiveCanvas() === null) {
+        createCanvas();
+        await waitForAnimationFrame();
+      }
+
       await createTerminalNode(toWorldPoint({ x, y }));
       await waitForAnimationFrame();
       return getCanvasSnapshot();

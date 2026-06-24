@@ -18,18 +18,42 @@ test("live terminal headers show backend session subtitles", () => {
   assert.match(renderer, /tmux: \$\{nodeRecord\.tmuxSessionName \?\? `termcanvas-\$\{nodeRecord\.sessionKey\}`\}/);
   assert.match(renderer, /pty: \$\{nodeRecord\.sessionKey\}/);
   assert.match(renderer, /function getNodeSessionIdentifier\(nodeRecord\)/);
-  assert.match(renderer, /copySessionButton\.textContent = "ID"/);
+  assert.match(renderer, /copySessionButton\.className = "terminal-node-menu-item terminal-node-copy-session";/);
+  assert.match(renderer, /copySessionButton\.textContent = "Copy session ID"/);
 });
 
-test("terminal title editing only starts on double click", () => {
+test("terminal title editing starts from the rename button, not header double click", () => {
   const renderer = readRenderer();
 
   assert.match(renderer, /function setNodeTitleEditing\(nodeRecord, isEditing\) \{[\s\S]*titleInput\.readOnly = !isEditing;/);
   assert.match(renderer, /function startNodeTitleEditing\(nodeRecord\) \{/);
   assert.match(renderer, /titleInput\.readOnly = true;/);
   assert.match(renderer, /titleInput\.tabIndex = -1;/);
-  assert.match(renderer, /elements\.titleGroup\.addEventListener\("dblclick", \(event\) => \{[\s\S]*startNodeTitleEditing\(nodeRecord\);/);
-  assert.match(renderer, /elements\.titleInput\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*if \(!nodeRecord\.isTitleEditing\) \{[\s\S]*event\.preventDefault\(\);/);
+  assert.match(renderer, /renameButton\.className = "terminal-node-control terminal-node-rename";/);
+  assert.match(renderer, /elements\.renameButton\.addEventListener\("click", \(event\) => \{[\s\S]*startNodeTitleEditing\(nodeRecord\);/);
+  assert.doesNotMatch(renderer, /elements\.titleGroup\.addEventListener\("dblclick"/);
+  assert.match(renderer, /elements\.dragArea\.addEventListener\("dblclick", \(event\) => \{[\s\S]*setNodeMaximized\(nodeRecord, !nodeRecord\.isMaximized\);/);
+  assert.match(renderer, /elements\.titleInput\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*if \(!nodeRecord\.isTitleEditing\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*return;[\s\S]*event\.stopPropagation\(\);/);
+});
+
+test("terminal close and copy actions live behind the node action menu", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /let activeTerminalNodeMenuRecord = null;/);
+  assert.match(renderer, /function toggleTerminalNodeMenu\(nodeRecord\) \{/);
+  assert.match(renderer, /menuButton\.className = "terminal-node-control terminal-node-menu-button";/);
+  assert.match(renderer, /menuPopover\.className = "terminal-node-menu-popover";/);
+  assert.match(renderer, /menuPopover\.append\(copySessionButton, closeButton\);/);
+  assert.match(renderer, /actions\.append\(renameButton, maximizeButton, menuRoot\);/);
+  assert.doesNotMatch(renderer, /actions\.append\(status, maximizeButton, closeButton\);/);
+});
+
+test("maximized terminal headers expose a clear exit fullscreen action", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /terminal-node-maximize-label">Exit fullscreen<\/span>/);
+  assert.match(renderer, /nodeRecord\.maximizeButton\.title = isMaximized \? "Exit fullscreen" : "Maximize terminal";/);
+  assert.match(renderer, /isMaximized \? `Exit fullscreen for \$\{nodeRecord\.titleText\}` : `Maximize \$\{nodeRecord\.titleText\}`/);
 });
 
 test("terminal strip items attach reorder handling for active canvas terminals", () => {

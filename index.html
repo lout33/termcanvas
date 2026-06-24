@@ -15,7 +15,7 @@
           <img class="canvas-brand-mark" src="./assets/branding/termcanvas-mark.svg" alt="" />
         </div>
 
-        <button class="canvas-topbar-action app-rail-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">+</button>
+        <button class="app-rail-action" id="create-canvas-button" type="button" aria-label="New canvas" title="New canvas">+</button>
 
         <section class="canvas-switcher-rail-section" id="canvas-switcher-section" aria-label="Canvas switcher section">
           <button class="canvas-strip-overflow-button" id="canvas-strip-prev-button" type="button" aria-label="Show previous canvases" title="Show previous canvases" hidden>&lt;</button>
@@ -27,7 +27,7 @@
 
         <div class="app-rail-spacer" aria-hidden="true"></div>
 
-        <div class="canvas-topbar-file-actions app-rail-file-actions" aria-label="Canvas file actions">
+        <div class="app-rail-file-actions" aria-label="Canvas file actions">
           <button class="canvas-list-action sidebar-section-action" id="export-canvas-button" type="button" aria-label="Export canvas" title="Export canvas">
             <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
               <path d="M8 10.75V3.5"></path>
@@ -123,24 +123,15 @@
       </aside>
 
       <main class="workspace-shell">
-        <div class="canvas-topbar" id="canvas-topbar">
-          <div class="canvas-topbar-shell">
-            <div class="canvas-topbar-primary-row">
-              <div class="canvas-topbar-leading">
-                <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Open drawer with Command+B">
-                  <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
-                </button>
-
-                <div class="canvas-breadcrumb" id="canvas-breadcrumb">
-                  <span class="canvas-breadcrumb-project">TermCanvas</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <header class="canvas-panel-header" id="canvas-panel-header" aria-label="Canvas overview">
+          <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Open drawer with Command+B">
+            <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
+          </button>
+
           <div class="canvas-panel-context">
+            <div class="canvas-breadcrumb" id="canvas-breadcrumb">
+              <span class="canvas-breadcrumb-project">TermCanvas</span>
+            </div>
             <div class="canvas-panel-title" id="canvas-panel-title">No canvas</div>
             <div class="canvas-panel-pills" id="canvas-panel-pills" aria-label="Canvas status"></div>
           </div>

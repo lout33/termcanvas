@@ -42,10 +42,10 @@ test("panel edge controls keep toggle and resize handles separate", () => {
 
   assert.match(
     html,
-    /<div class="canvas-topbar-leading">[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-breadcrumb"/i
+    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-breadcrumb"/i
   );
 
-  // The brand mark now lives in the far-left project rail, not the topbar.
+  // The brand mark lives in the far-left project rail, not the merged header.
   assert.match(
     html,
     /<aside class="app-rail"[\s\S]*?<div class="canvas-brand app-rail-brand"/i
@@ -94,20 +94,23 @@ test("side panels are docked outside the board so they never cover the canvas", 
   assert.doesNotMatch(boardHtml, /id="file-inspector"/i);
 });
 
-test("canvas header replaces the cramped topbar terminal strip", () => {
+test("canvas header merges global context and canvas status into one row", () => {
   const html = readIndexHtml();
 
   assert.match(
     html,
-    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
+    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-breadcrumb" id="canvas-breadcrumb">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
   );
 
+  assert.doesNotMatch(html, /id="canvas-topbar"/i);
+  assert.doesNotMatch(html, /canvas-topbar-shell/i);
+  assert.doesNotMatch(html, /canvas-topbar-primary-row/i);
   assert.doesNotMatch(html, /terminal-strip-topbar-section/i);
   assert.doesNotMatch(html, /id="terminal-strip-section"/i);
   assert.doesNotMatch(html, /terminal-strip-heading/i);
 });
 
-test("board navigation exposes visible icon controls and a labeled minimap", () => {
+test("board navigation exposes visible icon controls and keeps the minimap shell disabled", () => {
   const html = readIndexHtml();
 
   assert.match(
@@ -116,7 +119,7 @@ test("board navigation exposes visible icon controls and a labeled minimap", () 
   );
   assert.match(
     html,
-    /<div class="board-minimap" id="board-minimap"[\s\S]*?<div class="board-minimap-label">map<\/div>[\s\S]*?<div class="board-minimap-canvas" id="board-minimap-canvas"/i
+    /<div class="board-minimap" id="board-minimap" aria-hidden="true" hidden>[\s\S]*?<div class="board-minimap-canvas" id="board-minimap-canvas"/i
   );
   assert.doesNotMatch(html, /board-nav-label-button/i);
 });
