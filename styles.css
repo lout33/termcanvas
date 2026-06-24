@@ -293,14 +293,6 @@ button {
   flex: 1 1 auto;
 }
 
-.app-rail-file-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
-  width: 100%;
-}
-
 .canvas-breadcrumb {
   display: inline-flex;
   align-items: center;

@@ -1452,27 +1452,44 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: switching to the second canvas did not clear the first canvas preview. Snapshot: ${JSON.stringify(switchedSecondCanvasSnapshot)}`);
     }
 
-    logStep("imported canvas starts with null workspace");
+    logStep("imported canvas restores exported workspace");
     await window.webContents.executeJavaScript(`window.__canvasLearningDebug.switchCanvas(${JSON.stringify(workspaceOwnerCanvasIndex)})`);
-    await window.webContents.executeJavaScript("window.__canvasLearningDebug.exportActiveCanvasData()");
-    const importedWorkspaceCanvasResult = await window.webContents.executeJavaScript("window.__canvasLearningDebug.importLastExportedCanvasData()");
-    const importedCanvasName = importedWorkspaceCanvasResult.snapshot.activeCanvasName;
-    const importedCanvasOwnership = getCanvasWorkspaceOwnership(importedWorkspaceCanvasResult.snapshot, importedCanvasName);
+    const exportedWorkspaceCanvas = await window.webContents.executeJavaScript("window.__canvasLearningDebug.exportActiveCanvasData()");
 
     if (
-      importedWorkspaceCanvasResult.snapshot.workspaceRootPath !== null
-      || importedWorkspaceCanvasResult.snapshot.workspaceSelectedFilePath !== null
-      || importedWorkspaceCanvasResult.snapshot.fileInspectorVisible !== false
-      || importedCanvasOwnership?.workspaceRootPath !== null
-      || importedCanvasOwnership?.workspacePreviewRelativePath !== null
+      exportedWorkspaceCanvas.canvas?.workspace?.rootPath !== canonicalSmokeWorkspacePath
+      || exportedWorkspaceCanvas.canvas?.workspace?.previewRelativePath !== "agent-output/reports/notes.md"
     ) {
-      throw new Error(`Smoke test failed: imported canvas auto-bound a workspace instead of starting empty. Snapshot: ${JSON.stringify(importedWorkspaceCanvasResult.snapshot)}`);
+      throw new Error(`Smoke test failed: canvas export did not include workspace ownership. Payload: ${JSON.stringify(exportedWorkspaceCanvas)}`);
+    }
+
+    const importedWorkspaceCanvasResult = await window.webContents.executeJavaScript("window.__canvasLearningDebug.importLastExportedCanvasData()");
+    const importedCanvasName = importedWorkspaceCanvasResult.snapshot.activeCanvasName;
+    const importedWorkspaceCanvasSnapshot = await waitForSnapshot(
+      "window.__canvasLearningDebug.getSnapshot()",
+      (snapshot) => (
+        snapshot.activeCanvasName === importedCanvasName
+        && snapshot.workspaceRootPath === canonicalSmokeWorkspacePath
+        && snapshot.workspaceSelectedFilePath === "agent-output/reports/notes.md"
+      ),
+      4000
+    );
+    const importedCanvasOwnership = getCanvasWorkspaceOwnership(importedWorkspaceCanvasSnapshot, importedCanvasName);
+
+    if (
+      importedWorkspaceCanvasSnapshot.workspaceRootPath !== canonicalSmokeWorkspacePath
+      || importedWorkspaceCanvasSnapshot.workspaceSelectedFilePath !== "agent-output/reports/notes.md"
+      || importedWorkspaceCanvasSnapshot.fileInspectorVisible !== true
+      || importedCanvasOwnership?.workspaceRootPath !== canonicalSmokeWorkspacePath
+      || importedCanvasOwnership?.workspacePreviewRelativePath !== "agent-output/reports/notes.md"
+    ) {
+      throw new Error(`Smoke test failed: imported canvas did not restore exported workspace ownership. Snapshot: ${JSON.stringify(importedWorkspaceCanvasSnapshot)}`);
     }
 
     const importedCanvasDefaultCwd = await window.webContents.executeJavaScript("window.__canvasLearningDebug.getDefaultTerminalWorkingDirectory()");
 
-    if (importedCanvasDefaultCwd !== null) {
-      throw new Error(`Smoke test failed: imported canvas default cwd should be null. Value: ${JSON.stringify(importedCanvasDefaultCwd)}`);
+    if (importedCanvasDefaultCwd !== canonicalSmokeWorkspacePath) {
+      throw new Error(`Smoke test failed: imported canvas default cwd should be the exported workspace. Value: ${JSON.stringify(importedCanvasDefaultCwd)}`);
     }
 
     console.log("Smoke test passed.");

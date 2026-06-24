@@ -117,8 +117,9 @@ const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
 const Unicode11AddonConstructor = window.Unicode11Addon?.Unicode11Addon;
 const DRAG_THRESHOLD = 3;
-const CANVAS_EXPORT_VERSION = 2;
+const CANVAS_EXPORT_VERSION = 3;
 const LEGACY_CANVAS_EXPORT_VERSION = 1;
+const SUPPORTED_CANVAS_EXPORT_VERSIONS = [LEGACY_CANVAS_EXPORT_VERSION, 2, CANVAS_EXPORT_VERSION];
 const MAX_CANVAS_NAME_LENGTH = 80;
 const MAX_TERMINAL_TITLE_LENGTH = 80;
 const WHEEL_LINE_DELTA_PX = 16;
@@ -368,6 +369,16 @@ function normalizeManagedAgentRole(value, isManager = false) {
   }
 
   return isManager ? "commander" : "agent";
+}
+
+function normalizeOptionalString(value) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeImportedSessionKey(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]+$/u.test(value)
+    ? value
+    : null;
 }
 
 function getManagedAgentRoleLabel(role) {
@@ -1585,7 +1596,7 @@ function toggleSidebar() {
 }
 
 function setCanvasActionsMenuOpen(nextValue, options = {}) {
-  isCanvasActionsMenuOpen = nextValue === true && getActiveCanvas() !== null;
+  isCanvasActionsMenuOpen = nextValue === true;
 
   if (canvasActionsMenu instanceof HTMLElement) {
     canvasActionsMenu.hidden = !isCanvasActionsMenuOpen;
@@ -2006,7 +2017,7 @@ function renderCanvasOverviewHeader() {
   }
 
   if (canvasActionsMenuButton instanceof HTMLButtonElement) {
-    canvasActionsMenuButton.disabled = activeCanvas === null;
+    canvasActionsMenuButton.disabled = false;
     canvasActionsMenuButton.setAttribute(
       "aria-label",
       activeCanvas === null ? "Canvas actions" : `Canvas actions for ${activeCanvas.name}`
@@ -2014,8 +2025,13 @@ function renderCanvasOverviewHeader() {
     canvasActionsMenuButton.title = activeCanvas === null ? "Canvas actions" : `${activeCanvas.name} actions`;
   }
 
-  if (activeCanvas === null) {
-    closeCanvasActionsMenu();
+  if (exportCanvasButton instanceof HTMLButtonElement) {
+    exportCanvasButton.disabled = activeCanvas === null;
+    exportCanvasButton.setAttribute(
+      "aria-label",
+      activeCanvas === null ? "Export canvas" : `Export ${activeCanvas.name}`
+    );
+    exportCanvasButton.title = activeCanvas === null ? "Export canvas" : `Export ${activeCanvas.name}`;
   }
 
   if (closeActiveCanvasButton instanceof HTMLButtonElement) {
@@ -5135,6 +5151,37 @@ function sanitizeCanvasExportName(canvasName) {
   return safeName.length > 0 ? safeName : fallbackName;
 }
 
+function getCanvasActiveSessionKey(canvasRecord) {
+  return activeNodeRecord?.canvas?.id === canvasRecord.id
+    ? activeNodeRecord.sessionKey
+    : null;
+}
+
+function serializeTerminalNodeRecord(nodeRecord) {
+  return {
+    x: nodeRecord.x,
+    y: nodeRecord.y,
+    width: nodeRecord.width,
+    height: nodeRecord.height,
+    cwd: nodeRecord.cwd,
+    shellName: nodeRecord.shellName,
+    title: nodeRecord.titleText,
+    isMaximized: nodeRecord.isMaximized,
+    sessionKey: nodeRecord.sessionKey,
+    tmuxSessionName: nodeRecord.tmuxSessionName,
+    managedAgentName: nodeRecord.managedAgentName,
+    managedAgentRole: nodeRecord.managedAgentRole,
+    managedProjectTag: nodeRecord.managedProjectTag,
+    managedParentAgent: nodeRecord.managedParentAgent,
+    managedCommanderAgent: nodeRecord.managedCommanderAgent,
+    managedDepth: nodeRecord.managedDepth,
+    isManager: nodeRecord.isManager,
+    isExited: nodeRecord.isExited,
+    exitCode: nodeRecord.exitCode,
+    exitSignal: nodeRecord.exitSignal
+  };
+}
+
 function serializeCanvasRecord(canvasRecord) {
   return {
     version: CANVAS_EXPORT_VERSION,
@@ -5147,16 +5194,11 @@ function serializeCanvasRecord(canvasRecord) {
         y: canvasRecord.viewportOffset.y
       },
       viewportScale: canvasRecord.viewportScale,
-      terminalNodes: canvasRecord.nodes.map((nodeRecord) => ({
-        x: nodeRecord.x,
-        y: nodeRecord.y,
-        width: nodeRecord.width,
-        height: nodeRecord.height,
-        cwd: nodeRecord.cwd,
-        shellName: nodeRecord.shellName,
-        title: nodeRecord.titleText,
-        isMaximized: nodeRecord.isMaximized
-      }))
+      workspace: canvasRecord.workspace ?? null,
+      agentProjectTag: canvasRecord.agentProjectTag,
+      managerAgentName: canvasRecord.managerAgentName,
+      activeSessionKey: getCanvasActiveSessionKey(canvasRecord),
+      terminalNodes: canvasRecord.nodes.map(serializeTerminalNodeRecord)
     }
   };
 }
@@ -5172,24 +5214,8 @@ function serializeCanvasSessionRecord(canvasRecord) {
     workspace: canvasRecord.workspace ?? null,
     agentProjectTag: canvasRecord.agentProjectTag,
     managerAgentName: canvasRecord.managerAgentName,
-    activeSessionKey: activeNodeRecord?.canvas?.id === canvasRecord.id
-      ? activeNodeRecord.sessionKey
-      : null,
-    terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
-      ...exportedCanvas.terminalNodes[index],
-      sessionKey: nodeRecord.sessionKey,
-      managedAgentName: nodeRecord.managedAgentName,
-      managedAgentRole: nodeRecord.managedAgentRole,
-      managedProjectTag: nodeRecord.managedProjectTag,
-      managedParentAgent: nodeRecord.managedParentAgent,
-      managedCommanderAgent: nodeRecord.managedCommanderAgent,
-      managedDepth: nodeRecord.managedDepth,
-      tmuxSessionName: nodeRecord.tmuxSessionName,
-      isManager: nodeRecord.isManager,
-      isExited: nodeRecord.isExited,
-      exitCode: nodeRecord.exitCode,
-      exitSignal: nodeRecord.exitSignal
-    }))
+    activeSessionKey: getCanvasActiveSessionKey(canvasRecord),
+    terminalNodes: exportedCanvas.terminalNodes
   };
 }
 
@@ -5494,6 +5520,58 @@ async function initializeApp() {
   }
 }
 
+function parseImportedCanvasWorkspace(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const rootPath = normalizeOptionalString(value?.rootPath);
+
+  if (rootPath === null) {
+    return null;
+  }
+
+  return {
+    rootPath,
+    rootName: normalizeOptionalString(value?.rootName) ?? rootPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? rootPath,
+    expandedDirectoryPaths: Array.isArray(value?.expandedDirectoryPaths)
+      ? value.expandedDirectoryPaths.filter((directoryPath) => typeof directoryPath === "string" && directoryPath.length > 0)
+      : [],
+    previewRelativePath: normalizeOptionalString(value?.previewRelativePath)
+  };
+}
+
+function parseImportedTerminalNode(nodeRecord) {
+  const sessionKey = normalizeImportedSessionKey(nodeRecord?.sessionKey);
+  const managedAgentName = normalizeManagedAgentName(nodeRecord?.managedAgentName);
+  const isManager = nodeRecord?.isManager === true;
+
+  return {
+    x: Number.isFinite(nodeRecord?.x) ? nodeRecord.x : 0,
+    y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0,
+    width: clampNodeDimension(nodeRecord?.width, MIN_NODE_WIDTH, DEFAULT_NODE_WIDTH),
+    height: clampNodeDimension(nodeRecord?.height, MIN_NODE_HEIGHT, DEFAULT_NODE_HEIGHT),
+    cwd: typeof nodeRecord?.cwd === "string" ? nodeRecord.cwd : null,
+    shellName: normalizeOptionalString(nodeRecord?.shellName),
+    title: typeof nodeRecord?.title === "string" ? nodeRecord.title : "",
+    isMaximized: nodeRecord?.isMaximized === true,
+    sessionKey,
+    tmuxSessionName: normalizeOptionalString(nodeRecord?.tmuxSessionName),
+    managedAgentName,
+    managedAgentRole: managedAgentName === null
+      ? null
+      : normalizeManagedAgentRole(nodeRecord?.managedAgentRole, isManager),
+    managedProjectTag: normalizeOptionalString(nodeRecord?.managedProjectTag),
+    managedParentAgent: normalizeManagedAgentName(nodeRecord?.managedParentAgent),
+    managedCommanderAgent: normalizeManagedAgentName(nodeRecord?.managedCommanderAgent),
+    managedDepth: Number.isInteger(nodeRecord?.managedDepth) ? nodeRecord.managedDepth : null,
+    isManager,
+    isExited: nodeRecord?.isExited === true,
+    exitCode: Number.isInteger(nodeRecord?.exitCode) ? nodeRecord.exitCode : null,
+    exitSignal: normalizeOptionalString(nodeRecord?.exitSignal)
+  };
+}
+
 function parseImportedCanvas(rawContents) {
   const parsed = JSON.parse(rawContents);
   const canvas = parsed?.canvas;
@@ -5501,7 +5579,7 @@ function parseImportedCanvas(rawContents) {
   const viewportScale = canvas?.viewportScale;
   const terminalNodes = Array.isArray(canvas?.terminalNodes) ? canvas.terminalNodes : null;
 
-  if (![LEGACY_CANVAS_EXPORT_VERSION, CANVAS_EXPORT_VERSION].includes(parsed?.version) || typeof canvas?.name !== "string" || terminalNodes === null) {
+  if (!SUPPORTED_CANVAS_EXPORT_VERSIONS.includes(parsed?.version) || typeof canvas?.name !== "string" || terminalNodes === null) {
     throw new Error("Invalid canvas file format.");
   }
 
@@ -5512,15 +5590,11 @@ function parseImportedCanvas(rawContents) {
       y: Number.isFinite(viewportOffset?.y) ? viewportOffset.y : 0
     },
     viewportScale: roundCanvasScale(Number.isFinite(viewportScale) ? viewportScale : 1),
-    terminalNodes: terminalNodes.map((nodeRecord) => ({
-      x: Number.isFinite(nodeRecord?.x) ? nodeRecord.x : 0,
-      y: Number.isFinite(nodeRecord?.y) ? nodeRecord.y : 0,
-      width: clampNodeDimension(nodeRecord?.width, MIN_NODE_WIDTH, DEFAULT_NODE_WIDTH),
-      height: clampNodeDimension(nodeRecord?.height, MIN_NODE_HEIGHT, DEFAULT_NODE_HEIGHT),
-      cwd: typeof nodeRecord?.cwd === "string" ? nodeRecord.cwd : null,
-      title: typeof nodeRecord?.title === "string" ? nodeRecord.title : "",
-      isMaximized: nodeRecord?.isMaximized === true
-    }))
+    workspace: parseImportedCanvasWorkspace(canvas.workspace),
+    agentProjectTag: normalizeOptionalString(canvas.agentProjectTag),
+    managerAgentName: normalizeManagedAgentName(canvas.managerAgentName),
+    activeSessionKey: normalizeImportedSessionKey(canvas.activeSessionKey),
+    terminalNodes: terminalNodes.map(parseImportedTerminalNode)
   };
 }
 
@@ -5596,7 +5670,10 @@ async function importCanvasFromData(importedCanvas) {
   const importedCanvasRecord = createCanvasRecord({
     name: importedCanvas.name,
     viewportOffset: importedCanvas.viewportOffset,
-    viewportScale: importedCanvas.viewportScale
+    viewportScale: importedCanvas.viewportScale,
+    workspace: importedCanvas.workspace ?? null,
+    agentProjectTag: importedCanvas.agentProjectTag ?? null,
+    managerAgentName: importedCanvas.managerAgentName ?? null
   });
   const createdNodes = [];
 
@@ -5610,8 +5687,22 @@ async function importCanvasFromData(importedCanvas) {
         width: nodeRecord.width,
         height: nodeRecord.height,
         cwd: nodeRecord.cwd,
+        shellName: nodeRecord.shellName,
         title: nodeRecord.title,
-        isMaximized: nodeRecord.isMaximized
+        isMaximized: nodeRecord.isMaximized,
+        isExited: nodeRecord.isExited,
+        exitCode: nodeRecord.exitCode,
+        exitSignal: nodeRecord.exitSignal,
+        sessionKey: nodeRecord.sessionKey,
+        tmuxSessionName: nodeRecord.tmuxSessionName,
+        managedAgentName: nodeRecord.managedAgentName,
+        managedAgentRole: nodeRecord.managedAgentRole,
+        managedProjectTag: nodeRecord.managedProjectTag,
+        managedParentAgent: nodeRecord.managedParentAgent,
+        managedCommanderAgent: nodeRecord.managedCommanderAgent,
+        managedDepth: nodeRecord.managedDepth,
+        isManager: nodeRecord.isManager,
+        shouldFocus: false
       });
 
       if (createdNode !== undefined) {
@@ -5619,6 +5710,20 @@ async function importCanvasFromData(importedCanvas) {
       }
     }
 
+    const activeImportedNode = importedCanvas.activeSessionKey !== null
+      ? createdNodes.find((nodeRecord) => nodeRecord.sessionKey === importedCanvas.activeSessionKey) ?? null
+      : null;
+    const fallbackImportedNode = activeImportedNode
+      ?? createdNodes.find((nodeRecord) => nodeRecord.isMaximized)
+      ?? createdNodes.find((nodeRecord) => !nodeRecord.isExited)
+      ?? createdNodes[0]
+      ?? null;
+
+    if (fallbackImportedNode !== null) {
+      setActiveNode(fallbackImportedNode);
+    }
+
+    scheduleCanvasAgentSync();
     return importedCanvasRecord;
   } catch (error) {
     await Promise.all(createdNodes.map((nodeRecord) => destroyTerminalNode(nodeRecord)));
@@ -7855,12 +7960,14 @@ boardWelcomeOpenButton?.addEventListener("click", () => {
 });
 
 exportCanvasButton?.addEventListener("click", () => {
+  closeCanvasActionsMenu({ restoreFocus: true });
   void exportActiveCanvas().catch((error) => {
     console.error(error);
   });
 });
 
 importCanvasButton?.addEventListener("click", () => {
+  closeCanvasActionsMenu({ restoreFocus: true });
   void importCanvas().catch((error) => {
     console.error(error);
   });

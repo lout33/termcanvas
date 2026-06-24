@@ -67,15 +67,37 @@ test("canvas close is guarded by the header menu instead of the vertical rail", 
   const renderer = readRenderer();
 
   assert.match(renderer, /const canvasActionsMenuButton = document\.getElementById\("canvas-actions-menu-button"\);/);
+  assert.match(renderer, /const exportCanvasButton = document\.getElementById\("export-canvas-button"\);/);
+  assert.match(renderer, /const importCanvasButton = document\.getElementById\("import-canvas-button"\);/);
   assert.match(renderer, /const closeActiveCanvasButton = document\.getElementById\("close-active-canvas-button"\);/);
   assert.match(renderer, /function toggleCanvasActionsMenu\(\) \{/);
   assert.match(renderer, /function closeActiveCanvasWithConfirmation\(\) \{/);
   assert.match(renderer, /confirmWorkspaceAction\([\s\S]*"Close canvas"[\s\S]*"Close canvas"[\s\S]*\)/);
+  assert.match(renderer, /exportCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\{ restoreFocus: true \}\);[\s\S]*exportActiveCanvas\(\)/);
+  assert.match(renderer, /importCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\{ restoreFocus: true \}\);[\s\S]*importCanvas\(\)/);
   assert.match(renderer, /canvasActionsMenuButton\?\.addEventListener\("click", \(\) => \{[\s\S]*toggleCanvasActionsMenu\(\);[\s\S]*\}\);/);
   assert.match(renderer, /closeActiveCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\);[\s\S]*closeActiveCanvasWithConfirmation\(\)/);
   assert.match(renderer, /closeActiveCanvasButton\?\.addEventListener\("click", \(\) => \{/);
   assert.doesNotMatch(renderer, /canvas-strip-delete/);
   assert.doesNotMatch(renderer, /void deleteCanvas\(canvasRecord\.id\);/);
+});
+
+test("canvas export preserves terminal session and delegation metadata", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const CANVAS_EXPORT_VERSION = 3;/);
+  assert.match(renderer, /const SUPPORTED_CANVAS_EXPORT_VERSIONS = \[LEGACY_CANVAS_EXPORT_VERSION, 2, CANVAS_EXPORT_VERSION\];/);
+  assert.match(renderer, /function serializeTerminalNodeRecord\(nodeRecord\) \{/);
+  assert.match(renderer, /sessionKey: nodeRecord\.sessionKey/);
+  assert.match(renderer, /tmuxSessionName: nodeRecord\.tmuxSessionName/);
+  assert.match(renderer, /managedParentAgent: nodeRecord\.managedParentAgent/);
+  assert.match(renderer, /managedCommanderAgent: nodeRecord\.managedCommanderAgent/);
+  assert.match(renderer, /managedDepth: nodeRecord\.managedDepth/);
+  assert.match(renderer, /workspace: canvasRecord\.workspace \?\? null/);
+  assert.match(renderer, /activeSessionKey: getCanvasActiveSessionKey\(canvasRecord\)/);
+  assert.match(renderer, /function parseImportedTerminalNode\(nodeRecord\) \{/);
+  assert.match(renderer, /tmuxSessionName: normalizeOptionalString\(nodeRecord\?\.tmuxSessionName\)/);
+  assert.match(renderer, /managedParentAgent: normalizeManagedAgentName\(nodeRecord\?\.managedParentAgent\)/);
 });
 
 test("managed agent snapshots reconcile managers before workers", () => {

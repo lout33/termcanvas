@@ -172,11 +172,11 @@ test("header and terminal typography gain a calmer hierarchy and tighter spacing
 test("vertical rail and merged canvas header keep navigation out of extra topbar rows", () => {
   const styles = readStyles();
 
-  // Far-left vertical project rail owns the canvas switcher + file actions.
+  // Far-left vertical project rail owns navigation; the merged header menu owns file actions.
   assert.match(styles, /\.app-rail\s*\{[\s\S]*flex-direction:\s*column;/);
   assert.match(styles, /\.canvas-switcher-rail-section\s*\{[\s\S]*flex-direction:\s*column;/);
   assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-main::before\s*\{[\s\S]*content:\s*attr\(data-rail-label\);/);
-  assert.match(styles, /\.app-rail-file-actions\s*\{[\s\S]*flex-direction:\s*column;/);
+  assert.doesNotMatch(styles, /\.app-rail-file-actions\s*\{/);
   // One merged header row owns the drawer toggle, canvas identity, status, and menu.
   assert.doesNotMatch(styles, /\.canvas-topbar\s*\{/);
   assert.doesNotMatch(styles, /\.canvas-topbar-shell\s*\{/);

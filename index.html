@@ -26,24 +26,6 @@
         </section>
 
         <div class="app-rail-spacer" aria-hidden="true"></div>
-
-        <div class="app-rail-file-actions" aria-label="Canvas file actions">
-          <button class="canvas-list-action sidebar-section-action" id="export-canvas-button" type="button" aria-label="Export canvas" title="Export canvas">
-            <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 10.75V3.5"></path>
-              <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
-              <path d="M3.25 12.5h9.5"></path>
-            </svg>
-          </button>
-
-          <button class="canvas-list-action sidebar-section-action" id="import-canvas-button" type="button" aria-label="Import canvas" title="Import canvas">
-            <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 3.5v7.25"></path>
-              <path d="M5.25 8 8 10.75 10.75 8"></path>
-              <path d="M3.25 12.5h9.5"></path>
-            </svg>
-          </button>
-        </div>
       </aside>
 
       <aside class="canvas-sidebar" aria-label="Canvas manager">
@@ -147,6 +129,24 @@
               </button>
 
               <div class="canvas-panel-menu-popover" id="canvas-actions-menu" role="menu" aria-label="Canvas actions" hidden>
+                <button class="canvas-panel-menu-item" id="export-canvas-button" type="button" role="menuitem" aria-label="Export canvas" title="Export canvas" disabled>
+                  <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 10.75V3.5"></path>
+                    <path d="M5.25 6.25 8 3.5l2.75 2.75"></path>
+                    <path d="M3.25 12.5h9.5"></path>
+                  </svg>
+                  <span>Export canvas</span>
+                </button>
+
+                <button class="canvas-panel-menu-item" id="import-canvas-button" type="button" role="menuitem" aria-label="Import canvas" title="Import canvas">
+                  <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 3.5v7.25"></path>
+                    <path d="M5.25 8 8 10.75 10.75 8"></path>
+                    <path d="M3.25 12.5h9.5"></path>
+                  </svg>
+                  <span>Import canvas</span>
+                </button>
+
                 <button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button" type="button" role="menuitem" aria-label="Close current canvas" title="Close current canvas" disabled>
                   <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
                     <path d="M3.75 4.5h8.5"></path>
