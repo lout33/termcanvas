@@ -6582,7 +6582,7 @@ async function createTerminalNode(options) {
     isTitleEditing: false,
     shellName: typeof options.shellName === "string" && options.shellName.length > 0 ? options.shellName : "Shell",
     backend: "unknown",
-    tmuxSessionName: null,
+    tmuxSessionName: normalizeOptionalString(options.tmuxSessionName),
     managedAgentName: normalizeManagedAgentName(options.managedAgentName),
     managedAgentRole: normalizeManagedAgentName(options.managedAgentName) === null
       ? null

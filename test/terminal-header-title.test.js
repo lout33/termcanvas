@@ -112,6 +112,14 @@ test("managed agent snapshots reconcile managers before workers", () => {
   assert.match(renderer, /const sessions = sortManagedAgentSnapshots\(Array\.isArray\(snapshot\?\.sessions\) \? snapshot\.sessions : \[\]\);/);
 });
 
+test("managed agent nodes preserve agentmux tmux sessions before first bind", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /tmuxSessionName: normalizeOptionalString\(options\.tmuxSessionName\),/);
+  assert.match(renderer, /tmuxSessionName: agentSnapshot\.tmux_session,/);
+  assert.match(renderer, /tmuxSessionName: nodeRecord\.tmuxSessionName/);
+});
+
 test("managed agent labels use commander and worker roles", () => {
   const renderer = readRenderer();
 
