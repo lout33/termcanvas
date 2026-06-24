@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, webContents } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, webContents, Menu } = require("electron");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -15,6 +15,8 @@ const terminalSessions = new Map();
 const activeTerminalShortcutStates = new Map();
 const WORKSPACE_WATCH_DEBOUNCE_MS = 180;
 const APP_SESSION_FILE_NAME = "app-session.json";
+const AGENTMUX_SKILL_NAME = "agentmux";
+const AGENTMUX_SKILL_FILE_NAME = "SKILL.md";
 const TMUX_SESSION_PREFIX = "termcanvas";
 const TERMINAL_COLOR_ENV = Object.freeze({
   TERM: "xterm-256color",
@@ -55,6 +57,157 @@ function ensureNodePtyHelperPermissions() {
 
 function resolveInitialWorkingDirectory() {
   return os.homedir();
+}
+
+function resolveAgentmuxSkillSourcePath() {
+  const candidatePaths = [
+    app.isPackaged === true
+      ? path.join(process.resourcesPath, "agentmux", "skills", AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME)
+      : null,
+    path.join(__dirname, "vendor", "agentmux", "skills", AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME),
+    path.join(__dirname, "skills", AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME)
+  ].filter((candidatePath) => typeof candidatePath === "string");
+
+  return candidatePaths.find((candidatePath) => fs.existsSync(candidatePath)) ?? null;
+}
+
+function resolveAgentSkillRootPath() {
+  const requestedRootPath = typeof process.env.TERMCANVAS_AGENT_SKILL_ROOT === "string" && process.env.TERMCANVAS_AGENT_SKILL_ROOT.trim().length > 0
+    ? process.env.TERMCANVAS_AGENT_SKILL_ROOT.trim()
+    : path.join(os.homedir(), ".agents", "skills");
+
+  return path.resolve(requestedRootPath);
+}
+
+function resolveAgentmuxSkillTargetPath() {
+  return path.join(resolveAgentSkillRootPath(), AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME);
+}
+
+function readUtf8FileIfPresent(filePath) {
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : null;
+  } catch {
+    return null;
+  }
+}
+
+function getAgentmuxSkillStatus() {
+  const sourcePath = resolveAgentmuxSkillSourcePath();
+  const targetPath = resolveAgentmuxSkillTargetPath();
+  const sourceContents = sourcePath === null ? null : readUtf8FileIfPresent(sourcePath);
+  const targetContents = readUtf8FileIfPresent(targetPath);
+
+  return {
+    name: AGENTMUX_SKILL_NAME,
+    available: sourcePath !== null && sourceContents !== null,
+    installed: targetContents !== null,
+    current: sourceContents !== null && targetContents !== null && sourceContents === targetContents,
+    sourcePath,
+    targetPath,
+    targetDirectory: path.dirname(targetPath)
+  };
+}
+
+function installAgentmuxSkill() {
+  const status = getAgentmuxSkillStatus();
+
+  if (status.available !== true || typeof status.sourcePath !== "string") {
+    throw new Error("Bundled agentmux skill is not available in this TermCanvas build.");
+  }
+
+  const sourceContents = fs.readFileSync(status.sourcePath, "utf8");
+  const targetDirectory = path.dirname(status.targetPath);
+  const temporaryPath = path.join(targetDirectory, `${AGENTMUX_SKILL_FILE_NAME}.tmp.${process.pid}.${Date.now()}`);
+
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  fs.writeFileSync(temporaryPath, sourceContents, "utf8");
+  fs.renameSync(temporaryPath, status.targetPath);
+
+  return {
+    ...getAgentmuxSkillStatus(),
+    installedNow: true
+  };
+}
+
+function requestAgentSkillInstallFromFocusedWindow() {
+  const focusedWindow = typeof BrowserWindow.getFocusedWindow === "function"
+    ? BrowserWindow.getFocusedWindow()
+    : null;
+  const targetWindow = focusedWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+
+  if (targetWindow?.webContents != null && typeof targetWindow.webContents.send === "function") {
+    targetWindow.webContents.send("agent-skill:install-requested", getAgentmuxSkillStatus());
+  }
+}
+
+function createApplicationMenu() {
+  if (
+    Menu == null
+    || typeof Menu.buildFromTemplate !== "function"
+    || typeof Menu.setApplicationMenu !== "function"
+  ) {
+    return;
+  }
+
+  const installAgentSkillItem = {
+    label: "Install / Update Agent Skill",
+    click: () => {
+      requestAgentSkillInstallFromFocusedWindow();
+    }
+  };
+  const template = process.platform === "darwin"
+    ? [
+        {
+          label: "TermCanvas",
+          submenu: [
+            { role: "about" },
+            { type: "separator" },
+            installAgentSkillItem,
+            { type: "separator" },
+            { role: "hide" },
+            { role: "hideOthers" },
+            { role: "unhide" },
+            { type: "separator" },
+            { role: "quit" }
+          ]
+        },
+        {
+          label: "Edit",
+          submenu: [
+            { role: "undo" },
+            { role: "redo" },
+            { type: "separator" },
+            { role: "cut" },
+            { role: "copy" },
+            { role: "paste" },
+            { role: "selectAll" }
+          ]
+        }
+      ]
+    : [
+        {
+          label: "File",
+          submenu: [
+            installAgentSkillItem,
+            { type: "separator" },
+            { role: "quit" }
+          ]
+        },
+        {
+          label: "Edit",
+          submenu: [
+            { role: "undo" },
+            { role: "redo" },
+            { type: "separator" },
+            { role: "cut" },
+            { role: "copy" },
+            { role: "paste" },
+            { role: "selectAll" }
+          ]
+        }
+      ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function resolveExistingDirectoryPath(requestedPath) {
@@ -1506,6 +1659,7 @@ async function runSmokeTest(window) {
 
 void app.whenReady().then(() => {
   ensureNodePtyHelperPermissions();
+  createApplicationMenu();
   createMainWindow();
 
   app.on("activate", () => {
@@ -2006,6 +2160,10 @@ ipcMain.handle("canvas-agent:delete", async (_event, payload) => {
   await agentmuxService.deleteAgent(payload?.agentName);
   return { ok: true };
 });
+
+ipcMain.handle("agent-skill:status", () => getAgentmuxSkillStatus());
+
+ipcMain.handle("agent-skill:install", () => installAgentmuxSkill());
 
 ipcMain.handle("canvas:save-file", async (event, payload) => {
   const ownerWindow = BrowserWindow.fromWebContents(event.sender);

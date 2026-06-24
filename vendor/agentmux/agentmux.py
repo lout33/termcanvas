@@ -450,6 +450,13 @@ def session_awareness_commander(project: str, metadata: dict[str, object]) -> st
     return metadata_text(metadata, "commander_agent") or project_manager_name(project)
 
 
+def agentmux_bin_path() -> str:
+    wrapper_path = Path(__file__).resolve().with_name("agentmux")
+    if wrapper_path.exists():
+        return str(wrapper_path)
+    return str(Path(__file__).resolve())
+
+
 def build_session_awareness_env(
     *,
     session_id: str,
@@ -472,11 +479,14 @@ def build_session_awareness_env(
         "AGENTMUX_COMMANDER_AGENT": session_awareness_commander(normalized_project, resolved_metadata),
         "AGENTMUX_WORKDIR": workdir,
         "AGENTMUX_TMUX_SESSION": tmux_session,
+        "AGENTMUX_HOME": str(APP_DIR),
+        "AGENTMUX_BIN": agentmux_bin_path(),
+        "PATH": os.environ.get("PATH", ""),
     }
 
 
 def build_session_awareness_env_args(env_values: dict[str, str]) -> list[str]:
-    return [f"{key}={value}" for key, value in env_values.items()]
+    return [f"{key}={value}" for key, value in env_values.items() if value]
 
 
 def build_interactive_color_env_args() -> list[str]:
@@ -495,8 +505,8 @@ def project_manager_name(project: str) -> str:
 
 
 def agentmux_command_hint() -> str:
-    wrapper_path = Path(__file__).resolve().with_name("agentmux")
-    if wrapper_path.exists():
+    wrapper_path = Path(agentmux_bin_path())
+    if wrapper_path.name == "agentmux":
         return shlex.quote(str(wrapper_path))
     return f"python3 {shlex.quote(str(Path(__file__).resolve()))}"
 

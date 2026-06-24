@@ -20,6 +20,8 @@ extraResources:
     to: "agentmux/agentmux"
   - from: "vendor/agentmux/agentmux.py"
     to: "agentmux/agentmux.py"
+  - from: "vendor/agentmux/skills"
+    to: "agentmux/skills"
 mac:
   category: public.app-category.developer-tools
   icon: assets/branding/termcanvas.icns

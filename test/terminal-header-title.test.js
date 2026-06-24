@@ -69,12 +69,15 @@ test("canvas close is guarded by the header menu instead of the vertical rail", 
   assert.match(renderer, /const canvasActionsMenuButton = document\.getElementById\("canvas-actions-menu-button"\);/);
   assert.match(renderer, /const exportCanvasButton = document\.getElementById\("export-canvas-button"\);/);
   assert.match(renderer, /const importCanvasButton = document\.getElementById\("import-canvas-button"\);/);
+  assert.match(renderer, /const installAgentSkillButton = document\.getElementById\("install-agent-skill-button"\);/);
   assert.match(renderer, /const closeActiveCanvasButton = document\.getElementById\("close-active-canvas-button"\);/);
   assert.match(renderer, /function toggleCanvasActionsMenu\(\) \{/);
   assert.match(renderer, /function closeActiveCanvasWithConfirmation\(\) \{/);
   assert.match(renderer, /confirmWorkspaceAction\([\s\S]*"Close canvas"[\s\S]*"Close canvas"[\s\S]*\)/);
   assert.match(renderer, /exportCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\{ restoreFocus: true \}\);[\s\S]*exportActiveCanvas\(\)/);
   assert.match(renderer, /importCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\{ restoreFocus: true \}\);[\s\S]*importCanvas\(\)/);
+  assert.match(renderer, /installAgentSkillButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\{ restoreFocus: true \}\);[\s\S]*requestAgentSkillInstall\(\)/);
+  assert.match(renderer, /onAgentSkillInstallRequested\?\.\(\(status\) => \{[\s\S]*requestAgentSkillInstall\(\{ status \}\)/);
   assert.match(renderer, /canvasActionsMenuButton\?\.addEventListener\("click", \(\) => \{[\s\S]*toggleCanvasActionsMenu\(\);[\s\S]*\}\);/);
   assert.match(renderer, /closeActiveCanvasButton\?\.addEventListener\("click", \(\) => \{[\s\S]*closeCanvasActionsMenu\(\);[\s\S]*closeActiveCanvasWithConfirmation\(\)/);
   assert.match(renderer, /closeActiveCanvasButton\?\.addEventListener\("click", \(\) => \{/);

@@ -1388,6 +1388,49 @@ test("app-session:save-file writes exported app data to a chosen JSON file", asy
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("agent-skill install writes the bundled skill into the configured global skill root", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agent-skill-ipc-"));
+  const originalSkillRoot = process.env.TERMCANVAS_AGENT_SKILL_ROOT;
+  process.env.TERMCANVAS_AGENT_SKILL_ROOT = tempRoot;
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showSaveDialog: async () => ({ canceled: true, filePath: undefined })
+  });
+
+  try {
+    const getAgentSkillStatus = handlers.get("agent-skill:status");
+    const installAgentSkill = handlers.get("agent-skill:install");
+    const publicSkillPath = path.join(__dirname, "..", "skills", "agentmux", "SKILL.md");
+    const installedSkillPath = path.join(tempRoot, "agentmux", "SKILL.md");
+
+    assert.equal(typeof getAgentSkillStatus, "function");
+    assert.equal(typeof installAgentSkill, "function");
+
+    const before = await getAgentSkillStatus({ sender: { id: 104 } });
+    assert.equal(before.available, true);
+    assert.equal(before.installed, false);
+    assert.equal(before.current, false);
+    assert.equal(before.targetPath, installedSkillPath);
+
+    const after = await installAgentSkill({ sender: { id: 104 } });
+    assert.equal(after.installedNow, true);
+    assert.equal(after.installed, true);
+    assert.equal(after.current, true);
+    assert.equal(after.targetPath, installedSkillPath);
+    assert.equal(fs.readFileSync(installedSkillPath, "utf8"), fs.readFileSync(publicSkillPath, "utf8"));
+  } finally {
+    if (originalSkillRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENT_SKILL_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENT_SKILL_ROOT = originalSkillRoot;
+    }
+    delete require.cache[mainPath];
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("app-session:save writes through a unique temp file path", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-app-session-save-"));
   const renameCalls = [];

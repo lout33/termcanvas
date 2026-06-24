@@ -97,15 +97,26 @@ test("development agentmux service uses vendored runtime by default", () => {
 test("release config bundles agentmux from electron-builder config", () => {
   const repoRoot = path.join(__dirname, "..");
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  const skillsShConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, "skills.sh.json"), "utf8"));
   const electronBuilderConfig = fs.readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8");
 
   assert.equal(packageJson.build, undefined);
+  assert.equal(skillsShConfig.$schema, "https://skills.sh/schemas/skills.sh.schema.json");
+  assert.deepEqual(skillsShConfig.groupings[0].skills, ["agentmux"]);
   assert.match(electronBuilderConfig, /extraResources:/u);
   assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux"/u);
   assert.match(electronBuilderConfig, /to: "agentmux\/agentmux"/u);
   assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux\.py"/u);
   assert.match(electronBuilderConfig, /to: "agentmux\/agentmux\.py"/u);
+  assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/skills"/u);
+  assert.match(electronBuilderConfig, /to: "agentmux\/skills"/u);
   assert.match(electronBuilderConfig, /!vendor\/agentmux\/\*\*/u);
   assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "agentmux")), true);
   assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "agentmux.py")), true);
+  assert.equal(fs.existsSync(path.join(repoRoot, "skills", "agentmux", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "skills", "agentmux", "SKILL.md")), true);
+  assert.equal(
+    fs.readFileSync(path.join(repoRoot, "vendor", "agentmux", "skills", "agentmux", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(repoRoot, "skills", "agentmux", "SKILL.md"), "utf8")
+  );
 });

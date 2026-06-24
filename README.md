@@ -1,5 +1,7 @@
 # TermCanvas
 
+[![skills.sh](https://skills.sh/b/lout33/termcanvas)](https://skills.sh/lout33/termcanvas)
+
 TermCanvas is a desktop app that lets you arrange real terminal sessions on an infinite canvas.
 
 It is built for developers who juggle multiple repos, shells, AI agents, and long-running tasks and want something more spatial than tabs or split panes.
@@ -66,6 +68,12 @@ npm run dev
 ```
 
 `tmux` is recommended if you want live terminal sessions to survive app relaunches.
+Managed agent terminals require `tmux` because `agentmux` uses it to create and
+control commander and worker sessions. On macOS, install it with:
+
+```bash
+brew install tmux
+```
 
 On a fresh launch, TermCanvas now waits for you to open a folder. Creating a new canvas with the `+` button also asks for the workspace folder first. If you cancel the folder picker, no canvas is created.
 
@@ -112,8 +120,12 @@ TermCanvas has an integrated `agentmux` manager for creating and tracking comman
 - packaged apps store agentmux state under the app `userData` directory
 - development builds use the vendored runtime in `vendor/agentmux` by default
 - set `TERMCANVAS_AGENTMUX_ROOT` only when testing a different local runtime
+- `tmux` must be installed for commander and worker agent terminals
 - missing `agentmux` does not block normal terminal canvas use
 - TermCanvas does not write live canvas or agent state into project `AGENTS.md`; agents should inspect runtime state through `AGENTMUX_*` env vars and `agentmux show`
+- managed terminals expose `AGENTMUX_BIN` so installed agent skills can find the bundled runtime
+- managed terminals expose `AGENTMUX_HOME` so agentmux commands use the app's live agent database instead of a stale default store
+- packaged apps expand `PATH` with common macOS CLI locations like `/opt/homebrew/bin` so `tmux` can be found from GUI launches
 
 Current agent-canvas behavior:
 
@@ -139,6 +151,33 @@ vendor/agentmux/agentmux stop <agent>
 
 When run inside a managed terminal, project-aware commands can infer the project from `AGENTMUX_PROJECT`.
 TermCanvas should stay a minimal visual map of the live tree while the terminal remains the control surface.
+
+### Install The Agent Skill
+
+TermCanvas works without installing an agent skill. The skill matters when you want Codex, Claude Code, OpenCode, Cursor, or another coding agent to understand how to operate the live agent tree from a terminal.
+
+Packaged apps include a one-click installer:
+
+- on first launch, TermCanvas offers to install the skill when it is missing
+- you can also use `TermCanvas > Install / Update Agent Skill`
+- the top-right canvas `...` menu also includes `Install agent skill`
+- the bundled skill is copied to `~/.agents/skills/agentmux/SKILL.md`
+
+Install the public skill from this repo:
+
+```bash
+npx skills add lout33/termcanvas --skill agentmux -g -a codex -a claude-code -a opencode
+```
+
+For a project-local install, omit `-g` so the selected agents receive the skill under the current project. The skills CLI supports GitHub repos, direct skill paths, local paths, global installs, and agent-specific installs.
+
+Development checkouts can also install the bundled copy directly:
+
+```bash
+vendor/agentmux/agentmux install-skill --force
+```
+
+The skill does not install the runtime. It teaches agents how to resolve `AGENTMUX_BIN`, inspect `AGENTMUX_*` session state, spawn workers through `agentmux worker` or `agentmux child`, send prompts, read logs, and stop or delete agents safely.
 
 ## Current Product Direction
 

@@ -153,3 +153,23 @@ test("preload exposes canvas agent sync and delete methods", () => {
   ]);
   delete require.cache[preloadPath];
 });
+
+test("preload exposes agent skill install methods and menu listener", () => {
+  const { exposedApi, invokeCalls, onCalls, preloadPath } = loadPreloadWithMocks();
+
+  assert.equal(typeof exposedApi.getAgentSkillStatus, "function");
+  assert.equal(typeof exposedApi.installAgentSkill, "function");
+  assert.equal(typeof exposedApi.onAgentSkillInstallRequested, "function");
+
+  const removeListener = exposedApi.onAgentSkillInstallRequested(() => {});
+  exposedApi.getAgentSkillStatus();
+  exposedApi.installAgentSkill();
+
+  assert.equal(typeof removeListener, "function");
+  assert.deepEqual(invokeCalls, [
+    ["agent-skill:status"],
+    ["agent-skill:install"]
+  ]);
+  assert.deepEqual(onCalls, [["agent-skill:install-requested"]]);
+  delete require.cache[preloadPath];
+});

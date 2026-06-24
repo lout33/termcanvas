@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld(
     }),
     syncCanvasAgentProject: (payload) => ipcRenderer.invoke("canvas-agent:sync", payload),
     deleteCanvasAgent: (agentName) => ipcRenderer.invoke("canvas-agent:delete", { agentName }),
+    getAgentSkillStatus: () => ipcRenderer.invoke("agent-skill:status"),
+    installAgentSkill: () => ipcRenderer.invoke("agent-skill:install"),
     saveCanvasFile: (payload) => ipcRenderer.invoke("canvas:save-file", payload),
     openCanvasFile: () => ipcRenderer.invoke("canvas:open-file"),
     onTerminalData: (callback) => {
@@ -104,6 +106,14 @@ contextBridge.exposeInMainWorld(
 
       return () => {
         ipcRenderer.removeListener("terminal:toggle-maximize-active", listener);
+      };
+    },
+    onAgentSkillInstallRequested: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("agent-skill:install-requested", listener);
+
+      return () => {
+        ipcRenderer.removeListener("agent-skill:install-requested", listener);
       };
     }
   })

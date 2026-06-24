@@ -92,6 +92,7 @@ const terminalStripNextButton = document.getElementById("terminal-strip-next-but
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
+const installAgentSkillButton = document.getElementById("install-agent-skill-button");
 const focusWorkspaceSearchButton = document.getElementById("focus-workspace-search-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
@@ -148,6 +149,7 @@ const TERMINAL_MIN_ROWS = 8;
 const TERMINAL_FALLBACK_COLS = 80;
 const TERMINAL_FALLBACK_ROWS = 24;
 const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 240];
+const AGENT_SKILL_INSTALL_PROMPT_DISMISSED_KEY = "termcanvas.agentSkillInstallPromptDismissed";
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -190,6 +192,7 @@ let workspaceFilterQuery = "";
 let canvasAgentSyncTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
 let workspaceActionDialogResolve = null;
+let isAgentSkillInstallDialogOpen = false;
 let workspaceMarkdownEditor = null;
 let pendingWorkspacePreviewOwnSave = null;
 let pendingWorkspacePreviewSaveAfterCurrent = false;
@@ -3225,6 +3228,130 @@ async function showWorkspaceActionError(error) {
   });
 }
 
+function hasDismissedAgentSkillInstallPrompt() {
+  try {
+    return window.localStorage?.getItem(AGENT_SKILL_INSTALL_PROMPT_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setAgentSkillInstallPromptDismissed() {
+  try {
+    window.localStorage?.setItem(AGENT_SKILL_INSTALL_PROMPT_DISMISSED_KEY, "1");
+  } catch {
+    // Ignore storage failures; the menu action remains available.
+  }
+}
+
+function getAgentSkillInstallMessage(status, options = {}) {
+  const targetPath = typeof status?.targetPath === "string" && status.targetPath.length > 0
+    ? status.targetPath
+    : "~/.agents/skills/agentmux/SKILL.md";
+
+  if (status?.installed === true && status?.current === true) {
+    return `The TermCanvas agent skill is already installed at ${targetPath}. Reinstall it if you want to refresh the local copy.`;
+  }
+
+  if (status?.installed === true) {
+    return `TermCanvas can update the installed agent skill at ${targetPath}. This helps Codex, Claude Code, OpenCode, and other coding agents operate the TermCanvas agent tree from the terminal.`;
+  }
+
+  if (options.firstRun === true) {
+    return `Install the TermCanvas agent skill at ${targetPath}? This helps coding agents understand AGENTMUX_* sessions, spawn workers safely, read logs, and control the canvas from the terminal.`;
+  }
+
+  return `Install the TermCanvas agent skill at ${targetPath}. This helps coding agents understand AGENTMUX_* sessions, spawn workers safely, read logs, and control the canvas from the terminal.`;
+}
+
+async function requestAgentSkillInstall(options = {}) {
+  if (isAgentSkillInstallDialogOpen) {
+    return;
+  }
+
+  if (
+    window.noteCanvas == null
+    || typeof window.noteCanvas.getAgentSkillStatus !== "function"
+    || typeof window.noteCanvas.installAgentSkill !== "function"
+  ) {
+    return;
+  }
+
+  isAgentSkillInstallDialogOpen = true;
+
+  try {
+    const status = options.status?.available === true
+      ? options.status
+      : await window.noteCanvas.getAgentSkillStatus();
+
+    if (status?.available !== true) {
+      await requestWorkspaceActionDialog({
+        kind: "confirm",
+        title: "Agent skill unavailable",
+        message: "This TermCanvas build does not include the bundled agent skill.",
+        confirmLabel: "OK",
+        cancelLabel: ""
+      });
+      return;
+    }
+
+    const confirmLabel = status.installed === true && status.current === true
+      ? "Reinstall skill"
+      : status.installed === true
+        ? "Update skill"
+        : "Install skill";
+    const shouldInstall = await requestWorkspaceActionDialog({
+      kind: "confirm",
+      title: "Install Agent Skill",
+      message: getAgentSkillInstallMessage(status, { firstRun: options.firstRun === true }),
+      confirmLabel,
+      cancelLabel: "Cancel"
+    });
+
+    if (shouldInstall !== true) {
+      if (options.firstRun === true) {
+        setAgentSkillInstallPromptDismissed();
+      }
+      return;
+    }
+
+    const result = await window.noteCanvas.installAgentSkill();
+    setAgentSkillInstallPromptDismissed();
+
+    await requestWorkspaceActionDialog({
+      kind: "confirm",
+      title: "Agent skill installed",
+      message: `Installed at ${result.targetPath}. Restart or reload your coding agent so it can see the TermCanvas agent skill.`,
+      confirmLabel: "OK",
+      cancelLabel: ""
+    });
+  } catch (error) {
+    await showWorkspaceActionError(error);
+  } finally {
+    isAgentSkillInstallDialogOpen = false;
+  }
+}
+
+async function maybePromptForAgentSkillInstall() {
+  if (window.noteCanvas?.isSmokeTest === true || hasDismissedAgentSkillInstallPrompt()) {
+    return;
+  }
+
+  if (typeof window.noteCanvas?.getAgentSkillStatus !== "function") {
+    return;
+  }
+
+  try {
+    const status = await window.noteCanvas.getAgentSkillStatus();
+
+    if (status?.available === true && status.installed !== true) {
+      await requestAgentSkillInstall({ status, firstRun: true });
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function getExpandedDirectoriesForFolder(folderId) {
   const folderRecord = getWorkspaceFolderById(folderId);
   const activeCanvas = getActiveCanvas();
@@ -5517,6 +5644,7 @@ async function initializeApp() {
     // no-canvas welcome prompt, which otherwise never renders without an active canvas.
     renderCanvas();
     flushAppSessionSave();
+    void maybePromptForAgentSkillInstall();
   }
 }
 
@@ -7973,6 +8101,13 @@ importCanvasButton?.addEventListener("click", () => {
   });
 });
 
+installAgentSkillButton?.addEventListener("click", () => {
+  closeCanvasActionsMenu({ restoreFocus: true });
+  void requestAgentSkillInstall().catch((error) => {
+    console.error(error);
+  });
+});
+
 canvasActionsMenuButton?.addEventListener("click", () => {
   toggleCanvasActionsMenu();
 });
@@ -7981,6 +8116,12 @@ closeActiveCanvasButton?.addEventListener("click", () => {
   closeCanvasActionsMenu();
   void closeActiveCanvasWithConfirmation().catch((error) => {
     void showWorkspaceActionError(error);
+  });
+});
+
+window.noteCanvas?.onAgentSkillInstallRequested?.((status) => {
+  void requestAgentSkillInstall({ status }).catch((error) => {
+    console.error(error);
   });
 });
 

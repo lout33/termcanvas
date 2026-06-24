@@ -1,0 +1,11 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "TermCanvas",
+      "description": "Skills for operating TermCanvas agentmux commander and worker terminals.",
+      "skills": ["agentmux"]
+    }
+  ]
+}

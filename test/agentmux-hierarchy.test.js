@@ -96,6 +96,25 @@ function readTmuxCalls(harness) {
     .map((line) => JSON.parse(line));
 }
 
+test("agentmux installs the bundled TermCanvas skill", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    const targetDir = path.join(harness.root, "skills", "agentmux");
+    const install = runAgentmux(harness, ["install-skill", "--target-dir", targetDir]);
+    assertAgentmuxOk(install);
+
+    const installedSkill = path.join(targetDir, "SKILL.md");
+    const publicSkill = path.join(repoRoot, "skills", "agentmux", "SKILL.md");
+
+    assert.equal(fs.existsSync(installedSkill), true);
+    assert.equal(fs.readFileSync(installedSkill, "utf8"), fs.readFileSync(publicSkill, "utf8"));
+    assert.match(install.stdout, /Installed agentmux skill/u);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("agentmux workers can spawn child workers with parent and depth metadata", () => {
   const harness = createAgentmuxHarness();
 
@@ -138,6 +157,9 @@ test("agentmux workers can spawn child workers with parent and depth metadata", 
     assert.ok(grandchildCall.includes("AGENTMUX_DEPTH=2"));
     assert.ok(grandchildCall.includes("AGENTMUX_COMMANDER_AGENT=proj-general"));
     assert.ok(grandchildCall.includes("AGENTMUX_PROJECT=proj"));
+    assert.ok(grandchildCall.includes(`AGENTMUX_HOME=${harness.homePath}`));
+    assert.ok(grandchildCall.some((arg) => /^AGENTMUX_BIN=.*vendor\/agentmux\/agentmux$/u.test(arg)));
+    assert.ok(grandchildCall.some((arg) => arg.startsWith("PATH=") && arg.includes(harness.binPath)));
     assert.ok(grandchildCall.includes("-u"));
     assert.ok(grandchildCall.includes("NO_COLOR"));
     assert.ok(grandchildCall.includes("COLORTERM=truecolor"));
