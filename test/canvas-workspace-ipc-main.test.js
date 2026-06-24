@@ -357,6 +357,48 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
   }
 });
 
+test("terminal:create advertises truecolor support to spawned shells", async () => {
+  const ptySpawnCalls = [];
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: (command, args) => {
+        if (command === "tmux" && args[0] === "-V") {
+          return { status: 1, stdout: "", stderr: "" };
+        }
+
+        return { status: 0, stdout: "", stderr: "" };
+      }
+    },
+    nodePtyStub: {
+      spawn: (command, args, options) => {
+        ptySpawnCalls.push({ command, args, options });
+        return createMockPtyProcess();
+      }
+    }
+  });
+
+  const createTerminalHandler = handlers.get("terminal:create");
+
+  assert.equal(typeof createTerminalHandler, "function");
+
+  await createTerminalHandler(
+    { sender: { id: 42 } },
+    { terminalId: "color-terminal", cols: 100, rows: 30, cwd: os.homedir() }
+  );
+
+  const shellSpawn = ptySpawnCalls.find(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0);
+
+  assert.ok(shellSpawn, "expected plain shell PTY spawn");
+  assert.equal(shellSpawn.options.name, "xterm-256color");
+  assert.equal(shellSpawn.options.env.TERM, "xterm-256color");
+  assert.equal(shellSpawn.options.env.COLORTERM, "truecolor");
+  assert.equal(shellSpawn.options.env.TERM_PROGRAM, "TermCanvas");
+
+  delete require.cache[mainPath];
+});
+
 test("workspace-directory:choose-canvas preserves the current workspace when the replacement directory is unavailable", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-workspace-ipc-"));
   const firstWorkspacePath = path.join(tempRoot, "workspace-a");

@@ -67,11 +67,27 @@ function resolveTerminalWorkingDirectory(requestedCwd) {
 function getTerminalEnvironment() {
   const environment = {
     ...process.env,
-    TERM: "xterm-256color"
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    TERM_PROGRAM: "TermCanvas"
   };
 
   delete environment.TMUX;
   return environment;
+}
+
+function tmuxTerminalFeaturesIncludeTruecolor(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return false;
+  }
+
+  return value.split(/\r?\n/u).some((line) => {
+    const optionValue = line.replace(/^terminal-features(?:\[\d+\])?\s+/u, "").trim();
+    const [terminalPattern, ...features] = optionValue.split(":");
+
+    return (terminalPattern === "xterm-256color" || terminalPattern === "xterm*" || terminalPattern === "xterm-*")
+      && features.includes("RGB");
+  });
 }
 
 function normalizeTerminalSessionKey(value) {
@@ -223,8 +239,35 @@ function ensureTmuxCommandSucceeded(result, actionLabel) {
   }
 }
 
+function configureTmuxTruecolorSupport() {
+  const currentFeatures = runTmuxCommand(["show-options", "-s", "terminal-features"]);
+
+  if (
+    currentFeatures !== null
+    && currentFeatures.status === 0
+    && tmuxTerminalFeaturesIncludeTruecolor(currentFeatures.stdout)
+  ) {
+    return;
+  }
+
+  const featureResult = runTmuxCommand(["set-option", "-s", "-a", "terminal-features", ",xterm-256color:RGB"]);
+
+  if (featureResult !== null && featureResult.status === 0) {
+    return;
+  }
+
+  const overrideResult = runTmuxCommand(["set-option", "-s", "-a", "terminal-overrides", ",xterm-256color:Tc"]);
+
+  if (overrideResult !== null && overrideResult.status === 0) {
+    return;
+  }
+
+  const details = featureResult?.stderr?.trim() || overrideResult?.stderr?.trim() || "tmux rejected truecolor capability options.";
+  console.warn(`Could not enable tmux truecolor support: ${details}`);
+}
+
 function configureTmuxSession(sessionName) {
-  [["status", "off"], ["destroy-unattached", "off"]].forEach(([optionName, optionValue]) => {
+  [["status", "off"], ["destroy-unattached", "off"], ["default-terminal", "tmux-256color"]].forEach(([optionName, optionValue]) => {
     ensureTmuxCommandSucceeded(
       runTmuxCommand(["set-option", "-t", sessionName, optionName, optionValue]),
       `configure tmux session ${sessionName}`
@@ -545,6 +588,8 @@ async function createTmuxClientSession(options) {
   if (!sessionAlreadyExists) {
     createTmuxSession(tmuxSessionName, options.cwd);
   }
+
+  configureTmuxTruecolorSupport();
 
   try {
     const terminalPty = pty.spawn(tmuxBinary, ["attach-session", "-t", tmuxSessionName], {
