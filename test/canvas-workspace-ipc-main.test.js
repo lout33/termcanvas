@@ -324,10 +324,11 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
       nodePtyStub: {
         spawn: (command, args) => {
           ptySpawnCalls.push({ command, args });
-          const sessionTarget = Array.isArray(args) ? args[2] : null;
+          const sessionTarget = Array.isArray(args) ? args[3] : null;
           const isProbeAttach = command === "tmux"
             && Array.isArray(args)
-            && args[0] === "attach-session"
+            && args[0] === "-u"
+            && args[1] === "attach-session"
             && typeof sessionTarget === "string"
             && sessionTarget.startsWith("termcanvas-probe-");
 
@@ -412,6 +413,8 @@ test("terminal:create advertises truecolor support to spawned shells", async () 
     assert.equal(shellSpawn.options.env.TERM, "xterm-256color");
     assert.equal(shellSpawn.options.env.COLORTERM, "truecolor");
     assert.equal(shellSpawn.options.env.TERM_PROGRAM, "TermCanvas");
+    assert.match(shellSpawn.options.env.LANG, /UTF-?8/iu);
+    assert.match(shellSpawn.options.env.LC_CTYPE, /UTF-?8/iu);
     assert.equal(shellSpawn.options.env.CLICOLOR, "1");
     assert.equal(shellSpawn.options.env.CLICOLOR_FORCE, "1");
     assert.equal(shellSpawn.options.env.FORCE_COLOR, "3");
@@ -460,10 +463,11 @@ test("packaged terminal:create finds tmux in common macOS CLI paths", async () =
       nodePtyStub: {
         spawn: (command, args, options) => {
           ptySpawnCalls.push({ command, args, options });
-          const sessionTarget = Array.isArray(args) ? args[2] : null;
+          const sessionTarget = Array.isArray(args) ? args[3] : null;
           const isProbeAttach = command === "tmux"
             && Array.isArray(args)
-            && args[0] === "attach-session"
+            && args[0] === "-u"
+            && args[1] === "attach-session"
             && typeof sessionTarget === "string"
             && sessionTarget.startsWith("termcanvas-probe-");
 
@@ -490,8 +494,9 @@ test("packaged terminal:create finds tmux in common macOS CLI paths", async () =
     const realAttach = ptySpawnCalls.find(({ command, args }) => (
       command === "tmux"
       && Array.isArray(args)
-      && args[0] === "attach-session"
-      && args[2] === "termcanvas-packaged-path"
+      && args[0] === "-u"
+      && args[1] === "attach-session"
+      && args[3] === "termcanvas-packaged-path"
     ));
 
     assert.equal(created.backend, "tmux");
@@ -534,10 +539,11 @@ test("terminal:create repairs tmux color environment before attaching sessions",
     nodePtyStub: {
       spawn: (command, args, options) => {
         ptySpawnCalls.push({ command, args, options });
-        const sessionTarget = Array.isArray(args) ? args[2] : null;
+        const sessionTarget = Array.isArray(args) ? args[3] : null;
         const isProbeAttach = command === "tmux"
           && Array.isArray(args)
-          && args[0] === "attach-session"
+          && args[0] === "-u"
+          && args[1] === "attach-session"
           && typeof sessionTarget === "string"
           && sessionTarget.startsWith("termcanvas-probe-");
 
@@ -565,13 +571,16 @@ test("terminal:create repairs tmux color environment before attaching sessions",
   const realAttach = ptySpawnCalls.find(({ command, args }) => (
     command === "tmux"
     && Array.isArray(args)
-    && args[0] === "attach-session"
-    && args[2] === existingSessionName
+    && args[0] === "-u"
+    && args[1] === "attach-session"
+    && args[3] === existingSessionName
   ));
 
   assert.equal(created.backend, "tmux");
   assert.ok(realAttach, "expected tmux attach for existing session");
   assert.equal(realAttach.options.env.NO_COLOR, undefined);
+  assert.match(realAttach.options.env.LANG, /UTF-?8/iu);
+  assert.match(realAttach.options.env.LC_CTYPE, /UTF-?8/iu);
   assert.equal(realAttach.options.env.COLORTERM, "truecolor");
   assert.equal(realAttach.options.env.CLICOLOR_FORCE, "1");
   assert.equal(realAttach.options.env.FORCE_COLOR, "3");
@@ -582,6 +591,18 @@ test("terminal:create repairs tmux color environment before attaching sessions",
     && args.length === expectedArgs.length
     && expectedArgs.every((expectedArg, index) => args[index] === expectedArg)
   ));
+  const hasTmuxUtf8EnvironmentCall = (targetFlag, targetName, envName) => spawnCalls.some(({ command, args }) => {
+    if (command !== "tmux" || !Array.isArray(args) || args[0] !== "set-environment" || args[1] !== targetFlag) {
+      return false;
+    }
+
+    const nameIndex = targetFlag === "-t" ? 3 : 2;
+    const valueIndex = nameIndex + 1;
+
+    return (targetFlag !== "-t" || args[2] === targetName)
+      && args[nameIndex] === envName
+      && /UTF-?8/iu.test(String(args[valueIndex] ?? ""));
+  });
 
   assert.ok(
     hasTmuxCall("set-environment", "-g", "-u", "NO_COLOR"),
@@ -592,12 +613,22 @@ test("terminal:create repairs tmux color environment before attaching sessions",
     "expected tmux global FORCE_COLOR"
   );
   assert.ok(
+    hasTmuxUtf8EnvironmentCall("-g", null, "LANG")
+      && hasTmuxUtf8EnvironmentCall("-g", null, "LC_CTYPE"),
+    "expected tmux global UTF-8 locale"
+  );
+  assert.ok(
     hasTmuxCall("set-environment", "-t", existingSessionName, "-u", "NO_COLOR"),
     "expected tmux session NO_COLOR cleanup"
   );
   assert.ok(
     hasTmuxCall("set-environment", "-t", existingSessionName, "FORCE_COLOR", "3"),
     "expected tmux session FORCE_COLOR"
+  );
+  assert.ok(
+    hasTmuxUtf8EnvironmentCall("-t", existingSessionName, "LANG")
+      && hasTmuxUtf8EnvironmentCall("-t", existingSessionName, "LC_CTYPE"),
+    "expected tmux session UTF-8 locale"
   );
 
   delete require.cache[mainPath];

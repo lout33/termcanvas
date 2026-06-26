@@ -72,6 +72,7 @@ STATE_STYLES = {
 
 AGENT_STATES = ["active", "idle", "finished", "failed", "archived"]
 STALE_AFTER_SECONDS = 15 * 60
+UTF8_LOCALE = "en_US.UTF-8"
 
 
 @dataclass(frozen=True)
@@ -489,10 +490,16 @@ def build_session_awareness_env_args(env_values: dict[str, str]) -> list[str]:
     return [f"{key}={value}" for key, value in env_values.items() if value]
 
 
+def utf8_locale(value: str | None) -> str:
+    return value if value and re.search(r"UTF-?8", value, re.IGNORECASE) else UTF8_LOCALE
+
+
 def build_interactive_color_env_args() -> list[str]:
     return [
         "-u",
         "NO_COLOR",
+        f"LANG={utf8_locale(os.environ.get('LANG'))}",
+        f"LC_CTYPE={utf8_locale(os.environ.get('LC_CTYPE') or os.environ.get('LANG'))}",
         "COLORTERM=truecolor",
         "CLICOLOR=1",
         "CLICOLOR_FORCE=1",
@@ -2018,7 +2025,7 @@ def attach_session(args: argparse.Namespace) -> None:
         session = resolve_session(conn, args.agent)
     if not has_tmux_session(session["tmux_session"]):
         raise SystemExit(f"Agent '{session['name']}' is not running.")
-    os.execvp("tmux", ["tmux", "attach", "-t", session["tmux_session"]])
+    os.execvp("tmux", ["tmux", "-u", "attach", "-t", session["tmux_session"]])
 
 
 def logs_session(args: argparse.Namespace) -> None:

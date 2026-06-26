@@ -158,6 +158,8 @@ test("agentmux workers can spawn child workers with parent and depth metadata", 
     assert.ok(grandchildCall.includes("AGENTMUX_COMMANDER_AGENT=proj-general"));
     assert.ok(grandchildCall.includes("AGENTMUX_PROJECT=proj"));
     assert.ok(grandchildCall.includes(`AGENTMUX_HOME=${harness.homePath}`));
+    assert.ok(grandchildCall.some((arg) => /^LANG=.*UTF-?8$/iu.test(arg)));
+    assert.ok(grandchildCall.some((arg) => /^LC_CTYPE=.*UTF-?8$/iu.test(arg)));
     assert.ok(grandchildCall.some((arg) => /^AGENTMUX_BIN=.*vendor\/agentmux\/agentmux$/u.test(arg)));
     assert.ok(grandchildCall.some((arg) => arg.startsWith("PATH=") && arg.includes(harness.binPath)));
     assert.ok(grandchildCall.includes("-u"));

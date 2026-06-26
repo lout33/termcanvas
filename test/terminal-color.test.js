@@ -53,8 +53,11 @@ test("xterm layout stays compatible with interactive TUI output", () => {
   assert.match(renderer, /allowProposedApi:\s*true/);
   assert.match(renderer, /terminal\.unicode\.activeVersion = "11";/);
   assert.match(renderer, /convertEol:\s*false/);
+  assert.match(renderer, /customGlyphs:\s*false/);
+  assert.match(renderer, /rescaleOverlappingGlyphs:\s*true/);
   assert.match(renderer, /termName:\s*"xterm-256color"/);
   assert.match(renderer, /const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = \[80, 240\];/);
+  assert.match(renderer, /nodeRecord\.terminal\.clearTextureAtlas\?\.\(\);/);
   assert.match(renderer, /resizeObserver\.observe\(nodeRecord\.terminalMount\);/);
   assert.match(renderer, /fittedSize\.cols === lastSyncedCols && fittedSize\.rows === lastSyncedRows/);
 });

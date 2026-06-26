@@ -26,6 +26,7 @@ const TERMINAL_COLOR_ENV = Object.freeze({
   CLICOLOR_FORCE: "1",
   FORCE_COLOR: "3"
 });
+const TERMINAL_UTF8_LOCALE = "en_US.UTF-8";
 const TMUX_COLOR_ENV = Object.freeze({
   COLORTERM: TERMINAL_COLOR_ENV.COLORTERM,
   TERM_PROGRAM: TERMINAL_COLOR_ENV.TERM_PROGRAM,
@@ -232,12 +233,32 @@ function resolveTerminalWorkingDirectory(requestedCwd) {
   return resolveExistingDirectoryPath(requestedCwd) ?? resolveInitialWorkingDirectory();
 }
 
+function resolveUtf8Locale(value) {
+  return typeof value === "string" && /UTF-?8/iu.test(value)
+    ? value
+    : TERMINAL_UTF8_LOCALE;
+}
+
+function getTerminalLocaleEnvironment() {
+  const localeEnvironment = {
+    LANG: resolveUtf8Locale(process.env.LANG),
+    LC_CTYPE: resolveUtf8Locale(process.env.LC_CTYPE || process.env.LANG)
+  };
+
+  if (typeof process.env.LC_ALL === "string" && process.env.LC_ALL.length > 0) {
+    localeEnvironment.LC_ALL = resolveUtf8Locale(process.env.LC_ALL);
+  }
+
+  return localeEnvironment;
+}
+
 function getTerminalEnvironment() {
   const runtimePath = app.isPackaged === true
     ? buildPackagedRuntimePath(process.env.PATH)
     : process.env.PATH;
   const environment = {
     ...process.env,
+    ...getTerminalLocaleEnvironment(),
     ...TERMINAL_COLOR_ENV,
     ...(typeof runtimePath === "string" && runtimePath.length > 0 ? { PATH: runtimePath } : {})
   };
@@ -326,7 +347,7 @@ function waitForTmuxPtyBackend(tmuxBinary, cwd) {
 
     try {
       createTmuxSession(probeSessionName, cwd);
-      probePty = pty.spawn(tmuxBinary, ["attach-session", "-t", probeSessionName], {
+      probePty = pty.spawn(tmuxBinary, ["-u", "attach-session", "-t", probeSessionName], {
         name: "xterm-256color",
         cols: 80,
         rows: 24,
@@ -429,7 +450,10 @@ function configureTmuxColorEnvironment(sessionName = null) {
     "unset tmux NO_COLOR"
   );
 
-  Object.entries(TMUX_COLOR_ENV).forEach(([name, value]) => {
+  Object.entries({
+    ...getTerminalLocaleEnvironment(),
+    ...TMUX_COLOR_ENV
+  }).forEach(([name, value]) => {
     warnIfTmuxCommandFailed(
       runTmuxCommand(["set-environment", ...targetArgs, name, value]),
       `set tmux ${name}`
@@ -795,7 +819,7 @@ async function createTmuxClientSession(options) {
   configureTmuxTruecolorSupport();
 
   try {
-    const terminalPty = pty.spawn(tmuxBinary, ["attach-session", "-t", tmuxSessionName], {
+    const terminalPty = pty.spawn(tmuxBinary, ["-u", "attach-session", "-t", tmuxSessionName], {
       name: "xterm-256color",
       cols: options.cols,
       rows: options.rows,

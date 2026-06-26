@@ -106,8 +106,22 @@
 
       <main class="workspace-shell">
         <header class="canvas-panel-header" id="canvas-panel-header" aria-label="Canvas overview">
-          <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Open drawer with Command+B">
-            <span class="sidebar-edge-handle-lines" aria-hidden="true"></span>
+          <button class="sidebar-edge-handle rail-toggle-button" id="rail-toggle-button" type="button" aria-label="Hide project rail" aria-pressed="true" title="Hide project rail">
+            <svg class="rail-toggle-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3.25 3h3.25v10H3.25Z"></path>
+              <path d="M8.75 4.25h4"></path>
+              <path d="M8.75 8h4"></path>
+              <path d="M8.75 11.75h4"></path>
+            </svg>
+          </button>
+
+          <button class="sidebar-edge-handle" id="sidebar-toggle-button" type="button" aria-label="Show file navigator with Command+B" aria-pressed="false" title="Show file navigator">
+            <svg class="sidebar-toggle-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path class="sidebar-toggle-panel" d="M3.25 3h9.5v10h-9.5Z"></path>
+              <path class="sidebar-toggle-divider" d="M6.25 3v10"></path>
+              <path class="sidebar-toggle-chevron sidebar-toggle-chevron-open" d="m10.25 5.25-2.5 2.75 2.5 2.75"></path>
+              <path class="sidebar-toggle-chevron sidebar-toggle-chevron-closed" d="m8.25 5.25 2.5 2.75-2.5 2.75"></path>
+            </svg>
           </button>
 
           <div class="canvas-panel-context">

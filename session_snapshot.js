@@ -239,6 +239,7 @@ function normalizeAppSessionSnapshot(snapshot) {
   return {
     version: APP_SESSION_VERSION,
     ui: {
+      isRailCollapsed: normalizeBoolean(snapshot?.ui?.isRailCollapsed),
       isSidebarCollapsed: snapshot?.ui?.isSidebarCollapsed !== false,
       hasDismissedBoardIntro: normalizeBoolean(snapshot?.ui?.hasDismissedBoardIntro)
     },

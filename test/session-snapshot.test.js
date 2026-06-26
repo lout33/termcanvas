@@ -7,6 +7,7 @@ test("normalizeAppSessionSnapshot returns a safe empty session for invalid input
   const snapshot = normalizeAppSessionSnapshot(null);
 
   assert.equal(snapshot.version, APP_SESSION_VERSION);
+  assert.equal(snapshot.ui.isRailCollapsed, false);
   assert.equal(snapshot.ui.isSidebarCollapsed, true);
   assert.equal(snapshot.ui.hasDismissedBoardIntro, false);
   assert.deepEqual(snapshot.canvases, []);
@@ -26,6 +27,9 @@ test("normalizeAppSessionSnapshot keeps null canvas workspaces", () => {
 
 test("normalizeAppSessionSnapshot normalizes canvases and active canvas selection", () => {
   const snapshot = normalizeAppSessionSnapshot({
+    ui: {
+      isRailCollapsed: true
+    },
     activeCanvasId: "canvas-2",
     canvases: [
       {
@@ -66,6 +70,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
   });
 
   assert.equal(snapshot.activeCanvasId, "canvas-2");
+  assert.equal(snapshot.ui.isRailCollapsed, true);
   assert.equal(snapshot.canvases.length, 2);
   assert.deepEqual(snapshot.canvases[0], {
     id: "canvas-1",

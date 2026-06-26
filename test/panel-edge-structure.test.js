@@ -55,6 +55,13 @@ test("panel edge controls keep toggle and resize handles separate", () => {
   assert.match(toggleTag, /^<button\b/i);
   assertHasClasses(toggleTag, ["sidebar-edge-handle"]);
   assertLacksClasses(toggleTag, ["panel-resize-handle"]);
+  assert.match(html, /id="sidebar-toggle-button"[\s\S]*?<svg class="sidebar-toggle-icon"[\s\S]*?sidebar-toggle-panel[\s\S]*?sidebar-toggle-chevron-open[\s\S]*?sidebar-toggle-chevron-closed/i);
+  assert.doesNotMatch(html, /sidebar-edge-handle-lines/i);
+
+  const railToggleTag = getElementOpenTagById(html, "rail-toggle-button");
+  assert.match(railToggleTag, /^<button\b/i);
+  assertHasClasses(railToggleTag, ["sidebar-edge-handle", "rail-toggle-button"]);
+  assertLacksClasses(railToggleTag, ["panel-resize-handle"]);
 
   const leftResizeTag = getElementOpenTagById(html, "sidebar-resize-handle");
   assertHasClasses(leftResizeTag, ["panel-resize-handle", "sidebar-resize-handle"]);
@@ -99,7 +106,7 @@ test("canvas header merges global context and canvas status into one row", () =>
 
   assert.match(
     html,
-    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-breadcrumb" id="canvas-breadcrumb">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item" id="export-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="import-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="install-agent-skill-button"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
+    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<button class="sidebar-edge-handle rail-toggle-button" id="rail-toggle-button"[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-breadcrumb" id="canvas-breadcrumb">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item" id="export-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="import-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="install-agent-skill-button"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
   );
 
   assert.doesNotMatch(html, /class="app-rail-file-actions"/i);

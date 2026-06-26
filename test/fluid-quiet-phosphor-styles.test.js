@@ -43,7 +43,7 @@ test("terminal surfaces keep xterm glyph rendering crisp", () => {
 
   assert.match(styles, /--color-terminal-text:\s*#f3ead7;/);
   assert.match(styles, /--terminal-font-size:\s*12;/);
-  assert.match(styles, /--terminal-line-height:\s*1\.22;/);
+  assert.match(styles, /--terminal-line-height:\s*1\.25;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*font-variant-ligatures:\s*none;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*-webkit-font-smoothing:\s*antialiased;/);
   assert.match(styles, /\.terminal-node-terminal \.xterm\s*\{[\s\S]*text-rendering:\s*auto;/);
@@ -106,6 +106,7 @@ test("app shell docks explorer canvas and inspector as real grid columns", () =>
 
   assert.match(styles, /\.app-shell\s*\{[\s\S]*display:\s*grid;/);
   assert.match(styles, /\.app-shell\s*\{[\s\S]*grid-template-columns:\s*var\(--rail-width\) var\(--sidebar-track-width\) minmax\(0, 1fr\) var\(--inspector-track-width\);/);
+  assert.match(styles, /\.app-shell\.is-rail-collapsed\s*\{[\s\S]*--rail-width:\s*0rem;/);
   assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\)\s*\{[\s\S]*--sidebar-track-width:\s*var\(--drawer-panel-rendered-width\);/);
   assert.match(styles, /\.app-shell\.has-file-inspector\s*\{[\s\S]*--inspector-track-width:\s*var\(--inspector-rendered-width\);/);
   assert.match(styles, /\.canvas-sidebar\s*\{[\s\S]*grid-column:\s*2;/);
@@ -135,16 +136,18 @@ test("collapsed sidebar toggle lives in the merged header as a compact control",
   assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*position:\s*relative;/);
   assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*width:\s*2\.1rem;/);
   assert.match(styles, /\.sidebar-edge-handle\s*\{[\s\S]*height:\s*2\.1rem;/);
-  assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*width:\s*0\.875rem;/);
-  assert.match(styles, /\.sidebar-edge-handle-lines\s*\{[\s\S]*height:\s*2px;/);
-  assert.match(styles, /\.sidebar-edge-handle-lines::before,\s*\.sidebar-edge-handle-lines::after\s*\{[\s\S]*height:\s*2px;/);
-  assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines\s*\{[^}]*background:\s*transparent;/);
-  assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines::before\s*\{[^}]*rotate\(45deg\);/);
-  assert.match(styles, /\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-edge-handle-lines::after\s*\{[^}]*rotate\(-45deg\);/);
+  assert.match(styles, /\.rail-toggle-button\[aria-pressed="true"\]\s*\{[\s\S]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+  assert.match(styles, /\.rail-toggle-icon path\s*\{[\s\S]*stroke:\s*currentColor;/);
+  assert.match(styles, /\.sidebar-toggle-icon\s*\{[\s\S]*width:\s*1\.05rem;/);
+  assert.match(styles, /\.sidebar-toggle-icon path\s*\{[\s\S]*stroke:\s*currentColor;/);
+  assert.match(styles, /\.sidebar-toggle-chevron-open,\s*\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-toggle-chevron-closed\s*\{[\s\S]*opacity:\s*0;/);
+  assert.match(styles, /\.sidebar-toggle-chevron-closed,\s*\.sidebar-edge-handle\[aria-pressed="true"\] \.sidebar-toggle-chevron-open\s*\{[\s\S]*opacity:\s*1;/);
+  assert.doesNotMatch(styles, /\.sidebar-edge-handle-lines/u);
+  assert.doesNotMatch(styles, /rotate\(-?45deg\)/u);
   assert.match(styles, /\.canvas-panel-header\s*\{[^}]*z-index:\s*11;/);
-  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
-  assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*visibility:\s*hidden;/);
-  assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) \.sidebar-edge-handle\s*\{[^}]*pointer-events:\s*none;/);
+  assert.match(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) #sidebar-toggle-button\s*\{[^}]*border-color:\s*var\(--color-phosphor-accent-strong\);/);
+  assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) #sidebar-toggle-button\s*\{[^}]*visibility:\s*hidden;/);
+  assert.doesNotMatch(styles, /\.app-shell:not\(\.is-sidebar-collapsed\) #sidebar-toggle-button\s*\{[^}]*pointer-events:\s*none;/);
 });
 
 test("header and terminal typography gain a calmer hierarchy and tighter spacing", () => {
@@ -173,8 +176,20 @@ test("vertical rail and merged canvas header keep navigation out of extra topbar
   const styles = readStyles();
 
   // Far-left vertical project rail owns navigation; the merged header menu owns file actions.
+  assert.match(styles, /\.app-shell\s*\{[\s\S]*--rail-width:\s*8\.25rem;/);
+  assert.match(styles, /\.app-shell\.is-rail-collapsed \.app-rail\s*\{[\s\S]*visibility:\s*hidden;/);
+  assert.match(styles, /\.app-shell\.is-rail-collapsed \.app-rail\s*\{[\s\S]*pointer-events:\s*none;/);
   assert.match(styles, /\.app-rail\s*\{[\s\S]*flex-direction:\s*column;/);
+  assert.match(styles, /\.app-rail\s*\{[\s\S]*align-items:\s*stretch;/);
   assert.match(styles, /\.canvas-switcher-rail-section\s*\{[\s\S]*flex-direction:\s*column;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-list\s*\{[\s\S]*border-radius:\s*0;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-list\s*\{[\s\S]*background:\s*transparent;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-item\s*\{[\s\S]*width:\s*100%;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-item\s*\{[\s\S]*background:\s*transparent;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-item:hover,\s*\.canvas-switcher-rail-section \.canvas-strip-item\.is-active\s*\{[\s\S]*box-shadow:\s*none;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-main\s*\{[\s\S]*justify-content:\s*flex-start;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-main\s*\{[\s\S]*font-size:\s*0\.68rem;/);
+  assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-main\s*\{[\s\S]*white-space:\s*normal;/);
   assert.match(styles, /\.canvas-switcher-rail-section \.canvas-strip-main::before\s*\{[\s\S]*content:\s*attr\(data-rail-label\);/);
   assert.doesNotMatch(styles, /\.app-rail-file-actions\s*\{/);
   // One merged header row owns the drawer toggle, canvas identity, status, and menu.

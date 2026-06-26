@@ -111,6 +111,7 @@ const workspaceActionDialogMessage = document.getElementById("workspace-action-d
 const workspaceActionDialogInput = document.getElementById("workspace-action-dialog-input");
 const workspaceActionDialogCancelButton = document.getElementById("workspace-action-dialog-cancel");
 const workspaceActionDialogConfirmButton = document.getElementById("workspace-action-dialog-confirm");
+const railToggleButton = document.getElementById("rail-toggle-button");
 const sidebarToggleButton = document.getElementById("sidebar-toggle-button");
 const sidebarResizeHandle = document.getElementById("sidebar-resize-handle");
 const sidebarPanel = document.querySelector(".canvas-sidebar-panel");
@@ -161,6 +162,7 @@ let activeNodeRecord = null;
 let activeTitleEditorRecord = null;
 let activeTerminalNodeMenuRecord = null;
 let activeCanvasRenameId = null;
+let isRailCollapsed = false;
 let isSidebarCollapsed = true;
 let hasDismissedBoardIntro = false;
 let isWindowUnloading = false;
@@ -864,7 +866,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
     cursorBlink: true,
     convertEol: false,
     allowTransparency: false,
-    customGlyphs: true,
+    customGlyphs: false,
     drawBoldTextInBrightColors: true,
     fontFamily: terminalTheme.fontFamily,
     fontSize: terminalTheme.fontSize,
@@ -873,6 +875,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
     letterSpacing: 0,
     lineHeight: terminalTheme.lineHeight,
     minimumContrastRatio: 1,
+    rescaleOverlappingGlyphs: true,
     termName: "xterm-256color",
     scrollback: 1200,
     theme: terminalTheme.theme
@@ -1530,10 +1533,23 @@ function updateSidebarToggleButton() {
     return;
   }
 
-  const actionLabel = isSidebarCollapsed ? "Open drawer" : "Close drawer";
+  const actionLabel = isSidebarCollapsed ? "Show file navigator" : "Hide file navigator";
 
   sidebarToggleButton.setAttribute("aria-label", `${actionLabel} with Command+B`);
   sidebarToggleButton.setAttribute("aria-pressed", String(!isSidebarCollapsed));
+  sidebarToggleButton.title = actionLabel;
+}
+
+function updateRailToggleButton() {
+  if (!(railToggleButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const actionLabel = isRailCollapsed ? "Show project rail" : "Hide project rail";
+
+  railToggleButton.setAttribute("aria-label", actionLabel);
+  railToggleButton.setAttribute("aria-pressed", String(!isRailCollapsed));
+  railToggleButton.title = actionLabel;
 }
 
 function persistAppSession() {
@@ -1596,6 +1612,25 @@ function setSidebarCollapsed(nextValue) {
 
 function toggleSidebar() {
   setSidebarCollapsed(!isSidebarCollapsed);
+}
+
+function setRailCollapsed(nextValue) {
+  isRailCollapsed = nextValue === true;
+  appShell?.classList.toggle("is-rail-collapsed", isRailCollapsed);
+  updateRailToggleButton();
+  scheduleCanvasStripOverflowControlsSync({ ensureActiveVisible: true });
+
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas !== null) {
+    scheduleTerminalSizeSync(activeCanvas.nodes, { settle: true });
+  }
+
+  scheduleAppSessionSave();
+}
+
+function toggleRail() {
+  setRailCollapsed(!isRailCollapsed);
 }
 
 function setCanvasActionsMenuOpen(nextValue, options = {}) {
@@ -1986,6 +2021,20 @@ function getActiveProjectDisplayName() {
   }
 
   return "project";
+}
+
+function getCanvasRailDisplayName(canvasRecord) {
+  const canvasWorkspace = normalizeCanvasWorkspaceRecord(canvasRecord?.workspace);
+
+  if (typeof canvasWorkspace?.rootName === "string" && canvasWorkspace.rootName.length > 0) {
+    return canvasWorkspace.rootName;
+  }
+
+  if (typeof canvasWorkspace?.rootPath === "string" && canvasWorkspace.rootPath.length > 0) {
+    return canvasWorkspace.rootPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? canvasWorkspace.rootPath;
+  }
+
+  return typeof canvasRecord?.name === "string" && canvasRecord.name.length > 0 ? canvasRecord.name : "Canvas";
 }
 
 function getVisibleCanvasNodes(canvasRecord) {
@@ -2407,6 +2456,7 @@ function scheduleTerminalRefresh(nodeRecords) {
         && nodeRecord.terminal !== null
         && nodeRecord.terminal.rows > 0
       ) {
+        nodeRecord.terminal.clearTextureAtlas?.();
         nodeRecord.terminal.refresh(0, nodeRecord.terminal.rows - 1);
       }
     });
@@ -2781,8 +2831,9 @@ function createCanvasStripItem(itemView) {
   }
 
   const stripItem = document.createElement("div");
+  const displayName = getCanvasRailDisplayName(canvasRecord);
   stripItem.className = "canvas-strip-item";
-  stripItem.title = `${canvasRecord.name} • ${itemView.terminalSummary}`;
+  stripItem.title = `${displayName} • ${itemView.terminalSummary}`;
   stripItem.dataset.canvasId = canvasRecord.id;
 
   if (itemView.isActive) {
@@ -2838,11 +2889,11 @@ function createCanvasStripItem(itemView) {
   const switchButton = document.createElement("button");
   switchButton.className = "canvas-strip-main";
   switchButton.type = "button";
-  switchButton.textContent = canvasRecord.name;
-  switchButton.setAttribute("aria-label", `Open ${canvasRecord.name}`);
+  switchButton.textContent = displayName;
+  switchButton.setAttribute("aria-label", `Open ${displayName}`);
   switchButton.dataset.canvasId = canvasRecord.id;
   switchButton.dataset.canvasPart = "strip-switch";
-  switchButton.dataset.railLabel = canvasRecord.name.trim().charAt(0).toUpperCase() || "C";
+  switchButton.dataset.railLabel = displayName.trim().charAt(0).toUpperCase() || "C";
 
   if (itemView.isActive) {
     switchButton.setAttribute("aria-current", "true");
@@ -5396,6 +5447,7 @@ function serializeAppSession() {
   return {
     version: APP_SESSION_VERSION,
     ui: {
+      isRailCollapsed,
       isSidebarCollapsed,
       hasDismissedBoardIntro
     },
@@ -5611,6 +5663,7 @@ async function initializeApp() {
   isSessionHydrating = true;
 
   try {
+    setRailCollapsed(false);
     setSidebarCollapsed(true);
     setBoardIntroDismissed(false);
     renderCanvasSwitcher();
@@ -5620,6 +5673,7 @@ async function initializeApp() {
     const sessionSnapshot = await window.noteCanvas.loadAppSession();
 
     if (sessionSnapshot !== null) {
+      setRailCollapsed(sessionSnapshot.ui.isRailCollapsed);
       setSidebarCollapsed(sessionSnapshot.ui.isSidebarCollapsed);
       setBoardIntroDismissed(sessionSnapshot.ui.hasDismissedBoardIntro);
       await restoreCanvasSession(sessionSnapshot);
@@ -6140,10 +6194,15 @@ async function createCanvasWithWorkspace() {
     return null;
   }
 
+  const workspaceRootName = typeof openedFolder.rootName === "string" && openedFolder.rootName.trim().length > 0
+    ? openedFolder.rootName.trim()
+    : openedFolder.rootPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? openedFolder.rootPath;
+
   const canvasRecord = createCanvasRecord({
+    name: workspaceRootName,
     workspace: {
       rootPath: openedFolder.rootPath,
-      rootName: typeof openedFolder.rootName === "string" ? openedFolder.rootName : openedFolder.rootPath,
+      rootName: workspaceRootName,
       expandedDirectoryPaths: [],
       previewRelativePath: null
     }
@@ -7544,6 +7603,7 @@ if (window.noteCanvas.isSmokeTest) {
         return nodeStyles.display !== "none" && nodeStyles.visibility !== "hidden" && Number.parseFloat(nodeStyles.opacity || "1") > 0;
       }).length,
       sidebarCollapsed: isSidebarCollapsed,
+      railCollapsed: isRailCollapsed,
       topCanvasStripVisible: Boolean(
         topCanvasStripRect
         && topCanvasStripRect.width > 0
@@ -8026,6 +8086,10 @@ if (window.noteCanvas.isSmokeTest) {
       toggleSidebar();
       return getCanvasSnapshot();
     },
+    toggleRail: () => {
+      toggleRail();
+      return getCanvasSnapshot();
+    },
     panBoardByWheel: (deltaX = 0, deltaY = 0, target = "board") => {
       const firstNode = getActiveCanvas()?.nodes[0];
       const eventTarget = target === "nodes-layer"
@@ -8196,6 +8260,10 @@ deleteWorkspaceEntryButton?.addEventListener("click", () => {
 
 sidebarToggleButton?.addEventListener("click", () => {
   toggleSidebar();
+});
+
+railToggleButton?.addEventListener("click", () => {
+  toggleRail();
 });
 
 if (sidebarResizeHandle instanceof HTMLElement) {

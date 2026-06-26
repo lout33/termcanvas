@@ -94,7 +94,7 @@
   --text-sidebar-item: 0.98rem;
   --text-sidebar-meta: 0.68rem;
   --terminal-font-size: 12;
-  --terminal-line-height: 1.22;
+  --terminal-line-height: 1.25;
 
   --note-width: 18rem;
   --note-min-height: 10rem;
@@ -167,7 +167,7 @@ button {
   min-height: 100vh;
   overflow: hidden;
   background: var(--color-board-deep);
-  --rail-width: 3.25rem;
+  --rail-width: 8.25rem;
   --sidebar-track-width: 0rem;
   --inspector-track-width: 0rem;
   --workspace-left-inset: var(--measure-board-gap);
@@ -181,17 +181,24 @@ button {
   z-index: 12;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 0.4rem;
   min-width: 0;
   min-height: 0;
-  padding: 0.55rem 0.4rem;
+  padding: 0.55rem 0.45rem;
   border-right: 1px solid var(--color-topbar-border);
   background: linear-gradient(180deg, #151820, #090b0f);
+  overflow: hidden;
+  transition:
+    opacity var(--transition-base),
+    transform var(--transition-base),
+    padding var(--transition-base),
+    border-color var(--transition-base);
 }
 
 .app-rail-brand {
   flex: 0 0 auto;
+  align-self: center;
   width: 2.1rem;
   height: 2.1rem;
   margin-bottom: 0.15rem;
@@ -205,6 +212,7 @@ button {
 
 .app-rail-action {
   flex: 0 0 auto;
+  align-self: center;
   width: 2.1rem;
   height: 2.1rem;
 }
@@ -222,12 +230,14 @@ button {
 .canvas-switcher-rail-section .canvas-strip-list {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
+  align-items: stretch;
+  gap: 0.38rem;
   width: 100%;
   min-height: 0;
   margin: 0;
   padding: 0.15rem 0;
+  border-radius: 0;
+  background: transparent;
   overflow-y: auto;
   overflow-x: hidden;
   counter-reset: canvas-rail;
@@ -240,23 +250,46 @@ button {
 .canvas-switcher-rail-section .canvas-strip-item {
   position: relative;
   flex: 0 0 auto;
-  width: 2.3rem;
-  height: 2.3rem;
+  width: 100%;
+  min-height: 2.35rem;
+  height: auto;
+  max-width: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  white-space: normal;
+}
+
+.canvas-switcher-rail-section .canvas-strip-item:hover,
+.canvas-switcher-rail-section .canvas-strip-item.is-active {
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  transform: none;
 }
 
 .canvas-switcher-rail-section .canvas-strip-main {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 2.3rem;
-  height: 2.3rem;
-  padding: 0;
+  justify-content: flex-start;
+  gap: 0.42rem;
+  width: 100%;
+  min-height: 2.35rem;
+  height: auto;
+  padding: 0.36rem 0.42rem;
   border: 1px solid var(--color-chip-border);
   border-radius: 0.7rem;
   background: var(--color-chip-surface);
   color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 0;
+  font-family: var(--font-body);
+  font-size: 0.68rem;
+  line-height: 1.08;
+  text-align: left;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
   cursor: pointer;
   transition:
     border-color var(--transition-base),
@@ -266,8 +299,20 @@ button {
 
 .canvas-switcher-rail-section .canvas-strip-main::before {
   content: attr(data-rail-label);
-  font-size: 0.9rem;
-  font-weight: 600;
+  display: inline-flex;
+  flex: 0 0 1.35rem;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 1px solid rgba(236, 220, 170, 0.14);
+  border-radius: 0.45rem;
+  background: rgba(10, 12, 16, 0.52);
+  color: rgba(236, 220, 170, 0.86);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .canvas-switcher-rail-section .canvas-strip-main:hover {
@@ -284,13 +329,31 @@ button {
 }
 
 .canvas-switcher-rail-section .canvas-strip-input {
-  width: 2.3rem;
-  height: 2.3rem;
-  text-align: center;
+  width: 100%;
+  min-height: 2.35rem;
+  height: auto;
+  padding: 0.36rem 0.42rem;
+  font-size: 0.68rem;
+  line-height: 1.08;
+  text-align: left;
 }
 
 .app-rail-spacer {
   flex: 1 1 auto;
+}
+
+.app-shell.is-rail-collapsed {
+  --rail-width: 0rem;
+}
+
+.app-shell.is-rail-collapsed .app-rail {
+  padding-right: 0;
+  padding-left: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-0.75rem);
 }
 
 .canvas-breadcrumb {
@@ -417,62 +480,77 @@ button {
   border-color: var(--color-phosphor-accent-strong);
 }
 
+.rail-toggle-button {
+  color: rgba(178, 166, 145, 0.92);
+}
+
+.rail-toggle-button[aria-pressed="true"] {
+  border-color: var(--color-phosphor-accent-strong);
+  background: rgba(230, 165, 39, 0.16);
+  color: rgba(255, 232, 166, 0.94);
+}
+
+.rail-toggle-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.rail-toggle-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-edge-handle:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
 }
 
-.sidebar-edge-handle-lines {
-  position: relative;
-  display: block;
-  width: 0.875rem;
-  height: 2px;
-  border-radius: 999px;
-  background: rgba(67, 64, 57, 0.58);
-  transition:
-    background var(--transition-base),
-    transform var(--transition-base);
+.sidebar-toggle-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  color: rgba(178, 166, 145, 0.92);
 }
 
-.sidebar-edge-handle-lines::before,
-.sidebar-edge-handle-lines::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  width: 100%;
-  height: 2px;
-  border-radius: 999px;
-  background: rgba(67, 64, 57, 0.58);
-  transition:
-    transform var(--transition-base),
-    top var(--transition-base),
-    opacity var(--transition-base),
-    background var(--transition-base);
+.sidebar-toggle-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.sidebar-edge-handle-lines::before {
-  top: -0.3125rem;
+.sidebar-toggle-panel {
+  opacity: 0.92;
 }
 
-.sidebar-edge-handle-lines::after {
-  top: 0.3125rem;
-  background: rgba(67, 64, 57, 0.32);
+.sidebar-toggle-divider {
+  opacity: 0.58;
 }
 
-.sidebar-edge-handle[aria-pressed="true"] .sidebar-edge-handle-lines {
-  background: transparent;
+.sidebar-toggle-chevron {
+  transition: opacity var(--transition-base);
 }
 
-.sidebar-edge-handle[aria-pressed="true"] .sidebar-edge-handle-lines::before {
-  top: 0;
-  transform: rotate(45deg);
+.sidebar-edge-handle[aria-pressed="true"] {
+  border-color: var(--color-phosphor-accent-strong);
+  background: rgba(230, 165, 39, 0.16);
 }
 
-.sidebar-edge-handle[aria-pressed="true"] .sidebar-edge-handle-lines::after {
-  top: 0;
+.sidebar-edge-handle[aria-pressed="true"] .sidebar-toggle-icon {
+  color: rgba(255, 232, 166, 0.94);
+}
+
+.sidebar-toggle-chevron-open,
+.sidebar-edge-handle[aria-pressed="true"] .sidebar-toggle-chevron-closed {
+  opacity: 0;
+}
+
+.sidebar-toggle-chevron-closed,
+.sidebar-edge-handle[aria-pressed="true"] .sidebar-toggle-chevron-open {
   opacity: 1;
-  background: rgba(67, 64, 57, 0.58);
-  transform: rotate(-45deg);
 }
 
 .canvas-sidebar-panel {
@@ -507,7 +585,7 @@ button {
   pointer-events: auto;
 }
 
-.app-shell:not(.is-sidebar-collapsed) .sidebar-edge-handle {
+.app-shell:not(.is-sidebar-collapsed) #sidebar-toggle-button {
   background: rgba(230, 165, 39, 0.2);
   border-color: var(--color-phosphor-accent-strong);
   color: var(--color-ink);

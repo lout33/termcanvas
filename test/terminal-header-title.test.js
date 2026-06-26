@@ -85,6 +85,32 @@ test("canvas close is guarded by the header menu instead of the vertical rail", 
   assert.doesNotMatch(renderer, /void deleteCanvas\(canvasRecord\.id\);/);
 });
 
+test("canvas rail labels prefer workspace folder names", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /function getCanvasRailDisplayName\(canvasRecord\) \{/);
+  assert.match(renderer, /const canvasWorkspace = normalizeCanvasWorkspaceRecord\(canvasRecord\?\.workspace\);/);
+  assert.match(renderer, /return canvasWorkspace\.rootName;/);
+  assert.match(renderer, /const displayName = getCanvasRailDisplayName\(canvasRecord\);/);
+  assert.match(renderer, /switchButton\.textContent = displayName;/);
+  assert.match(renderer, /switchButton\.dataset\.railLabel = displayName\.trim\(\)\.charAt\(0\)\.toUpperCase\(\) \|\| "C";/);
+  assert.match(renderer, /const workspaceRootName = typeof openedFolder\.rootName === "string" && openedFolder\.rootName\.trim\(\)\.length > 0/);
+  assert.match(renderer, /createCanvasRecord\(\{[\s\S]*name: workspaceRootName,/);
+});
+
+test("project rail can collapse independently from the explorer drawer", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const railToggleButton = document\.getElementById\("rail-toggle-button"\);/);
+  assert.match(renderer, /let isRailCollapsed = false;/);
+  assert.match(renderer, /function setRailCollapsed\(nextValue\) \{/);
+  assert.match(renderer, /appShell\?\.classList\.toggle\("is-rail-collapsed", isRailCollapsed\);/);
+  assert.match(renderer, /function toggleRail\(\) \{/);
+  assert.match(renderer, /isRailCollapsed,/);
+  assert.match(renderer, /setRailCollapsed\(sessionSnapshot\.ui\.isRailCollapsed\);/);
+  assert.match(renderer, /railToggleButton\?\.addEventListener\("click", \(\) => \{[\s\S]*toggleRail\(\);[\s\S]*\}\);/);
+});
+
 test("canvas export preserves terminal session and delegation metadata", () => {
   const renderer = readRenderer();
 
