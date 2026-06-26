@@ -626,6 +626,14 @@ test("terminal:create repairs tmux color environment before attaching sessions",
     "expected tmux session FORCE_COLOR"
   );
   assert.ok(
+    hasTmuxCall("set-option", "-t", existingSessionName, "mouse", "on"),
+    "expected tmux mouse mode to be enabled for scrollable terminal harnesses"
+  );
+  assert.ok(
+    hasTmuxCall("set-option", "-t", existingSessionName, "history-limit", "20000"),
+    "expected tmux pane history to be large enough for terminal harness scrollback"
+  );
+  assert.ok(
     hasTmuxUtf8EnvironmentCall("-t", existingSessionName, "LANG")
       && hasTmuxUtf8EnvironmentCall("-t", existingSessionName, "LC_CTYPE"),
     "expected tmux session UTF-8 locale"

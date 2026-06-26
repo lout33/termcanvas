@@ -489,7 +489,13 @@ function configureTmuxTruecolorSupport() {
 }
 
 function configureTmuxSession(sessionName) {
-  [["status", "off"], ["destroy-unattached", "off"], ["default-terminal", "tmux-256color"]].forEach(([optionName, optionValue]) => {
+  [
+    ["status", "off"],
+    ["destroy-unattached", "off"],
+    ["default-terminal", "tmux-256color"],
+    ["mouse", "on"],
+    ["history-limit", "20000"]
+  ].forEach(([optionName, optionValue]) => {
     ensureTmuxCommandSucceeded(
       runTmuxCommand(["set-option", "-t", sessionName, optionName, optionValue]),
       `configure tmux session ${sessionName}`
@@ -813,6 +819,7 @@ async function createTmuxClientSession(options) {
   if (!sessionAlreadyExists) {
     createTmuxSession(tmuxSessionName, options.cwd);
   } else {
+    configureTmuxSession(tmuxSessionName);
     configureTmuxColorEnvironment(tmuxSessionName);
   }
 
