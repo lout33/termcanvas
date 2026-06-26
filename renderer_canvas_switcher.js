@@ -62,14 +62,25 @@
     };
   }
 
+  const TERMINAL_STRIP_LABEL_MAX_LENGTH = 10;
+
+  function getCompactTerminalLabel(titleText) {
+    const compactLabel = Array.from(titleText).slice(0, TERMINAL_STRIP_LABEL_MAX_LENGTH).join("");
+    return compactLabel.length > 0 ? compactLabel : "Terminal";
+  }
+
   function normalizeTerminalStripItem(nodeRecord, activeNodeId) {
     const normalizedId = typeof nodeRecord?.id === "string" || typeof nodeRecord?.id === "number"
       ? String(nodeRecord.id)
       : "";
+    const titleText = typeof nodeRecord?.titleText === "string" && nodeRecord.titleText.trim().length > 0
+      ? nodeRecord.titleText.trim()
+      : "Terminal";
 
     return {
       id: normalizedId,
-      label: typeof nodeRecord?.titleText === "string" ? nodeRecord.titleText : "",
+      label: getCompactTerminalLabel(titleText),
+      fullLabel: titleText,
       isActive: normalizedId.length > 0 && normalizedId === String(activeNodeId),
       isEmptyState: false
     };

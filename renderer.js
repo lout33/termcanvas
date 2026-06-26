@@ -1853,11 +1853,16 @@ function syncTerminalStripOverflowControls() {
     clientWidth: terminalStripList.clientWidth,
     scrollWidth: terminalStripList.scrollWidth
   });
+  const activeCanvas = getActiveCanvas();
+  const terminalNodes = getVisibleCanvasNodes(activeCanvas);
+  const activeIndex = activeNodeRecord?.canvas === activeCanvas
+    ? terminalNodes.findIndex((nodeRecord) => nodeRecord === activeNodeRecord)
+    : -1;
 
-  terminalStripPrevButton.hidden = !overflowState.hasOverflow;
-  terminalStripNextButton.hidden = !overflowState.hasOverflow;
-  terminalStripPrevButton.disabled = !overflowState.canScrollBackward;
-  terminalStripNextButton.disabled = !overflowState.canScrollForward;
+  terminalStripPrevButton.hidden = !overflowState.hasOverflow || terminalNodes.length <= 1;
+  terminalStripNextButton.hidden = !overflowState.hasOverflow || terminalNodes.length <= 1;
+  terminalStripPrevButton.disabled = activeIndex <= 0;
+  terminalStripNextButton.disabled = activeIndex >= terminalNodes.length - 1 && activeIndex >= 0;
 }
 
 function scheduleTerminalStripOverflowControlsSync(options = {}) {
@@ -1874,41 +1879,53 @@ function scheduleTerminalStripOverflowControlsSync(options = {}) {
   });
 }
 
-function scrollTerminalStrip(direction) {
-  if (!(terminalStripList instanceof HTMLElement)) {
+function activateTerminalStripNode(nodeRecord, options = {}) {
+  if (nodeRecord === null) {
     return;
   }
 
-  const stripItems = Array.from(terminalStripList.querySelectorAll(".terminal-strip-item:not(.is-empty-state)"));
-  const itemOffsets = stripItems.map((item) => ({
-    start: item.offsetLeft,
-    end: item.offsetLeft + item.offsetWidth
-  }));
-  const targetIndex = getStripOverflowTargetIndex({
-    itemOffsets,
-    scrollLeft: terminalStripList.scrollLeft,
-    clientWidth: terminalStripList.clientWidth,
-    direction
+  const activation = deriveTerminalStripActivation({
+    isFullscreenMode: getVisibleMaximizedNode() !== null,
+    clickCount: options.clickCount
   });
 
-  if (targetIndex >= 0) {
-    stripItems[targetIndex]?.scrollIntoView({
-      block: "nearest",
-      inline: direction === "backward" ? "start" : "end"
-    });
-    scheduleTerminalStripOverflowControlsSync();
+  setActiveNode(nodeRecord);
+
+  if (activation.shouldCenterViewport) {
+    centerViewportOnNode(nodeRecord);
+  }
+
+  if (activation.shouldMaximize) {
+    setNodeMaximized(nodeRecord, true);
+  }
+
+  if (activation.shouldFocus) {
+    nodeRecord.terminal?.focus();
+  }
+}
+
+function activateAdjacentTerminalFromStrip(direction) {
+  const activeCanvas = getActiveCanvas();
+  const terminalNodes = getVisibleCanvasNodes(activeCanvas);
+
+  if (terminalNodes.length === 0) {
     return;
   }
 
-  const nextScrollLeft = getStripScrollTarget({
-    scrollLeft: terminalStripList.scrollLeft,
-    clientWidth: terminalStripList.clientWidth,
-    scrollWidth: terminalStripList.scrollWidth,
-    direction
-  });
+  const activeIndex = activeNodeRecord?.canvas === activeCanvas
+    ? terminalNodes.findIndex((nodeRecord) => nodeRecord === activeNodeRecord)
+    : -1;
+  const nextIndex = direction === "backward"
+    ? Math.max(0, activeIndex < 0 ? 0 : activeIndex - 1)
+    : Math.min(terminalNodes.length - 1, activeIndex < 0 ? 0 : activeIndex + 1);
 
-  terminalStripList.scrollLeft = nextScrollLeft;
-  scheduleTerminalStripOverflowControlsSync();
+  if (activeIndex === nextIndex && activeIndex >= 0) {
+    scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
+    return;
+  }
+
+  activateTerminalStripNode(terminalNodes[nextIndex], { clickCount: 1 });
+  scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
 }
 
 function createTerminalStripItem(itemView) {
@@ -1917,9 +1934,16 @@ function createTerminalStripItem(itemView) {
   stripItem.className = "terminal-strip-item";
   stripItem.textContent = itemView.label;
   stripItem.dataset.nodeId = itemView.id;
+  stripItem.setAttribute("role", "tab");
+  stripItem.setAttribute("aria-label", `Focus ${itemView.fullLabel ?? itemView.label}`);
+  stripItem.title = itemView.fullLabel ?? itemView.label;
 
   if (itemView.isActive) {
     stripItem.classList.add("is-active");
+    stripItem.setAttribute("aria-current", "true");
+    stripItem.setAttribute("aria-selected", "true");
+  } else {
+    stripItem.setAttribute("aria-selected", "false");
   }
 
   if (itemView.isEmptyState) {
@@ -1935,24 +1959,7 @@ function createTerminalStripItem(itemView) {
       return;
     }
 
-    const activation = deriveTerminalStripActivation({
-      isFullscreenMode: getVisibleMaximizedNode() !== null,
-      clickCount
-    });
-
-    setActiveNode(nodeRecord);
-
-    if (activation.shouldCenterViewport) {
-      centerViewportOnNode(nodeRecord);
-    }
-
-    if (activation.shouldMaximize) {
-      setNodeMaximized(nodeRecord, true);
-    }
-
-    if (activation.shouldFocus) {
-      nodeRecord.terminal?.focus();
-    }
+    activateTerminalStripNode(nodeRecord, { clickCount });
   };
 
   stripItem.addEventListener("click", (event) => {
@@ -2065,6 +2072,9 @@ function renderCanvasOverviewHeader() {
   if (canvasPanelTitle instanceof HTMLElement) {
     canvasPanelTitle.textContent = activeCanvas === null
       ? "No project open"
+      : activeCanvas.name;
+    canvasPanelTitle.title = activeCanvas === null
+      ? "No project open"
       : `${projectName} / ${activeCanvas.name}`;
   }
 
@@ -2098,8 +2108,7 @@ function renderCanvasOverviewHeader() {
   if (canvasPanelPills instanceof HTMLElement) {
     if (activeCanvas === null) {
       canvasPanelPills.replaceChildren(
-        createCanvasPanelPill("open a project"),
-        createCanvasPanelPill("0 agents", "is-muted")
+        createCanvasPanelPill("open project", "is-muted")
       );
       return;
     }
@@ -2111,10 +2120,7 @@ function renderCanvasOverviewHeader() {
       ? (managedAgentCount === 1 ? "agent" : "agents")
       : (visibleNodes.length === 1 ? "terminal" : "terminals");
 
-    canvasPanelPills.replaceChildren(
-      createCanvasPanelPill(managedAgentCount > 0 ? "delegation tree" : "terminal canvas"),
-      createCanvasPanelPill(`${count} ${countNoun}`, count > 0 ? "is-active" : "is-muted")
-    );
+    canvasPanelPills.replaceChildren(createCanvasPanelPill(`${count} ${countNoun}`, count > 0 ? "is-active" : "is-muted"));
   }
 }
 
@@ -8206,11 +8212,11 @@ canvasStripNextButton?.addEventListener("click", () => {
 });
 
 terminalStripPrevButton?.addEventListener("click", () => {
-  scrollTerminalStrip("backward");
+  activateAdjacentTerminalFromStrip("backward");
 });
 
 terminalStripNextButton?.addEventListener("click", () => {
-  scrollTerminalStrip("forward");
+  activateAdjacentTerminalFromStrip("forward");
 });
 
 window.addEventListener("resize", () => {

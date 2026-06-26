@@ -106,15 +106,13 @@ test("canvas header merges global context and canvas status into one row", () =>
 
   assert.match(
     html,
-    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<button class="sidebar-edge-handle rail-toggle-button" id="rail-toggle-button"[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-breadcrumb" id="canvas-breadcrumb">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item" id="export-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="import-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="install-agent-skill-button"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
+    /<header class="canvas-panel-header" id="canvas-panel-header"[\s\S]*?<button class="sidebar-edge-handle rail-toggle-button" id="rail-toggle-button"[\s\S]*?<button class="sidebar-edge-handle" id="sidebar-toggle-button"[\s\S]*?<div class="canvas-panel-context">[\s\S]*?<div class="canvas-breadcrumb" id="canvas-breadcrumb">[\s\S]*?<div class="canvas-panel-title" id="canvas-panel-title"[\s\S]*?<div class="canvas-panel-pills" id="canvas-panel-pills"[\s\S]*?<section class="terminal-strip-topbar-section" id="terminal-strip-section"[\s\S]*?<div class="terminal-strip-list" id="terminal-strip-list" role="tablist"[\s\S]*?<button class="canvas-panel-icon-button" id="canvas-actions-menu-button"[\s\S]*?<div class="canvas-panel-menu-popover" id="canvas-actions-menu"[\s\S]*?<button class="canvas-panel-menu-item" id="export-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="import-canvas-button"[\s\S]*?<button class="canvas-panel-menu-item" id="install-agent-skill-button"[\s\S]*?<button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button"/i
   );
 
   assert.doesNotMatch(html, /class="app-rail-file-actions"/i);
   assert.doesNotMatch(html, /id="canvas-topbar"/i);
   assert.doesNotMatch(html, /canvas-topbar-shell/i);
   assert.doesNotMatch(html, /canvas-topbar-primary-row/i);
-  assert.doesNotMatch(html, /terminal-strip-topbar-section/i);
-  assert.doesNotMatch(html, /id="terminal-strip-section"/i);
   assert.doesNotMatch(html, /terminal-strip-heading/i);
 });
 

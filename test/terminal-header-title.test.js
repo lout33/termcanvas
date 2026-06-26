@@ -61,6 +61,14 @@ test("terminal strip items attach reorder handling for active canvas terminals",
 
   assert.match(renderer, /attachReorderableListItem\(stripItem, stripItem, \{/);
   assert.match(renderer, /onMove: async \(_nodeId, targetIndex\) => reorderTerminalNodeById\(itemView\.id, targetIndex\)/);
+  assert.match(renderer, /stripItem\.setAttribute\("role", "tab"\);/);
+  assert.match(renderer, /stripItem\.setAttribute\("aria-label", `Focus \$\{itemView\.fullLabel \?\? itemView\.label\}`\);/);
+  assert.match(renderer, /stripItem\.setAttribute\("aria-current", "true"\);/);
+  assert.match(renderer, /function activateAdjacentTerminalFromStrip\(direction\) \{/);
+  assert.match(renderer, /terminalStripPrevButton\?\.addEventListener\("click", \(\) => \{[\s\S]*activateAdjacentTerminalFromStrip\("backward"\);/);
+  assert.match(renderer, /terminalStripNextButton\?\.addEventListener\("click", \(\) => \{[\s\S]*activateAdjacentTerminalFromStrip\("forward"\);/);
+  assert.doesNotMatch(renderer, /scrollTerminalStrip\("backward"\)/);
+  assert.doesNotMatch(renderer, /scrollTerminalStrip\("forward"\)/);
 });
 
 test("canvas close is guarded by the header menu instead of the vertical rail", () => {

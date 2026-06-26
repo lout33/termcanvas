@@ -130,8 +130,8 @@ test("deriveTerminalStripViewModel lists only active canvas terminals and marks 
     label: "Terminal navigator",
     isEmpty: false,
     items: [
-      { id: "node-1", label: "server", isActive: false, isEmptyState: false },
-      { id: "node-2", label: "database", isActive: true, isEmptyState: false }
+      { id: "node-1", label: "server", fullLabel: "server", isActive: false, isEmptyState: false },
+      { id: "node-2", label: "database", fullLabel: "database", isActive: true, isEmptyState: false }
     ]
   });
 });
@@ -173,10 +173,50 @@ test("deriveTerminalStripViewModel preserves numeric node ids as clickable strin
     label: "Terminal navigator",
     isEmpty: false,
     items: [
-      { id: "1", label: "server", isActive: false, isEmptyState: false },
-      { id: "2", label: "database", isActive: true, isEmptyState: false }
+      { id: "1", label: "server", fullLabel: "server", isActive: false, isEmptyState: false },
+      { id: "2", label: "database", fullLabel: "database", isActive: true, isEmptyState: false }
     ]
   });
+});
+
+test("deriveTerminalStripViewModel caps visible terminal labels at ten characters", () => {
+  const viewModel = deriveTerminalStripViewModel({
+    activeCanvas: {
+      id: "canvas-a",
+      nodes: [
+        { id: "node-1", titleText: "life4-2340e804-5-general" }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(viewModel.items, [
+    {
+      id: "node-1",
+      label: "life4-2340",
+      fullLabel: "life4-2340e804-5-general",
+      isActive: false,
+      isEmptyState: false
+    }
+  ]);
+});
+
+test("deriveTerminalStripViewModel falls back to readable terminal labels", () => {
+  const viewModel = deriveTerminalStripViewModel({
+    activeCanvas: {
+      id: "canvas-a",
+      nodes: [
+        { id: "node-1", titleText: "   " },
+        { id: "node-2" }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(viewModel.items, [
+    { id: "node-1", label: "Terminal", fullLabel: "Terminal", isActive: false, isEmptyState: false },
+    { id: "node-2", label: "Terminal", fullLabel: "Terminal", isActive: false, isEmptyState: false }
+  ]);
 });
 
 test("deriveTerminalStripDropTarget returns a before-target insertion for pointers on the left half", () => {
