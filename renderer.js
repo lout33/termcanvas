@@ -150,6 +150,7 @@ const TERMINAL_MIN_ROWS = 8;
 const TERMINAL_FALLBACK_COLS = 80;
 const TERMINAL_FALLBACK_ROWS = 24;
 const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 240];
+const OSC52_CLIPBOARD_MAX_BYTES = 1024 * 1024;
 const AGENT_SKILL_INSTALL_PROMPT_DISMISSED_KEY = "termcanvas.agentSkillInstallPromptDismissed";
 
 let terminalCount = 0;
@@ -429,7 +430,7 @@ async function copyTextToClipboard(text) {
   }
 
   try {
-    if (navigator?.clipboard?.writeText) {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
       return true;
     }
@@ -454,6 +455,56 @@ async function copyTextToClipboard(text) {
   } finally {
     fallbackTextArea.remove();
   }
+}
+
+function decodeOsc52ClipboardPayload(payload) {
+  if (typeof payload !== "string" || payload.length === 0) {
+    return null;
+  }
+
+  const estimatedBytes = Math.floor((payload.length * 3) / 4);
+
+  if (estimatedBytes > OSC52_CLIPBOARD_MAX_BYTES) {
+    return null;
+  }
+
+  try {
+    const binaryText = window.atob(payload);
+    const bytes = Uint8Array.from(binaryText, (character) => character.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function handleOsc52ClipboardData(data, nodeRecord) {
+  if (nodeRecord?.backend !== "tmux" || typeof data !== "string") {
+    return false;
+  }
+
+  const separatorIndex = data.indexOf(";");
+
+  if (separatorIndex < 0) {
+    return true;
+  }
+
+  const payload = data.slice(separatorIndex + 1);
+  const text = decodeOsc52ClipboardPayload(payload);
+
+  if (text === null || text.length === 0) {
+    return true;
+  }
+
+  void copyTextToClipboard(text);
+  return true;
+}
+
+function registerTerminalClipboardBridge(terminal, nodeRecord) {
+  if (typeof terminal?.parser?.registerOscHandler !== "function") {
+    return;
+  }
+
+  terminal.parser.registerOscHandler(52, (data) => handleOsc52ClipboardData(data, nodeRecord));
 }
 
 function clampNodeDimension(value, minimum, fallback) {
@@ -874,6 +925,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
     fontWeightBold: 700,
     letterSpacing: 0,
     lineHeight: terminalTheme.lineHeight,
+    macOptionClickForcesSelection: true,
     minimumContrastRatio: 1,
     rescaleOverlappingGlyphs: true,
     termName: "xterm-256color",
@@ -884,6 +936,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
 
   terminal.loadAddon(fitAddon);
   enableTerminalUnicodeWidthSupport(terminal);
+  registerTerminalClipboardBridge(terminal, nodeRecord);
   terminal.open(nodeRecord.terminalMount);
   terminal.attachCustomWheelEventHandler((event) => {
     return shouldTerminalHandleWheel({
@@ -7432,7 +7485,6 @@ function handleWindowKeyDown(event) {
 
   const shortcutKey = String(event.key).toLowerCase();
   const isCommandShortcut = event.metaKey && !event.ctrlKey && !event.altKey;
-  const isViewportShortcut = (event.metaKey || event.ctrlKey) && !event.altKey;
   const isFileSearchShortcut = shortcutKey === "f"
     && !event.altKey
     && (
@@ -7444,26 +7496,6 @@ function handleWindowKeyDown(event) {
     event.preventDefault();
     focusWorkspaceSearch({ select: true });
     return;
-  }
-
-  if (isViewportShortcut && !isTypingTarget(event.target)) {
-    if (shortcutKey === "=" || shortcutKey === "+") {
-      event.preventDefault();
-      zoomActiveCanvasByStep("in");
-      return;
-    }
-
-    if (shortcutKey === "-" || shortcutKey === "_") {
-      event.preventDefault();
-      zoomActiveCanvasByStep("out");
-      return;
-    }
-
-    if (shortcutKey === "0") {
-      event.preventDefault();
-      resetActiveCanvasZoom();
-      return;
-    }
   }
 
   if (isCommandShortcut && shortcutKey === "l" && isWorkspacePreviewOpen()) {

@@ -42,6 +42,8 @@ function loadMainWithMocks({
   const appEventHandlers = new Map();
   const contentsEventHandlers = new Map();
   const sentMessages = [];
+  const menuTemplates = [];
+  const applicationMenus = [];
 
   function createMockWindow(options = {}) {
     const window = {
@@ -107,6 +109,15 @@ function loadMainWithMocks({
         handlers.set(channel, handler);
       }
     },
+    Menu: {
+      buildFromTemplate: (template) => {
+        menuTemplates.push(template);
+        return { template };
+      },
+      setApplicationMenu: (menu) => {
+        applicationMenus.push(menu);
+      }
+    },
     webContents: {
       fromId: (id) => createMockContents(id, contentsEventHandlers, sentMessages)
     }
@@ -169,7 +180,9 @@ function loadMainWithMocks({
     showItemInFolderCalls,
     appEventHandlers,
     contentsEventHandlers,
-    sentMessages
+    sentMessages,
+    menuTemplates,
+    applicationMenus
   };
 }
 
@@ -632,6 +645,14 @@ test("terminal:create repairs tmux color environment before attaching sessions",
   assert.ok(
     hasTmuxCall("set-option", "-t", existingSessionName, "history-limit", "20000"),
     "expected tmux pane history to be large enough for terminal harness scrollback"
+  );
+  assert.ok(
+    hasTmuxCall("set-option", "-t", existingSessionName, "set-clipboard", "external"),
+    "expected tmux copy-mode selections to use host clipboard export"
+  );
+  assert.ok(
+    hasTmuxCall("set-option", "-s", "-a", "terminal-features", ",xterm-256color:clipboard"),
+    "expected tmux to advertise OSC 52 clipboard support to TermCanvas clients"
   );
   assert.ok(
     hasTmuxUtf8EnvironmentCall("-t", existingSessionName, "LANG")
@@ -1175,6 +1196,26 @@ test("createMainWindow denies new windows and opens external links in the system
 
   assert.deepEqual(handlerResult, { action: "deny" });
   assert.deepEqual(openExternalCalls, ["https://example.com/docs"]);
+  delete require.cache[mainPath];
+});
+
+test("application menu exposes standard app zoom commands", async () => {
+  const { menuTemplates, applicationMenus, mainPath } = loadMainWithMocks({
+    resolveWhenReady: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] })
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(menuTemplates.length, 1);
+  assert.equal(applicationMenus.length, 1);
+
+  const viewMenu = menuTemplates[0].find((item) => item.label === "View");
+  assert.ok(viewMenu);
+  assert.deepEqual(
+    viewMenu.submenu.filter((item) => typeof item.role === "string").map((item) => item.role),
+    ["resetZoom", "zoomIn", "zoomOut", "togglefullscreen"]
+  );
   delete require.cache[mainPath];
 });
 

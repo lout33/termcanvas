@@ -48,6 +48,25 @@ test("terminal close and copy actions live behind the node action menu", () => {
   assert.doesNotMatch(renderer, /actions\.append\(status, maximizeButton, closeButton\);/);
 });
 
+test("tmux-backed terminal clipboard copies use OSC 52", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const OSC52_CLIPBOARD_MAX_BYTES = 1024 \* 1024;/);
+  assert.match(renderer, /function decodeOsc52ClipboardPayload\(payload\) \{/);
+  assert.match(renderer, /function handleOsc52ClipboardData\(data, nodeRecord\) \{[\s\S]*nodeRecord\?\.backend !== "tmux"/);
+  assert.match(renderer, /terminal\.parser\.registerOscHandler\(52, \(data\) => handleOsc52ClipboardData\(data, nodeRecord\)\);/);
+  assert.match(renderer, /registerTerminalClipboardBridge\(terminal, nodeRecord\);/);
+});
+
+test("keyboard app zoom shortcuts are not captured by canvas zoom", () => {
+  const renderer = readRenderer();
+
+  assert.doesNotMatch(renderer, /const isViewportShortcut = \(event\.metaKey \|\| event\.ctrlKey\) && !event\.altKey;/);
+  assert.doesNotMatch(renderer, /shortcutKey === "=" \|\| shortcutKey === "\+"[\s\S]*zoomActiveCanvasByStep\("in"\)/);
+  assert.match(renderer, /boardZoomInButton\?\.addEventListener\("click", \(\) => \{[\s\S]*zoomActiveCanvasByStep\("in"\);/);
+  assert.match(renderer, /board\.addEventListener\("wheel", handleBoardWheel, \{ passive: false \}\);/);
+});
+
 test("maximized terminal headers expose a clear exit fullscreen action", () => {
   const renderer = readRenderer();
 

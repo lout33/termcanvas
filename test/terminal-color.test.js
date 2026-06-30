@@ -28,7 +28,9 @@ test("terminal sessions advertise truecolor capability", () => {
   assert.match(main, /set-environment",\s*\.\.\.targetArgs,\s*"-u",\s*"NO_COLOR"/);
   assert.match(main, /set-environment",\s*\.\.\.targetArgs,\s*name,\s*value/);
   assert.match(main, /terminal-features",\s*",xterm-256color:RGB"/);
+  assert.match(main, /terminal-features",\s*",xterm-256color:clipboard"/);
   assert.match(main, /terminal-overrides",\s*",xterm-256color:Tc"/);
+  assert.match(main, /\["set-clipboard",\s*"external"\]/);
 });
 
 test("xterm renderer uses a vivid ANSI palette", () => {
@@ -54,6 +56,7 @@ test("xterm layout stays compatible with interactive TUI output", () => {
   assert.match(renderer, /terminal\.unicode\.activeVersion = "11";/);
   assert.match(renderer, /convertEol:\s*false/);
   assert.match(renderer, /customGlyphs:\s*false/);
+  assert.match(renderer, /macOptionClickForcesSelection:\s*true/);
   assert.match(renderer, /rescaleOverlappingGlyphs:\s*true/);
   assert.match(renderer, /termName:\s*"xterm-256color"/);
   assert.match(renderer, /const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = \[80, 240\];/);

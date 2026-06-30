@@ -156,6 +156,16 @@ function createApplicationMenu() {
       requestAgentSkillInstallFromFocusedWindow();
     }
   };
+  const viewMenu = {
+    label: "View",
+    submenu: [
+      { role: "resetZoom" },
+      { role: "zoomIn" },
+      { role: "zoomOut" },
+      { type: "separator" },
+      { role: "togglefullscreen" }
+    ]
+  };
   const template = process.platform === "darwin"
     ? [
         {
@@ -183,7 +193,8 @@ function createApplicationMenu() {
             { role: "paste" },
             { role: "selectAll" }
           ]
-        }
+        },
+        viewMenu
       ]
     : [
         {
@@ -205,7 +216,8 @@ function createApplicationMenu() {
             { role: "paste" },
             { role: "selectAll" }
           ]
-        }
+        },
+        viewMenu
       ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -279,6 +291,20 @@ function tmuxTerminalFeaturesIncludeTruecolor(value) {
 
     return (terminalPattern === "xterm-256color" || terminalPattern === "xterm*" || terminalPattern === "xterm-*")
       && features.includes("RGB");
+  });
+}
+
+function tmuxTerminalFeaturesIncludeClipboard(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return false;
+  }
+
+  return value.split(/\r?\n/u).some((line) => {
+    const optionValue = line.replace(/^terminal-features(?:\[\d+\])?\s+/u, "").trim();
+    const [terminalPattern, ...features] = optionValue.split(":");
+
+    return (terminalPattern === "xterm-256color" || terminalPattern === "xterm*" || terminalPattern === "xterm-*")
+      && features.includes("clipboard");
   });
 }
 
@@ -488,13 +514,31 @@ function configureTmuxTruecolorSupport() {
   console.warn(`Could not enable tmux truecolor support: ${details}`);
 }
 
+function configureTmuxClipboardSupport() {
+  const currentFeatures = runTmuxCommand(["show-options", "-s", "terminal-features"]);
+
+  if (
+    currentFeatures !== null
+    && currentFeatures.status === 0
+    && tmuxTerminalFeaturesIncludeClipboard(currentFeatures.stdout)
+  ) {
+    return;
+  }
+
+  warnIfTmuxCommandFailed(
+    runTmuxCommand(["set-option", "-s", "-a", "terminal-features", ",xterm-256color:clipboard"]),
+    "enable tmux clipboard capability"
+  );
+}
+
 function configureTmuxSession(sessionName) {
   [
     ["status", "off"],
     ["destroy-unattached", "off"],
     ["default-terminal", "tmux-256color"],
     ["mouse", "on"],
-    ["history-limit", "20000"]
+    ["history-limit", "20000"],
+    ["set-clipboard", "external"]
   ].forEach(([optionName, optionValue]) => {
     ensureTmuxCommandSucceeded(
       runTmuxCommand(["set-option", "-t", sessionName, optionName, optionValue]),
@@ -824,6 +868,7 @@ async function createTmuxClientSession(options) {
   }
 
   configureTmuxTruecolorSupport();
+  configureTmuxClipboardSupport();
 
   try {
     const terminalPty = pty.spawn(tmuxBinary, ["-u", "attach-session", "-t", tmuxSessionName], {
