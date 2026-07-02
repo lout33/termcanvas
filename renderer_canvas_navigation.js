@@ -62,7 +62,9 @@
   }
 
   function shouldShowBoardHintsForCanvas(canvasRecord) {
-    return Array.isArray(canvasRecord?.nodes) && canvasRecord.nodes.length === 0;
+    return Array.isArray(canvasRecord?.nodes)
+      && canvasRecord.nodes.length === 0
+      && (!Array.isArray(canvasRecord?.notes) || canvasRecord.notes.length === 0);
   }
 
   function deriveTerminalStripActivation({ isFullscreenMode, clickCount }) {

@@ -21,15 +21,21 @@
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
   }
 
+  function undirectedKey(fromId, toId) {
+    const left = String(fromId);
+    const right = String(toId);
+    return left < right ? `${left}<->${right}` : `${right}<->${left}`;
+  }
+
   // Given canvas node descriptors carrying agentmux awareness, derive the
-  // delegation edges (parent -> child) that the canvas should draw.
+  // delegation edges the canvas should draw. The topology is a graph: stored
+  // agentmux edges ({ from, to, kind } by agent name) are the source of truth,
+  // unioned with the legacy parent_agent derivation so agents that predate the
+  // edges table keep their lines. Deduped as undirected pairs.
   //
-  // Each descriptor: { id, agentName, parentAgent, commanderAgent, isManager, projectTag }
-  // Returns: [{ fromId, toId }] with parent first, deduped, self-links excluded.
-  //
-  // agentmux reports each worker's parent by name, so commander -> worker ->
-  // grandchild trees use the same edge derivation as the original 2-level case.
-  function deriveCanvasDelegationEdges(nodes) {
+  // Each descriptor: { id, agentName, parentAgent, projectTag }
+  // Returns: [{ fromId, toId, kind }] with self-links excluded.
+  function deriveCanvasDelegationEdges(nodes, storedEdges = []) {
     if (!Array.isArray(nodes)) {
       return [];
     }
@@ -47,39 +53,51 @@
     const edges = [];
     const seen = new Set();
 
-    for (const node of nodes) {
-      if (node?.isManager === true) {
-        continue;
+    function pushEdge(fromNode, toNode, kind) {
+      if (fromNode == null || toNode == null || fromNode.id == null || toNode.id == null || fromNode.id === toNode.id) {
+        return;
       }
 
+      const fromTag = normalizeTag(fromNode?.projectTag);
+      const toTag = normalizeTag(toNode?.projectTag);
+
+      if (fromTag !== null && toTag !== null && fromTag !== toTag) {
+        return;
+      }
+
+      const key = undirectedKey(fromNode.id, toNode.id);
+
+      if (seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      edges.push({ fromId: fromNode.id, toId: toNode.id, kind });
+    }
+
+    if (Array.isArray(storedEdges)) {
+      for (const storedEdge of storedEdges) {
+        const fromName = normalizeName(storedEdge?.from);
+        const toName = normalizeName(storedEdge?.to);
+
+        if (fromName === null || toName === null || fromName === toName) {
+          continue;
+        }
+
+        const kind = normalizeName(storedEdge?.kind) ?? "link";
+        pushEdge(nodeByAgentName.get(fromName), nodeByAgentName.get(toName), kind);
+      }
+    }
+
+    for (const node of nodes) {
       const ownName = normalizeName(node?.agentName);
-      const parentName = normalizeName(node?.parentAgent) ?? normalizeName(node?.commanderAgent);
+      const parentName = normalizeName(node?.parentAgent);
 
       if (parentName === null || parentName === ownName) {
         continue;
       }
 
-      const parentNode = nodeByAgentName.get(parentName);
-
-      if (parentNode == null || parentNode.id == null || node.id == null || parentNode.id === node.id) {
-        continue;
-      }
-
-      const childTag = normalizeTag(node?.projectTag);
-      const parentTag = normalizeTag(parentNode?.projectTag);
-
-      if (childTag !== null && parentTag !== null && childTag !== parentTag) {
-        continue;
-      }
-
-      const key = `${parentNode.id}->${node.id}`;
-
-      if (seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-      edges.push({ fromId: parentNode.id, toId: node.id });
+      pushEdge(nodeByAgentName.get(parentName), node, "spawn");
     }
 
     return edges;

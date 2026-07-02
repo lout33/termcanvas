@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, webContents, Menu } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, webContents, Menu, Notification } = require("electron");
 const { spawnSync } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
@@ -163,7 +164,10 @@ function createApplicationMenu() {
       { role: "zoomIn" },
       { role: "zoomOut" },
       { type: "separator" },
-      { role: "togglefullscreen" }
+      { role: "togglefullscreen" },
+      { type: "separator" },
+      { role: "reload" },
+      { role: "toggleDevTools" }
     ]
   };
   const template = process.platform === "darwin"
@@ -547,10 +551,13 @@ function configureTmuxSession(sessionName) {
   });
 }
 
-function createTmuxSession(sessionName, cwd) {
+function createTmuxSession(sessionName, cwd, sessionEnv = {}) {
   configureTmuxColorEnvironment();
+  const environmentArgs = Object.entries(sessionEnv)
+    .filter(([, value]) => typeof value === "string")
+    .flatMap(([name, value]) => ["-e", `${name}=${value}`]);
   ensureTmuxCommandSucceeded(
-    runTmuxCommand(["new-session", "-d", "-s", sessionName, "-c", cwd]),
+    runTmuxCommand(["new-session", "-d", "-s", sessionName, "-c", cwd, ...environmentArgs]),
     `create tmux session ${sessionName}`
   );
   configureTmuxSession(sessionName);
@@ -861,7 +868,7 @@ async function createTmuxClientSession(options) {
   }
 
   if (!sessionAlreadyExists) {
-    createTmuxSession(tmuxSessionName, options.cwd);
+    createTmuxSession(tmuxSessionName, options.cwd, options.sessionEnv ?? {});
   } else {
     configureTmuxSession(tmuxSessionName);
     configureTmuxColorEnvironment(tmuxSessionName);
@@ -1850,6 +1857,51 @@ ipcMain.on("terminal:active-state", (event, payload) => {
   activeTerminalShortcutStates.set(event.sender.id, payload?.hasActiveTerminal === true);
 });
 
+// Attention layer: dock badge mirrors how many agents are waiting on the user,
+// and a native notification fires for each newly-flagged agent while the app
+// window is not focused.
+ipcMain.on("attention:update", (event, payload) => {
+  const count = Number.isInteger(payload?.count) && payload.count > 0 ? payload.count : 0;
+
+  if (process.platform === "darwin" && app.dock) {
+    app.dock.setBadge(count > 0 ? String(count) : "");
+  }
+
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+  const isWindowFocused = ownerWindow !== null && ownerWindow.isFocused();
+  const newlyFlagged = Array.isArray(payload?.newlyFlagged) ? payload.newlyFlagged : [];
+
+  if (isWindowFocused || newlyFlagged.length === 0 || !Notification.isSupported()) {
+    return;
+  }
+
+  for (const item of newlyFlagged.slice(0, 3)) {
+    if (typeof item?.title !== "string" || item.title.length === 0) {
+      continue;
+    }
+
+    const notification = new Notification({
+      title: item.state === "error" ? `${item.title} failed` : `${item.title} needs input`,
+      body: item.state === "error"
+        ? "The agent hit an error. Jump back to the canvas to take a look."
+        : "The agent is waiting on you to continue.",
+      silent: false
+    });
+
+    notification.on("click", () => {
+      if (ownerWindow !== null && !ownerWindow.isDestroyed()) {
+        if (ownerWindow.isMinimized()) {
+          ownerWindow.restore();
+        }
+        ownerWindow.show();
+        ownerWindow.focus();
+      }
+    });
+
+    notification.show();
+  }
+});
+
 ipcMain.handle("workspace-session:restore", async (event, payload) => {
   return workspaceService.restoreSession(event.sender.id, payload);
 });
@@ -2047,6 +2099,23 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   const requestedTmuxSessionName = typeof payload?.tmuxSessionName === "string" && payload.tmuxSessionName.trim().length > 0
     ? payload.tmuxSessionName.trim()
     : null;
+  const agentProjectTag = typeof payload?.agentProjectTag === "string" && payload.agentProjectTag.trim().length > 0
+    ? payload.agentProjectTag.trim()
+    : null;
+  // Fresh canvas terminals are born as managed root agents so every process
+  // inside them (claude, codex, ...) inherits AGENTMUX_* context. Restored
+  // terminals reattach to existing tmux sessions and keep their agent record.
+  const shouldAdoptAsAgent = agentProjectTag !== null && requestedTmuxSessionName === null;
+  const plannedAgentName = shouldAdoptAsAgent ? `terminal-${randomUUID().slice(0, 6)}` : null;
+  const plannedTmuxSessionName = requestedTmuxSessionName ?? getTmuxSessionName(sessionKey);
+  const sessionEnv = shouldAdoptAsAgent
+    ? agentmuxService.buildTerminalAgentEnv({
+        projectTag: agentProjectTag,
+        agentName: plannedAgentName,
+        workdir: terminalCwd,
+        tmuxSessionName: plannedTmuxSessionName
+      })
+    : {};
 
   let tmuxSession = null;
 
@@ -2059,7 +2128,8 @@ ipcMain.handle("terminal:create", async (event, payload) => {
       shellName,
       sessionKey,
       tmuxSessionName: requestedTmuxSessionName,
-      createIfMissing: requestedTmuxSessionName === null
+      createIfMissing: requestedTmuxSessionName === null,
+      sessionEnv
     });
   } catch (error) {
     if (requestedTmuxSessionName !== null && isMissingTmuxSessionError(error)) {
@@ -2092,6 +2162,22 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   };
 
   terminalSessions.set(terminalId, session);
+
+  let managedAgentName = null;
+
+  if (shouldAdoptAsAgent && session.backend === "tmux" && session.tmuxSessionName !== null) {
+    try {
+      const adopted = await agentmuxService.adoptAgent({
+        tmuxSessionName: session.tmuxSessionName,
+        projectTag: agentProjectTag,
+        agentName: plannedAgentName,
+        workdir: session.cwd
+      });
+      managedAgentName = adopted.agentName;
+    } catch (error) {
+      console.warn(`Could not register terminal ${terminalId} as a canvas agent: ${error.message}`);
+    }
+  }
 
   if (shouldEnforceRequestedCwd && session.backend !== "tmux") {
     writeToSessionPty(
@@ -2134,6 +2220,8 @@ ipcMain.handle("terminal:create", async (event, payload) => {
     backend: session.backend,
     sessionKey: session.sessionKey,
     tmuxSessionName: session.tmuxSessionName,
+    managedAgentName,
+    managedProjectTag: managedAgentName !== null ? agentProjectTag : null,
     cols: safeCols,
     rows: safeRows
   };
@@ -2239,6 +2327,44 @@ ipcMain.handle("canvas-agent:sync", async (_event, payload) => {
 ipcMain.handle("canvas-agent:delete", async (_event, payload) => {
   await agentmuxService.deleteAgent(payload?.agentName);
   return { ok: true };
+});
+
+ipcMain.handle("canvas-agent:send", async (_event, payload) => {
+  await agentmuxService.sendAgentPrompt(payload?.agentName, payload?.message);
+  return { ok: true };
+});
+
+ipcMain.handle("canvas-agent:connect", async (_event, payload) => {
+  await agentmuxService.connectAgents(payload?.agentA, payload?.agentB);
+  return { ok: true };
+});
+
+ipcMain.handle("canvas-agent:adopt", async (_event, payload) => {
+  return agentmuxService.adoptAgent({
+    agentName: payload?.agentName,
+    tmuxSessionName: payload?.tmuxSessionName,
+    projectTag: payload?.projectTag,
+    workdir: payload?.workdir
+  });
+});
+
+// Read-only canvas snapshot for agents (roadmap M3). The renderer pushes the
+// latest swarm facts; we persist them atomically so any terminal agent can
+// read real canvas state from disk.
+function getCanvasSnapshotFilePath() {
+  return path.join(app.getPath("userData"), "canvas-snapshot.json");
+}
+
+ipcMain.handle("canvas-snapshot:update", (_event, payload) => {
+  const snapshotFilePath = getCanvasSnapshotFilePath();
+
+  if (payload?.snapshot != null && typeof payload.snapshot === "object") {
+    const temporaryPath = `${snapshotFilePath}.tmp`;
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(payload.snapshot, null, 2)}\n`);
+    fs.renameSync(temporaryPath, snapshotFilePath);
+  }
+
+  return { path: snapshotFilePath };
 });
 
 ipcMain.handle("agent-skill:status", () => getAgentmuxSkillStatus());

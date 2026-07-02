@@ -84,7 +84,6 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
       previewRelativePath: "README.md"
     },
     agentProjectTag: null,
-    managerAgentName: null,
     activeSessionKey: null,
     terminalNodes: [{
       sessionKey: null,
@@ -92,7 +91,6 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
       managedAgentRole: null,
       managedProjectTag: null,
       tmuxSessionName: null,
-      isManager: false,
       x: 10,
       y: 20,
       width: 600,
@@ -113,7 +111,6 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     managedAgentRole: null,
     managedProjectTag: null,
     tmuxSessionName: null,
-    isManager: false,
     x: 0,
     y: 0,
     width: 544,

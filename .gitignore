@@ -9,3 +9,5 @@ progress.md
 *.log
 .DS_Store
 vendor/agentmux/.agentmux/
+__pycache__/
+*.pyc

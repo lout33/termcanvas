@@ -94,6 +94,30 @@ test("development agentmux service uses vendored runtime by default", () => {
   }
 });
 
+test("buildTerminalAgentEnv gives canvas terminals full agentmux context", () => {
+  const repoRoot = path.join(__dirname, "..");
+  const service = createAgentmuxService({ agentmuxHomePath: path.join(repoRoot, ".tmp-agentmux-home") });
+
+  const env = service.buildTerminalAgentEnv({
+    projectTag: "proj-abc123",
+    agentName: "terminal-3f9c2a",
+    workdir: "/tmp/workspace",
+    tmuxSessionName: "termcanvas-node-1"
+  });
+
+  assert.equal(env.AGENTMUX_PROJECT, "proj-abc123");
+  assert.equal(env.AGENTMUX_AGENT_NAME, "terminal-3f9c2a");
+  assert.equal(env.AGENTMUX_ROLE, "agent");
+  assert.equal(env.AGENTMUX_DEPTH, "0");
+  assert.equal(env.AGENTMUX_PARENT_AGENT, "");
+  assert.equal(env.AGENTMUX_WORKDIR, "/tmp/workspace");
+  assert.equal(env.AGENTMUX_TMUX_SESSION, "termcanvas-node-1");
+  assert.equal(env.AGENTMUX_BIN, path.join(repoRoot, "vendor", "agentmux", "agentmux"));
+
+  assert.deepEqual(service.buildTerminalAgentEnv({ projectTag: "", agentName: "x" }), {});
+  assert.deepEqual(service.buildTerminalAgentEnv({ projectTag: "proj", agentName: null }), {});
+});
+
 test("release config bundles agentmux from electron-builder config", () => {
   const repoRoot = path.join(__dirname, "..");
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));

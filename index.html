@@ -143,6 +143,12 @@
           </section>
 
           <div class="canvas-panel-actions" aria-label="Canvas actions">
+            <button class="canvas-panel-icon-button" id="create-note-button" type="button" aria-label="Add a note to the canvas" title="Add a note to the canvas" disabled>
+              <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3.5 2.75h9a.75.75 0 0 1 .75.75v6l-3.5 3.75h-6.25a.75.75 0 0 1-.75-.75v-9a.75.75 0 0 1 .75-.75Z"></path>
+                <path d="M9.75 13.25v-3.75h3.5"></path>
+              </svg>
+            </button>
             <div class="canvas-panel-menu" id="canvas-actions-menu-root">
               <button class="canvas-panel-icon-button" id="canvas-actions-menu-button" type="button" aria-label="Canvas actions" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-actions-menu" title="Canvas actions" disabled>
                 <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -232,6 +238,11 @@
             Exit fullscreen
           </button>
 
+          <div class="board-hud-center" id="board-hud-center">
+            <button class="board-attention-chip" id="board-attention-chip" type="button" hidden aria-live="polite" title="Jump to the next agent that needs you"></button>
+            <button class="board-fleet-chip" id="board-fleet-chip" type="button" hidden title="Spawn a temporary Claude Code terminal with a fleet report">ask fleet</button>
+          </div>
+
           <div class="board-minimap" id="board-minimap" aria-hidden="true" hidden>
             <div class="board-minimap-label">map</div>
             <div class="board-minimap-canvas" id="board-minimap-canvas">
@@ -289,6 +300,9 @@
     <script src="./renderer_canvas_switcher.js"></script>
     <script src="./renderer_canvas_navigation.js"></script>
     <script src="./renderer_canvas_delegation.js"></script>
+    <script src="./renderer_node_status.js"></script>
+    <script src="./renderer_canvas_snapshot.js"></script>
+    <script src="./renderer_canvas_notes.js"></script>
     <script src="./renderer_workspace_markdown.bundle.js"></script>
     <script src="./renderer_workspace_preview.js"></script>
     <script src="./renderer.js"></script>

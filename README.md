@@ -6,7 +6,7 @@ TermCanvas is a desktop app that lets you arrange real terminal sessions on an i
 
 It is built for developers who juggle multiple repos, shells, AI agents, and long-running tasks and want something more spatial than tabs or split panes.
 
-The current direction is an agent-orchestration canvas: a fast, simple workspace where a commander agent, worker agents, normal shells, project files, and task context all live in one visible place.
+The current direction is an agent-orchestration canvas: a fast, simple workspace where a graph of peer AI agents, normal shells, project files, and task context all live in one visible place.
 
 ## Demo
 
@@ -20,7 +20,7 @@ Demo video: https://www.youtube.com/watch?v=4XN5jvk9P1U
 - an infinite canvas for real shell sessions
 - a desktop app for managing multiple terminals side by side
 - a project-bound canvas for browsing files next to the terminals that operate on them
-- an agentmux-aware view of commander and worker AI agent terminals
+- an agentmux-aware view of a live graph of peer AI agent terminals
 - a better fit for task-based terminal work than a pile of tabs
 
 ## Why People Use It
@@ -45,8 +45,8 @@ Examples:
 - Workspace drawer for browsing imported folders and previewing files
 - App-session restore across relaunches
 - `tmux`-backed terminal reattach when available
-- Integrated `agentmux` manager for commander and worker AI agent terminals
-- Agent delegation lines that show commander-to-worker-to-child relationships on the canvas
+- Integrated `agentmux` manager for a graph of peer AI agent terminals — any agent can spawn or connect to any other
+- Delegation and connection lines that show spawn lineage and manual peer links on the canvas, with directional arrows
 - Fresh-start welcome state that prompts for a folder instead of creating an empty phantom canvas
 - Canvas JSON export and import
 - Full app-data JSON export and import for moving setups between installs
@@ -69,7 +69,7 @@ npm run dev
 
 `tmux` is recommended if you want live terminal sessions to survive app relaunches.
 Managed agent terminals require `tmux` because `agentmux` uses it to create and
-control commander and worker sessions. On macOS, install it with:
+control agent sessions. On macOS, install it with:
 
 ```bash
 brew install tmux
@@ -114,13 +114,15 @@ Important behavior:
 
 ## Managed Agents
 
-TermCanvas has an integrated `agentmux` manager for creating and tracking commander and worker AI agent terminals on the canvas. Packaged apps include the runtime, so users do not need to install a separate agent manager.
+TermCanvas has an integrated `agentmux` manager that turns canvas terminals into a live **graph of peer AI agents** — any agent can spawn children, connect to any other agent, and delegate work directly. There is no commander, manager, or fixed hierarchy; spawning and connecting are both just edges in the same graph. Packaged apps include the runtime, so users do not need to install a separate agent manager.
 
+- every terminal you open on a canvas is registered as a root agent in the graph the moment it is created — the tmux session carries `AGENTMUX_PROJECT`, `AGENTMUX_AGENT_NAME`, `AGENTMUX_BIN`, and related env vars from birth, so anything you start inside it (Claude Code, Codex, OpenCode, ...) inherits full agent context automatically
+- agents spawned on an AI harness (`claude`, `codex`, `pi`, `opencode`) via `worker`/`child` receive an automatic `[TermCanvas]` briefing as their first message — identity, project, spawner, and how to use `neighbors`/`ask`/`check`/`child`; pass `--no-briefing` to opt out
 - packaged apps run the bundled runtime from the app resources folder
 - packaged apps store agentmux state under the app `userData` directory
 - development builds use the vendored runtime in `vendor/agentmux` by default
 - set `TERMCANVAS_AGENTMUX_ROOT` only when testing a different local runtime
-- `tmux` must be installed for commander and worker agent terminals
+- `tmux` must be installed for managed agent terminals
 - missing `agentmux` does not block normal terminal canvas use
 - TermCanvas does not write live canvas or agent state into project `AGENTS.md`; agents should inspect runtime state through `AGENTMUX_*` env vars and `agentmux show`
 - managed terminals expose `AGENTMUX_BIN` so installed agent skills can find the bundled runtime
@@ -129,28 +131,32 @@ TermCanvas has an integrated `agentmux` manager for creating and tracking comman
 
 Current agent-canvas behavior:
 
-- managed terminal nodes track agent name, role, project tag, parent agent, commander agent, and depth when agentmux reports them
-- commander-to-worker-to-child delegation lines are derived automatically from `parent_agent` or `commander_agent`
+- managed terminal nodes track agent name, role, project tag, parent agent, and depth when agentmux reports them; the node badge shows **Agent** (in the graph) or **Solo** (plain terminal, not yet adopted)
+- spawn edges (parent → child) and manual connect edges are both drawn on the canvas, with arrows showing direction — connect edges are symmetric (double-headed), spawn edges point from spawner to child
 - lines are drawn behind node cards and pan or zoom with the canvas
-- edges are project-scoped, deduplicated, and ignore self-links or unknown parents
-- any managed agent can spawn child workers; agentmux records parent/depth metadata so the canvas can render deeper trees from the runtime topology
+- edges are project-scoped, deduplicated, and ignore self-links
+- any managed agent can spawn children (`worker`, `child`) or wire itself to any other agent (`connect`); agentmux records both as edges so the canvas renders the real graph topology
+- the terminal node menu's "Connect to terminal…" action wires two terminals together and injects a briefing into both (auto-adopting a plain Solo terminal into the graph first, if needed)
 
-This is not a manual graph editor. The intent is to show the real agent swarm topology that agentmux knows about.
+This is not a manual graph editor. The intent is to show the real agent graph topology that agentmux knows about.
 
-The manager terminal is the main command center. Use terminal-native `agentmux` commands for orchestration instead of adding a heavy dashboard:
+Any terminal is a valid command center — use terminal-native `agentmux` commands for orchestration instead of adding a heavy dashboard:
 
 ```bash
 vendor/agentmux/agentmux tree <project>
 vendor/agentmux/agentmux status <project>
-vendor/agentmux/agentmux mission <project> "Build the next feature"
+vendor/agentmux/agentmux neighbors <agent>
 vendor/agentmux/agentmux child <parent-agent> <worker-name> --prompt "Handle this subtask"
+vendor/agentmux/agentmux connect <agent-a> <agent-b> --announce
+vendor/agentmux/agentmux ask <agent> "Delegate this and wait for the answer"
+vendor/agentmux/agentmux check <agent>
 vendor/agentmux/agentmux logs <agent> --lines 120
 vendor/agentmux/agentmux send <agent> "Follow up on X"
 vendor/agentmux/agentmux stop <agent>
 ```
 
-When run inside a managed terminal, project-aware commands can infer the project from `AGENTMUX_PROJECT`.
-TermCanvas should stay a minimal visual map of the live tree while the terminal remains the control surface.
+When run inside a managed terminal, project-aware commands can infer the project from `AGENTMUX_PROJECT`. `ask` is the key delegation primitive — it blocks until the target agent's turn finishes and returns its output, so `result=$(vendor/agentmux/agentmux ask <agent> "...")` works as a real RPC. `ask`/`check` require a graph connection to the target (spawn or connect first, or pass `--force`).
+TermCanvas should stay a minimal visual map of the live graph while the terminal remains the control surface.
 
 ### Install The Agent Skill
 
@@ -177,7 +183,7 @@ Development checkouts can also install the bundled copy directly:
 vendor/agentmux/agentmux install-skill --force
 ```
 
-The skill does not install the runtime. It teaches agents how to resolve `AGENTMUX_BIN`, inspect `AGENTMUX_*` session state, spawn workers through `agentmux worker` or `agentmux child`, send prompts, read logs, and stop or delete agents safely.
+The skill does not install the runtime. It teaches agents how to resolve `AGENTMUX_BIN`, inspect `AGENTMUX_*` session state, spawn agents through `agentmux worker` or `agentmux child`, connect and delegate with `connect`/`ask`/`check`, send prompts, read logs, and stop or delete agents safely.
 
 ## Current Product Direction
 
@@ -186,16 +192,17 @@ TermCanvas is moving from a generic spatial terminal board toward a project-awar
 What we are trying to make easy:
 
 - open a project and immediately get a canvas for that project
-- see terminals, workers, files, and previews without losing context
-- see who spawned whom in an agentmux swarm
-- manage missions and delegation primarily from the manager terminal
+- see terminals, agents, files, and previews without losing context
+- see who spawned whom, and who is connected to whom, in the live agent graph
+- delegate and get answers back directly between agents with `ask`, from any terminal
 - keep the UI simple enough that the canvas feels faster than juggling tabs
 - preserve live terminal work across app relaunches when `tmux` is available
 
 Near-term roadmap:
 
-- auto-layout child workers under their parent so the delegation graph is readable without manual dragging
-- make agent cards more role-aware with clearer status, names, and runtime state
+- `ask --batch` for parallel fan-out delegation across multiple agents at once
+- `--report-to` push callbacks so a delegated agent can notify its caller without polling
+- smarter `ask` answer extraction (structured markers instead of prompt-echo search)
 - expose a safe, read-only canvas snapshot so agents can understand who else is on the canvas
 - improve large-canvas feel: fit-to-content, smoother pan/zoom, and no jank with many nodes
 - add richer file/document navigation in the right preview panel

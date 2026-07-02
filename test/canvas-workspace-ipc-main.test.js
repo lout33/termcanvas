@@ -522,6 +522,131 @@ test("packaged terminal:create finds tmux in common macOS CLI paths", async () =
   }
 });
 
+test("terminal:create registers fresh canvas terminals as managed agents with AGENTMUX env", async () => {
+  const spawnCalls = [];
+  const agentmuxSpawnCalls = [];
+
+  function createFakeAgentmuxChild() {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.emit("data", "Imported terminal\n");
+      child.emit("close", 0);
+    });
+    return child;
+  }
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: (command, args, options) => {
+        spawnCalls.push({ command, args, options });
+
+        if (command === "tmux" && args[0] === "-V") {
+          return { status: 0, stdout: "tmux 3.4", stderr: "" };
+        }
+
+        if (command === "tmux" && args[0] === "has-session") {
+          return { status: 1, stdout: "", stderr: "no such session" };
+        }
+
+        if (command === "tmux" && args[0] === "display-message") {
+          return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
+        }
+
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      spawn: (command, args) => {
+        agentmuxSpawnCalls.push({ command, args });
+        return createFakeAgentmuxChild();
+      }
+    },
+    nodePtyStub: {
+      spawn: (command, args) => {
+        const sessionTarget = Array.isArray(args) ? args[3] : null;
+        const isProbeAttach = command === "tmux"
+          && Array.isArray(args)
+          && args[0] === "-u"
+          && args[1] === "attach-session"
+          && typeof sessionTarget === "string"
+          && sessionTarget.startsWith("termcanvas-probe-");
+
+        return createMockPtyProcess({ autoExitCode: isProbeAttach ? 0 : null });
+      }
+    }
+  });
+
+  try {
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    const created = await createTerminalHandler(
+      { sender: { id: 47 } },
+      {
+        terminalId: "managed-terminal",
+        sessionKey: "agent-env",
+        cols: 100,
+        rows: 30,
+        cwd: os.homedir(),
+        agentProjectTag: "proj-canvas1"
+      }
+    );
+
+    assert.match(created.managedAgentName, /^terminal-[0-9a-f]{6}$/u);
+    assert.equal(created.managedProjectTag, "proj-canvas1");
+
+    const newSession = spawnCalls.find(({ command, args }) => (
+      command === "tmux" && args[0] === "new-session" && args.includes("termcanvas-agent-env")
+    ));
+
+    assert.ok(newSession, "expected the terminal tmux session to be created");
+    assert.ok(newSession.args.includes("AGENTMUX_PROJECT=proj-canvas1"), "session env should carry the project tag");
+    assert.ok(
+      newSession.args.includes(`AGENTMUX_AGENT_NAME=${created.managedAgentName}`),
+      "session env should carry the agent name"
+    );
+    assert.ok(
+      newSession.args.some((arg) => typeof arg === "string" && arg.startsWith("AGENTMUX_BIN=")),
+      "session env should carry the CLI path"
+    );
+    assert.ok(newSession.args.includes("AGENTMUX_TMUX_SESSION=termcanvas-agent-env"));
+
+    const importCall = agentmuxSpawnCalls.find(({ args }) => Array.isArray(args) && args.includes("import"));
+
+    assert.ok(importCall, "expected the terminal to be imported as an agent");
+    assert.deepEqual(
+      importCall.args.slice(importCall.args.indexOf("import")),
+      [
+        "import",
+        "--agent", created.managedAgentName,
+        "--tmux-session", "termcanvas-agent-env",
+        "--harness", "shell",
+        "--project", "proj-canvas1",
+        "--workdir", os.homedir()
+      ]
+    );
+
+    const restored = await createTerminalHandler(
+      { sender: { id: 47 } },
+      {
+        terminalId: "restored-terminal",
+        sessionKey: "agent-env-2",
+        tmuxSessionName: "termcanvas-agent-env",
+        cols: 100,
+        rows: 30,
+        cwd: os.homedir(),
+        agentProjectTag: "proj-canvas1"
+      }
+    );
+
+    assert.equal(restored.managedAgentName, null, "restored terminals must not re-adopt");
+  } finally {
+    delete require.cache[mainPath];
+  }
+});
+
 test("terminal:create repairs tmux color environment before attaching sessions", async () => {
   const spawnCalls = [];
   const ptySpawnCalls = [];
@@ -1214,7 +1339,7 @@ test("application menu exposes standard app zoom commands", async () => {
   assert.ok(viewMenu);
   assert.deepEqual(
     viewMenu.submenu.filter((item) => typeof item.role === "string").map((item) => item.role),
-    ["resetZoom", "zoomIn", "zoomOut", "togglefullscreen"]
+    ["resetZoom", "zoomIn", "zoomOut", "togglefullscreen", "reload", "toggleDevTools"]
   );
   delete require.cache[mainPath];
 });
@@ -1408,31 +1533,19 @@ test("canvas-agent:sync bootstraps once then polls agentmux without rewriting AG
     assert.equal(result.project, "canvas-one");
     assert.equal(nextResult.project, "canvas-one");
     assert.equal(fs.readFileSync(agentsPath, "utf8"), originalAgentsContents);
-    assert.deepEqual(spawnCalls, [
-      {
-        command: "python3",
-        args: [
-          path.join(agentmuxRoot, "agentmux.py"),
-          "project-sync",
-          "canvas-one",
-          "--workdir",
-          workspaceRoot,
-          "--harness",
-          "shell",
-          "--json"
-        ]
-      },
-      {
-        command: "python3",
-        args: [
-          path.join(agentmuxRoot, "agentmux.py"),
-          "ls",
-          "--project",
-          "canvas-one",
-          "--json"
-        ]
-      }
-    ]);
+    const expectedReadCall = {
+      command: "python3",
+      args: [
+        path.join(agentmuxRoot, "agentmux.py"),
+        "ls",
+        "--project",
+        "canvas-one",
+        "--json"
+      ]
+    };
+
+    // Syncing is read-only: no project-sync bootstrap, no default commander.
+    assert.deepEqual(spawnCalls, [expectedReadCall, expectedReadCall]);
     delete require.cache[mainPath];
   } finally {
     if (originalAgentmuxRoot === undefined) {

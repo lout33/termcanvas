@@ -54,6 +54,14 @@ contextBridge.exposeInMainWorld(
     setActiveTerminalShortcutState: (hasActiveTerminal) => ipcRenderer.send("terminal:active-state", {
       hasActiveTerminal: hasActiveTerminal === true
     }),
+    updateAttentionState: (payload) => ipcRenderer.send("attention:update", {
+      count: Number.isInteger(payload?.count) && payload.count >= 0 ? payload.count : 0,
+      newlyFlagged: Array.isArray(payload?.newlyFlagged)
+        ? payload.newlyFlagged
+            .filter((item) => typeof item?.title === "string")
+            .map((item) => ({ title: item.title, state: typeof item.state === "string" ? item.state : "needs-input" }))
+        : []
+    }),
     createTerminal: (payload) => ipcRenderer.invoke("terminal:create", payload),
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),
@@ -64,6 +72,10 @@ contextBridge.exposeInMainWorld(
     }),
     syncCanvasAgentProject: (payload) => ipcRenderer.invoke("canvas-agent:sync", payload),
     deleteCanvasAgent: (agentName) => ipcRenderer.invoke("canvas-agent:delete", { agentName }),
+    sendCanvasAgentPrompt: (agentName, message) => ipcRenderer.invoke("canvas-agent:send", { agentName, message }),
+    connectCanvasAgents: (agentA, agentB) => ipcRenderer.invoke("canvas-agent:connect", { agentA, agentB }),
+    adoptCanvasAgent: (payload) => ipcRenderer.invoke("canvas-agent:adopt", payload),
+    updateCanvasSnapshot: (payload) => ipcRenderer.invoke("canvas-snapshot:update", payload),
     getAgentSkillStatus: () => ipcRenderer.invoke("agent-skill:status"),
     installAgentSkill: () => ipcRenderer.invoke("agent-skill:install"),
     saveCanvasFile: (payload) => ipcRenderer.invoke("canvas:save-file", payload),

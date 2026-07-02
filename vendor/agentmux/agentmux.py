@@ -112,6 +112,10 @@ DEFAULT_HARNESS_MODELS = {
     "opencode": os.environ.get("AGENTMUX_OPENCODE_MODEL", "ollama-cloud/glm-5.1"),
 }
 
+# Harnesses that read injected text as an AI prompt. Shell/custom sessions would
+# try to execute the briefing as a command, so they never receive one.
+BRIEFING_HARNESS_IDS = {"claude", "codex", "pi", "opencode"}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -147,6 +151,16 @@ def ensure_app() -> None:
               message TEXT NOT NULL,
               created_at TEXT NOT NULL,
               FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS edges (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              project TEXT NOT NULL,
+              agent_a TEXT NOT NULL,
+              agent_b TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT 'link',
+              created_at TEXT NOT NULL,
+              UNIQUE(project, agent_a, agent_b)
             );
             """
         )
@@ -398,10 +412,6 @@ def session_role(session: sqlite3.Row | dict[str, str]) -> str:
     return str(role).strip() if role else ""
 
 
-def is_project_manager_session(session: sqlite3.Row | dict[str, str]) -> bool:
-    return session_role(session) == "project_manager"
-
-
 def metadata_text(metadata: dict[str, object], key: str) -> str:
     value = metadata.get(key)
     return str(value).strip() if value is not None else ""
@@ -417,38 +427,18 @@ def metadata_depth(metadata: dict[str, object], fallback: int) -> int:
 
 
 def session_awareness_role_from_metadata(metadata: dict[str, object]) -> str:
-    raw_role = str(metadata.get("role") or "").strip()
-    if raw_role == "project_manager":
-        return "commander"
-    if raw_role == "project_worker":
-        return "worker"
+    del metadata
     return "agent"
 
 
-def default_depth_for_role(role: str) -> int:
-    if role == "commander":
-        return 0
-    if role == "worker":
-        return 1
-    return 0
-
-
 def session_awareness_depth(metadata: dict[str, object], role: str) -> int:
-    fallback = default_depth_for_role(role)
-    if "depth" in metadata:
-        return metadata_depth(metadata, fallback=fallback)
-    return fallback
+    del role
+    return metadata_depth(metadata, fallback=0)
 
 
 def session_awareness_parent(project: str, role: str, metadata: dict[str, object]) -> str:
-    parent_agent = metadata_text(metadata, "parent_agent")
-    if parent_agent:
-        return parent_agent
-    return project_manager_name(project) if role == "worker" else ""
-
-
-def session_awareness_commander(project: str, metadata: dict[str, object]) -> str:
-    return metadata_text(metadata, "commander_agent") or project_manager_name(project)
+    del project, role
+    return metadata_text(metadata, "parent_agent")
 
 
 def agentmux_bin_path() -> str:
@@ -477,7 +467,6 @@ def build_session_awareness_env(
         "AGENTMUX_ROLE": role,
         "AGENTMUX_DEPTH": str(session_awareness_depth(resolved_metadata, role)),
         "AGENTMUX_PARENT_AGENT": session_awareness_parent(normalized_project, role, resolved_metadata),
-        "AGENTMUX_COMMANDER_AGENT": session_awareness_commander(normalized_project, resolved_metadata),
         "AGENTMUX_WORKDIR": workdir,
         "AGENTMUX_TMUX_SESSION": tmux_session,
         "AGENTMUX_HOME": str(APP_DIR),
@@ -507,10 +496,6 @@ def build_interactive_color_env_args() -> list[str]:
     ]
 
 
-def project_manager_name(project: str) -> str:
-    return f"{normalize_project(project)}-general"
-
-
 def agentmux_command_hint() -> str:
     wrapper_path = Path(agentmux_bin_path())
     if wrapper_path.name == "agentmux":
@@ -534,6 +519,11 @@ def project_worker_command_hint(project_name: str, workdir: str, parent_agent: s
     return " ".join(parts)
 
 
+def default_worker_parent_context() -> dict[str, object]:
+    # No parent supplied and none inferable: the worker joins the graph as a root.
+    return {"parent_agent": "", "depth": 0}
+
+
 def resolve_project_worker_parent(
     conn: sqlite3.Connection,
     project_name: str,
@@ -541,7 +531,6 @@ def resolve_project_worker_parent(
     explicit_parent: str | None = None,
 ) -> dict[str, object]:
     normalized = normalize_project(project_name)
-    commander_agent = project_manager_name(normalized)
     parent_identifier = (explicit_parent or "").strip()
     is_explicit_parent = bool(parent_identifier)
 
@@ -552,26 +541,14 @@ def resolve_project_worker_parent(
             parent_identifier = env_agent
 
     if not parent_identifier:
-        if commander_agent == child_name:
-            raise SystemExit("Worker cannot use itself as its parent.")
-        return {
-            "parent_agent": commander_agent,
-            "depth": 1,
-            "commander_agent": commander_agent,
-        }
+        return default_worker_parent_context()
 
     try:
         parent_session = resolve_session(conn, parent_identifier)
     except SystemExit:
         if is_explicit_parent:
             raise
-        if commander_agent == child_name:
-            raise SystemExit("Worker cannot use itself as its parent.")
-        return {
-            "parent_agent": commander_agent,
-            "depth": 1,
-            "commander_agent": commander_agent,
-        }
+        return default_worker_parent_context()
 
     parent_project = session_project_name(parent_session)
     if parent_project != normalized:
@@ -585,7 +562,6 @@ def resolve_project_worker_parent(
     return {
         "parent_agent": parent_session["name"],
         "depth": parent_depth + 1,
-        "commander_agent": session_awareness_commander(normalized, parent_metadata),
     }
 
 
@@ -598,6 +574,7 @@ def create_project_worker(
     model: str | None = None,
     harness_id: str = "shell",
     parent_agent: str | None = None,
+    briefing: bool = True,
 ) -> sqlite3.Row:
     normalized = normalize_project(project_name)
     child_name = slugify(agent_name)
@@ -607,7 +584,7 @@ def create_project_worker(
         child_name,
         explicit_parent=parent_agent,
     )
-    return create_managed_session(
+    worker = create_managed_session(
         conn,
         name=child_name,
         harness=HARNESSES.get(harness_id, HARNESSES["shell"]),
@@ -617,13 +594,17 @@ def create_project_worker(
         model=model,
         prompt=prompt,
         metadata={
-            "role": "project_worker",
+            "role": "agent",
             "project": normalized,
             "parent_agent": parent_context["parent_agent"],
             "depth": parent_context["depth"],
-            "commander_agent": parent_context["commander_agent"],
         },
+        briefing=briefing,
     )
+    spawner = str(parent_context["parent_agent"] or "")
+    if spawner and try_resolve_session(conn, spawner) is not None:
+        create_edge(conn, normalized, spawner, child_name, kind="spawn")
+    return worker
 
 
 def resolve_session(conn: sqlite3.Connection, identifier: str) -> sqlite3.Row:
@@ -637,6 +618,95 @@ def resolve_session(conn: sqlite3.Connection, identifier: str) -> sqlite3.Row:
         choices = ", ".join(f"{row['name']}({short_id(row['id'])})" for row in rows)
         raise SystemExit(f"Ambiguous session identifier '{identifier}': {choices}")
     return rows[0]
+
+
+def try_resolve_session(conn: sqlite3.Connection, identifier: str) -> sqlite3.Row | None:
+    try:
+        return resolve_session(conn, identifier)
+    except SystemExit:
+        return None
+
+
+def edge_summary(edge: sqlite3.Row) -> dict[str, object]:
+    return {
+        "from": edge["agent_a"],
+        "to": edge["agent_b"],
+        "kind": edge["kind"],
+        "created_at": edge["created_at"],
+    }
+
+
+def find_edge(conn: sqlite3.Connection, project: str, agent_a: str, agent_b: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM edges WHERE project = ? AND ((agent_a = ? AND agent_b = ?) OR (agent_a = ? AND agent_b = ?))",
+        (project, agent_a, agent_b, agent_b, agent_a),
+    ).fetchone()
+
+
+def create_edge(conn: sqlite3.Connection, project: str, agent_a: str, agent_b: str, kind: str = "link") -> dict[str, object]:
+    if agent_a == agent_b:
+        raise SystemExit("An agent cannot connect to itself.")
+    existing = find_edge(conn, project, agent_a, agent_b)
+    if existing is not None:
+        return edge_summary(existing)
+    conn.execute(
+        "INSERT INTO edges(project, agent_a, agent_b, kind, created_at) VALUES(?, ?, ?, ?, ?)",
+        (project, agent_a, agent_b, kind, utc_now()),
+    )
+    created = find_edge(conn, project, agent_a, agent_b)
+    return edge_summary(created) if created is not None else {"from": agent_a, "to": agent_b, "kind": kind}
+
+
+def delete_edge(conn: sqlite3.Connection, project: str, agent_a: str, agent_b: str) -> bool:
+    cursor = conn.execute(
+        "DELETE FROM edges WHERE project = ? AND ((agent_a = ? AND agent_b = ?) OR (agent_a = ? AND agent_b = ?))",
+        (project, agent_a, agent_b, agent_b, agent_a),
+    )
+    return cursor.rowcount > 0
+
+
+def delete_agent_edges(conn: sqlite3.Connection, project: str, agent_name: str) -> None:
+    conn.execute(
+        "DELETE FROM edges WHERE project = ? AND (agent_a = ? OR agent_b = ?)",
+        (project, agent_name, agent_name),
+    )
+
+
+def list_project_edges(conn: sqlite3.Connection, project: str) -> list[dict[str, object]]:
+    rows = conn.execute(
+        "SELECT * FROM edges WHERE project = ? ORDER BY created_at ASC, id ASC",
+        (project,),
+    ).fetchall()
+    return [edge_summary(row) for row in rows]
+
+
+def compute_agent_neighbors(conn: sqlite3.Connection, session: sqlite3.Row) -> list[dict[str, object]]:
+    """Neighbors = stored edges touching this agent, plus spawn lineage derived
+    from parent_agent metadata for agents that predate the edges table."""
+    name = session["name"]
+    project = session_project_name(session)
+    neighbors: dict[str, dict[str, object]] = {}
+
+    for edge in list_project_edges(conn, project):
+        other = None
+        if edge["from"] == name:
+            other = str(edge["to"])
+        elif edge["to"] == name:
+            other = str(edge["from"])
+        if other is not None and other not in neighbors:
+            neighbors[other] = {"name": other, "kind": edge["kind"]}
+
+    sessions = filter_sessions_by_project(conn.execute("SELECT * FROM sessions").fetchall(), project)
+    by_name = {row["name"]: row for row in sessions}
+    own_parent = metadata_text(session_metadata(session), "parent_agent")
+    if own_parent and own_parent != name and own_parent in by_name and own_parent not in neighbors:
+        neighbors[own_parent] = {"name": own_parent, "kind": "spawn"}
+    for row in sessions:
+        row_parent = metadata_text(session_metadata(row), "parent_agent")
+        if row_parent == name and row["name"] != name and row["name"] not in neighbors:
+            neighbors[row["name"]] = {"name": row["name"], "kind": "spawn"}
+
+    return sorted(neighbors.values(), key=lambda item: str(item["name"]))
 
 
 def tmux_format(tmux_session: str, fmt: str) -> str:
@@ -735,6 +805,25 @@ def select_harness(args: argparse.Namespace) -> tuple[Harness, list[str]]:
     return harness, []
 
 
+def build_spawn_briefing(name: str, project: str, parent_agent: str = "") -> str:
+    quoted_name = shlex.quote(name)
+    parent_note = (
+        f"You were spawned by agent '{parent_agent}' — your first neighbor; report back to it when it asks. "
+        if parent_agent
+        else ""
+    )
+    return (
+        f"[TermCanvas] You are agent '{name}' on canvas project '{project}', one node in a graph of peer agents. "
+        f"{parent_note}"
+        f'Operate the graph with the agentmux CLI at "$AGENTMUX_BIN": '
+        f'"$AGENTMUX_BIN" neighbors (list agents connected to you), '
+        f'"$AGENTMUX_BIN" ask <agent> "<task>" (delegate and wait for the answer), '
+        f'"$AGENTMUX_BIN" check <agent> (peek without interrupting), '
+        f'"$AGENTMUX_BIN" child {quoted_name} <child-name> --prompt "<task>" (spawn a sub-agent wired to you). '
+        f"For the full manual load the 'agentmux' skill if you have it."
+    )
+
+
 def create_managed_session(
     conn: sqlite3.Connection,
     *,
@@ -750,6 +839,7 @@ def create_managed_session(
     agent_state: str = "active",
     metadata: dict[str, object] | None = None,
     external_session_id: str = "",
+    briefing: bool = True,
 ) -> sqlite3.Row:
     existing = conn.execute("SELECT 1 FROM sessions WHERE name = ?", (name,)).fetchone()
     if existing:
@@ -813,7 +903,19 @@ def create_managed_session(
     )
     emit_event(conn, session_id, "session.created", f"Created session {name} with {harness.id}")
 
+    briefing_text = ""
+    if briefing and harness.id in BRIEFING_HARNESS_IDS:
+        briefing_text = build_spawn_briefing(
+            name,
+            normalize_project(project),
+            parent_agent=metadata_text(metadata or {}, "parent_agent"),
+        )
+
+    initial_message = briefing_text
     if prompt:
+        initial_message = f"{briefing_text} Your first task from the operator: {prompt}" if briefing_text else prompt
+
+    if initial_message:
         ready = wait_until_ready(
             tmux_session,
             harness.id,
@@ -822,8 +924,8 @@ def create_managed_session(
         )
         if not ready:
             raise SystemExit(f"Session '{name}' exited before it became ready for input.")
-        send_keys(tmux_session, prompt)
-        emit_event(conn, session_id, "session.input", f"Initial prompt sent: {prompt}")
+        send_keys(tmux_session, initial_message)
+        emit_event(conn, session_id, "session.input", f"Initial prompt sent: {initial_message}")
         conn.execute(
             "UPDATE sessions SET state = ?, updated_at = ?, last_activity_at = ? WHERE id = ?",
             ("running", utc_now(), utc_now(), session_id),
@@ -852,6 +954,7 @@ def create_session(args: argparse.Namespace) -> None:
             startup_delay=args.startup_delay,
             ready_timeout=args.ready_timeout,
             external_session_id=args.session or "",
+            briefing=not args.no_briefing,
         )
 
     print(f"Created {session['name']} ({short_id(session['id'])})")
@@ -899,8 +1002,9 @@ def import_session(args: argparse.Namespace) -> None:
                 INSERT INTO sessions(
                   id, name, harness, tmux_session, workdir, command_text, state,
                   agent_state, created_at, updated_at, last_activity_at,
-                  last_output, last_output_hash, startup_delay, external_session_id, project
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  last_output, last_output_hash, startup_delay, external_session_id, project,
+                  metadata_json
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
             ),
             (
@@ -920,6 +1024,16 @@ def import_session(args: argparse.Namespace) -> None:
                 args.startup_delay,
                 args.session_id or "",
                 project,
+                # Imported/adopted terminals join the graph as root agents.
+                json.dumps(
+                    {
+                        "role": "agent",
+                        "project": project,
+                        "parent_agent": "",
+                        "depth": 0,
+                    },
+                    sort_keys=True,
+                ),
             ),
         )
         message = f"Imported tmux session {tmux_session}"
@@ -1097,8 +1211,6 @@ def session_summary(session: sqlite3.Row) -> dict[str, object]:
         "raw_role": session_role(session),
         "depth": session_awareness_depth(metadata, role),
         "parent_agent": session_awareness_parent(project, role, metadata),
-        "commander_agent": session_awareness_commander(project, metadata),
-        "is_project_manager": is_project_manager_session(session),
         "harness": session["harness"],
         "agent_state": session["agent_state"],
         "runtime_state": session["state"],
@@ -1181,15 +1293,13 @@ def build_board_projects(sessions: list[sqlite3.Row]) -> list[dict[str, object]]
     projects: list[dict[str, object]] = []
     for project_name in sorted(grouped.keys()):
         project_sessions = sort_sessions_for_attention(grouped[project_name])
-        manager = next((session for session in project_sessions if is_project_manager_session(session)), None)
-        board_sessions = [session for session in project_sessions if not is_project_manager_session(session)]
+        board_sessions = project_sessions
         workdirs = sorted({session["workdir"] for session in project_sessions})
         payload = {
             "project": project_name,
             "display_name": project_name.replace("-", " "),
             "workdirs": workdirs,
             "agent_count": len(board_sessions),
-            "manager": session_summary(manager) if manager else None,
             "counts": {"todo": 0, "in_progress": 0, "review": 0, "done": 0},
             "columns": {"todo": [], "in_progress": [], "review": [], "done": []},
         }
@@ -1211,92 +1321,29 @@ def project_detail(conn: sqlite3.Connection, project_name: str, event_limit: int
     if not sessions:
         raise SystemExit(f"No project found for '{normalized}'.")
 
-    board = build_board_projects(sessions)[0]
-    manager = next((session for session in sessions if is_project_manager_session(session)), None)
-    board["manager_detail"] = session_detail(conn, manager, event_limit=event_limit) if manager else None
-    return board
+    return build_board_projects(sessions)[0]
 
 
-def create_project_manager(
-    conn: sqlite3.Connection,
-    project_name: str,
-    workdir: str | None = None,
-    harness_id: str = "shell",
-) -> sqlite3.Row:
+def project_payload_from_sessions(project_name: str, sessions: list[sqlite3.Row], edges: list[dict[str, object]] | None = None) -> dict[str, object]:
     normalized = normalize_project(project_name)
-    sessions = filter_sessions_by_project(refresh_all(conn), normalized)
-    if not sessions and not workdir:
-        raise SystemExit(f"No project found for '{normalized}'.")
-
-    existing = next((session for session in sessions if is_project_manager_session(session)), None)
-    if existing:
-        return refresh_one(conn, existing)
-
-    resolved_workdir = str(Path(workdir).resolve()) if workdir else sorted({session["workdir"] for session in sessions})[0]
-    return create_managed_session(
-        conn,
-        name=project_manager_name(normalized),
-        harness=HARNESSES.get(harness_id, HARNESSES["shell"]),
-        extra_args=[],
-        workdir=resolved_workdir,
-        project=normalized,
-        model=None,
-        prompt=None,
-        metadata={
-            "role": "project_manager",
-            "project": normalized,
-            "parent_agent": "",
-            "depth": 0,
-            "commander_agent": project_manager_name(normalized),
-        },
-    )
-
-
-def project_sync_payload(
-    conn: sqlite3.Connection,
-    project_name: str,
-    workdir: str | None = None,
-    harness_id: str = "shell",
-) -> dict[str, object]:
-    manager = create_project_manager(
-        conn,
-        project_name,
-        workdir=workdir,
-        harness_id=harness_id,
-    )
-    normalized = normalize_project(project_name)
-    sessions = sort_sessions_for_attention(filter_sessions_by_project(refresh_all(conn), normalized))
-    resolved_manager = next((session for session in sessions if is_project_manager_session(session)), manager)
     return {
         "project": normalized,
-        "manager": session_summary(resolved_manager),
         "sessions": [session_summary(session) for session in sessions],
         "workdirs": sorted({session["workdir"] for session in sessions}),
-    }
-
-
-def project_payload_from_sessions(project_name: str, sessions: list[sqlite3.Row]) -> dict[str, object]:
-    normalized = normalize_project(project_name)
-    manager = next((session for session in sessions if is_project_manager_session(session)), None)
-    return {
-        "project": normalized,
-        "manager": session_summary(manager) if manager is not None else None,
-        "sessions": [session_summary(session) for session in sessions],
-        "workdirs": sorted({session["workdir"] for session in sessions}),
+        "edges": edges if edges is not None else [],
     }
 
 
 def project_status_payload(conn: sqlite3.Connection, project_name: str) -> dict[str, object]:
     normalized = normalize_project(project_name)
     sessions = sort_sessions_for_attention(filter_sessions_by_project(refresh_all(conn), normalized))
-    return project_payload_from_sessions(normalized, sessions)
+    return project_payload_from_sessions(normalized, sessions, edges=list_project_edges(conn, normalized))
 
 
 def tree_sort_key(summary: dict[str, object]) -> tuple[int, int, str]:
     depth = summary.get("depth")
     return (
         depth if isinstance(depth, int) else 999,
-        0 if summary.get("is_project_manager") is True else 1,
         str(summary.get("name") or ""),
     )
 
@@ -1312,7 +1359,7 @@ def build_project_tree_nodes(summaries: list[dict[str, object]]) -> list[dict[st
 
     for summary in summaries:
         name = str(summary.get("name") or "")
-        parent_name = str(summary.get("parent_agent") or summary.get("commander_agent") or "").strip()
+        parent_name = str(summary.get("parent_agent") or "").strip()
 
         if parent_name and parent_name != name and parent_name in by_name:
             children_by_parent[parent_name].append(summary)
@@ -1337,7 +1384,6 @@ def project_tree_payload(conn: sqlite3.Connection, project_name: str) -> dict[st
         raise SystemExit(f"No project found for '{normalized}'.")
 
     summaries = [session_summary(session) for session in sessions]
-    manager = next((summary for summary in summaries if summary.get("is_project_manager") is True), None)
     runtime_counts: dict[str, int] = {}
     agent_counts: dict[str, int] = {}
     attention: list[dict[str, object]] = []
@@ -1352,13 +1398,13 @@ def project_tree_payload(conn: sqlite3.Connection, project_name: str) -> dict[st
 
     return {
         "project": normalized,
-        "manager": manager,
         "agent_count": len(summaries),
         "runtime_counts": runtime_counts,
         "agent_counts": agent_counts,
         "attention": sorted(attention, key=tree_sort_key),
         "tree": build_project_tree_nodes(summaries),
         "sessions": summaries,
+        "edges": list_project_edges(conn, normalized),
     }
 
 
@@ -1398,30 +1444,27 @@ def render_tree_node(node: dict[str, object], prefix: str = "", is_last: bool = 
     return lines
 
 
-def render_project_command_hints(project: str, manager_name: str | None = None) -> list[str]:
+def render_project_command_hints(project: str) -> list[str]:
+    del project
     command = agentmux_command_hint()
-    mission_target = manager_name or project_manager_name(project)
     return [
         "Command center:",
-        f"  mission: {command} mission {shlex.quote(project)} \"<mission>\"",
-        f"  child:   {command} child <parent-agent> <worker-name> --prompt \"<task>\"",
-        f"  inspect: {command} show <agent>",
-        f"  logs:    {command} logs <agent> --lines 120",
-        f"  send:    {command} send <agent> \"<prompt>\"",
-        f"  stop:    {command} stop <agent>",
-        f"  manager: {command} show {shlex.quote(mission_target)}",
+        f"  child:    {command} child <parent-agent> <worker-name> --prompt \"<task>\"",
+        f"  connect:  {command} connect <agent-a> <agent-b> --announce",
+        f"  ask:      {command} ask <agent> \"<prompt>\"",
+        f"  inspect:  {command} show <agent>",
+        f"  logs:     {command} logs <agent> --lines 120",
+        f"  send:     {command} send <agent> \"<prompt>\"",
+        f"  stop:     {command} stop <agent>",
     ]
 
 
 def render_project_tree(payload: dict[str, object]) -> str:
     project = str(payload.get("project") or "")
-    manager = payload.get("manager")
-    manager_name = str(manager.get("name")) if isinstance(manager, dict) and manager.get("name") else None
     runtime_counts = payload.get("runtime_counts")
     runtime_text = ", ".join(f"{key}={value}" for key, value in sorted(runtime_counts.items())) if isinstance(runtime_counts, dict) else ""
     lines = [
         f"Project: {project}",
-        f"Manager: {manager_name or '<none>'}",
         f"Agents: {payload.get('agent_count', 0)}" + (f"  runtime: {runtime_text}" if runtime_text else ""),
         "",
         "Tree:",
@@ -1436,21 +1479,18 @@ def render_project_tree(payload: dict[str, object]) -> str:
         lines.append("  <empty>")
 
     lines.append("")
-    lines.extend(render_project_command_hints(project, manager_name=manager_name))
+    lines.extend(render_project_command_hints(project))
     return "\n".join(lines)
 
 
 def render_project_status(payload: dict[str, object]) -> str:
     project = str(payload.get("project") or "")
-    manager = payload.get("manager")
-    manager_name = str(manager.get("name")) if isinstance(manager, dict) and manager.get("name") else None
     runtime_counts = payload.get("runtime_counts")
     agent_counts = payload.get("agent_counts")
     runtime_text = ", ".join(f"{key}={value}" for key, value in sorted(runtime_counts.items())) if isinstance(runtime_counts, dict) else ""
     agent_text = ", ".join(f"{key}={value}" for key, value in sorted(agent_counts.items())) if isinstance(agent_counts, dict) else ""
     lines = [
         f"Project: {project}",
-        f"Manager: {manager_name or '<none>'}",
         f"Agents: {payload.get('agent_count', 0)}",
         f"Runtime: {runtime_text or '<none>'}",
         f"Agent state: {agent_text or '<none>'}",
@@ -1467,28 +1507,8 @@ def render_project_status(payload: dict[str, object]) -> str:
         lines.append("  <none>")
 
     lines.append("")
-    lines.extend(render_project_command_hints(project, manager_name=manager_name))
+    lines.extend(render_project_command_hints(project))
     return "\n".join(lines)
-
-
-def build_mission_prompt(project: str, mission: str) -> str:
-    command = agentmux_command_hint()
-    return "\n".join(
-        [
-            f"Mission for TermCanvas project `{project}`:",
-            "",
-            mission.strip(),
-            "",
-            "You are the manager/commander for this project. Work terminal-first:",
-            f"- Inspect the tree with `{command} tree {shlex.quote(project)}`.",
-            f"- Create child workers when delegation helps with `{command} child \"$AGENTMUX_AGENT_NAME\" <worker-name> --prompt \"<task>\"`.",
-            f"- Send follow-up prompts with `{command} send <agent> \"<prompt>\"`.",
-            f"- Check output with `{command} logs <agent> --lines 120`.",
-            f"- Stop a stuck child with `{command} stop <agent>`.",
-            "- Keep the worker tree purposeful, report progress to the operator, and summarize results when done.",
-            "- Do not create raw tmux sessions for workers.",
-        ]
-    )
 
 
 def send_text_to_session(conn: sqlite3.Connection, session: sqlite3.Row, text: str) -> sqlite3.Row:
@@ -1578,6 +1598,80 @@ def send_input_to_runtime(conn: sqlite3.Connection, session: sqlite3.Row, text: 
     return refresh_one(conn, refreshed)
 
 
+def wait_for_turn_end(
+    tmux_session: str,
+    baseline_pane: str,
+    timeout: float,
+    stable_seconds: float,
+    capture_lines: int = 500,
+) -> tuple[bool, str]:
+    """Poll a pane until it changes at least once after an injection and then
+    stays unchanged for `stable_seconds`. Returns (finished, final_pane)."""
+    poll_interval = max(0.05, min(0.5, stable_seconds / 2))
+    deadline = time.monotonic() + timeout
+    last_pane = baseline_pane
+    last_change_at = time.monotonic()
+    changed = False
+
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval)
+        pane = capture_pane(tmux_session, lines=capture_lines)
+        if pane != last_pane:
+            last_pane = pane
+            last_change_at = time.monotonic()
+            changed = True
+        elif changed and time.monotonic() - last_change_at >= stable_seconds:
+            return True, pane
+
+    return False, last_pane
+
+
+def extract_ask_answer(pane_text: str, prompt_text: str, fallback_lines: int) -> str:
+    """Best-effort answer extraction: everything after the last pane line that
+    echoes the prompt; falls back to the pane tail."""
+    lines = pane_text.splitlines()
+    first_prompt_line = prompt_text.strip().splitlines()[0].strip() if prompt_text.strip() else ""
+    marker = first_prompt_line[:60]
+
+    if marker:
+        for index in range(len(lines) - 1, -1, -1):
+            if marker in lines[index]:
+                answer = "\n".join(lines[index + 1:]).strip()
+                if answer:
+                    return answer
+                break
+
+    return "\n".join(lines[-fallback_lines:]).strip()
+
+
+def enforce_ask_permission(conn: sqlite3.Connection, target_session: sqlite3.Row, force: bool) -> None:
+    caller_name = (os.environ.get("AGENTMUX_AGENT_NAME") or "").strip()
+    if not caller_name:
+        return
+
+    if caller_name == target_session["name"]:
+        raise SystemExit("An agent cannot ask itself: the injected prompt would deadlock its own turn.")
+
+    if force:
+        return
+
+    caller_session = try_resolve_session(conn, caller_name)
+    if caller_session is None:
+        return
+
+    caller_project = session_project_name(caller_session)
+    target_project = session_project_name(target_session)
+    if caller_project != target_project:
+        raise SystemExit(f"'{target_session['name']}' belongs to project '{target_project}', not '{caller_project}'.")
+
+    neighbor_names = {str(neighbor["name"]) for neighbor in compute_agent_neighbors(conn, caller_session)}
+    if target_session["name"] not in neighbor_names:
+        raise SystemExit(
+            f"'{caller_name}' is not connected to '{target_session['name']}'. "
+            f"Run: agentmux connect {shlex.quote(caller_name)} {shlex.quote(target_session['name'])} (or pass --force)."
+        )
+
+
 def stop_runtime(conn: sqlite3.Connection, session: sqlite3.Row) -> sqlite3.Row:
     if not has_tmux_session(session["tmux_session"]):
         raise SystemExit(f"Agent '{session['name']}' is not running.")
@@ -1621,6 +1715,7 @@ def delete_session_record(conn: sqlite3.Connection, session: sqlite3.Row, force:
         tmux("kill-session", "-t", session["tmux_session"])
     conn.execute("DELETE FROM events WHERE session_id = ?", (session["id"],))
     conn.execute("DELETE FROM sessions WHERE id = ?", (session["id"],))
+    delete_agent_edges(conn, session_project_name(session), session["name"])
     return {
         "id": session["id"],
         "name": session["name"],
@@ -1945,7 +2040,8 @@ def list_sessions(args: argparse.Namespace) -> None:
         sessions = filter_sessions_by_project(sessions, args.project)
         if args.json:
             if args.project:
-                print(json.dumps(project_payload_from_sessions(args.project, sessions), sort_keys=True))
+                edges = list_project_edges(conn, normalize_project(args.project))
+                print(json.dumps(project_payload_from_sessions(args.project, sessions, edges=edges), sort_keys=True))
             else:
                 print(json.dumps({"sessions": [session_summary(session) for session in sessions]}, sort_keys=True))
             return
@@ -1969,7 +2065,6 @@ def show_session(args: argparse.Namespace) -> None:
     print(f"role:          {detail['role']}")
     print(f"parent:        {detail['parent_agent'] or '<none>'}")
     print(f"depth:         {detail['depth']}")
-    print(f"commander:     {detail['commander_agent']}")
     if session["harness"] == "opencode":
         print(f"default model: {default_model_for_harness(session['harness']) or '<none>'}")
     print(f"agent state:   {session['agent_state']}")
@@ -2004,6 +2099,43 @@ def send_to_session(args: argparse.Namespace) -> None:
         refreshed = send_input_to_runtime(conn, session, args.text, enter=not args.no_enter)
 
     print(f"Sent to {refreshed['name']} ({short_id(refreshed['id'])})")
+
+
+def ask_session(args: argparse.Namespace) -> None:
+    with db() as conn:
+        session = resolve_session(conn, args.agent)
+        enforce_ask_permission(conn, session, args.force)
+        if not has_tmux_session(session["tmux_session"]):
+            raise SystemExit(f"Agent '{session['name']}' is not running.")
+        baseline_pane = capture_pane(session["tmux_session"], lines=500)
+        send_input_to_runtime(conn, session, args.text)
+
+    finished, final_pane = wait_for_turn_end(
+        session["tmux_session"],
+        baseline_pane,
+        timeout=args.timeout,
+        stable_seconds=args.stable,
+    )
+    answer = extract_ask_answer(final_pane, args.text, fallback_lines=args.lines)
+
+    if not finished:
+        if answer:
+            print(answer)
+        raise SystemExit(
+            f"Timed out after {args.timeout:.0f}s waiting for '{session['name']}' to finish. "
+            f"Peek later with: agentmux check {shlex.quote(session['name'])}"
+        )
+
+    print(answer or "<no output>")
+
+
+def check_session(args: argparse.Namespace) -> None:
+    with db() as conn:
+        session = resolve_session(conn, args.agent)
+    if not has_tmux_session(session["tmux_session"]):
+        raise SystemExit(f"Agent '{session['name']}' is not running.")
+    pane = capture_pane(session["tmux_session"], lines=args.lines)
+    print(pane or "<no output>")
 
 
 def stop_session(args: argparse.Namespace) -> None:
@@ -2050,24 +2182,6 @@ def delete_agent(args: argparse.Namespace) -> None:
     print(f"Deleted {session['name']}")
 
 
-def project_sync_command(args: argparse.Namespace) -> None:
-    with db() as conn:
-        payload = project_sync_payload(
-            conn,
-            project_from_arg_or_env(args.project),
-            workdir=args.workdir,
-            harness_id=args.harness,
-        )
-
-    if args.json:
-        print(json.dumps(payload, sort_keys=True))
-        return
-
-    print(f"Project: {payload['project']}")
-    print(f"Manager: {payload['manager']['name']}")
-    print(f"Agents: {len(payload['sessions'])}")
-
-
 def project_tree_command(args: argparse.Namespace) -> None:
     with db() as conn:
         payload = project_tree_payload(conn, project_from_arg_or_env(args.project))
@@ -2090,39 +2204,6 @@ def project_status_command(args: argparse.Namespace) -> None:
     print(render_project_status(payload))
 
 
-def mission_command(args: argparse.Namespace) -> None:
-    values = [str(value).strip() for value in args.values if str(value).strip()]
-    if args.project:
-        project = project_from_arg_or_env(args.project)
-        mission_text = " ".join(values).strip()
-    elif len(values) == 1:
-        project = project_from_arg_or_env(None)
-        mission_text = values[0]
-    else:
-        project = project_from_arg_or_env(values[0] if values else None)
-        mission_text = " ".join(values[1:]).strip()
-
-    if not mission_text:
-        raise SystemExit("Mission text is required.")
-
-    with db() as conn:
-        manager = create_project_manager(
-            conn,
-            project,
-            workdir=args.workdir,
-            harness_id=args.harness,
-        )
-        prompt = build_mission_prompt(project, mission_text)
-        refreshed = send_text_to_session(conn, manager, prompt)
-
-    print(f"Sent mission to {refreshed['name']} ({short_id(refreshed['id'])})")
-    print(f"project: {project}")
-    print(f"tmux:    {refreshed['tmux_session']}")
-    print("next:")
-    print(f"  {agentmux_command_hint()} tree {shlex.quote(project)}")
-    print(f"  {agentmux_command_hint()} logs {shlex.quote(refreshed['name'])} --lines 120")
-
-
 def project_worker_command(args: argparse.Namespace) -> None:
     with db() as conn:
         worker = create_project_worker(
@@ -2134,6 +2215,7 @@ def project_worker_command(args: argparse.Namespace) -> None:
             model=args.model,
             harness_id=args.harness,
             parent_agent=args.parent,
+            briefing=not args.no_briefing,
         )
 
     print(f"Created worker {worker['name']} ({short_id(worker['id'])})")
@@ -2154,6 +2236,7 @@ def child_worker_command(args: argparse.Namespace) -> None:
             model=args.model,
             harness_id=args.harness,
             parent_agent=parent["name"],
+            briefing=not args.no_briefing,
         )
         worker_summary = session_summary(worker)
 
@@ -2166,6 +2249,84 @@ def child_worker_command(args: argparse.Namespace) -> None:
     print("next:")
     print(f"  {agentmux_command_hint()} tree {shlex.quote(project)}")
     print(f"  {agentmux_command_hint()} logs {shlex.quote(worker['name'])} --lines 120")
+
+
+def build_connection_briefing(peer_summary: dict[str, object]) -> str:
+    peer_name = str(peer_summary["name"])
+    quoted = shlex.quote(peer_name)
+    return (
+        f"[TermCanvas] You are now connected to agent '{peer_name}' "
+        f"(role: {peer_summary['role']}, state: {peer_summary['runtime_state']}, "
+        f"workdir: {abbreviate_home(str(peer_summary['workdir']))}). "
+        f"Delegate and wait for its answer: agentmux ask {quoted} \"<task>\". "
+        f"Peek without interrupting: agentmux check {quoted}. "
+        f"List all your connections: agentmux neighbors"
+    )
+
+
+def connect_command(args: argparse.Namespace) -> None:
+    announced: list[str] = []
+
+    with db() as conn:
+        session_a = resolve_session(conn, args.agent_a)
+        session_b = resolve_session(conn, args.agent_b)
+        project_a = session_project_name(session_a)
+        project_b = session_project_name(session_b)
+        if project_a != project_b:
+            raise SystemExit(f"Agents belong to different projects ('{project_a}' vs '{project_b}').")
+        edge = create_edge(conn, project_a, session_a["name"], session_b["name"], kind="link")
+
+        if args.announce:
+            for session, peer in ((session_a, session_b), (session_b, session_a)):
+                if has_tmux_session(session["tmux_session"]):
+                    send_input_to_runtime(conn, session, build_connection_briefing(session_summary(peer)))
+                    announced.append(session["name"])
+
+    print(f"Connected {edge['from']} <-> {edge['to']} ({edge['kind']})")
+    print(f"project: {project_a}")
+    if args.announce:
+        print(f"announced: {', '.join(announced) if announced else '<none running>'}")
+
+
+def disconnect_command(args: argparse.Namespace) -> None:
+    with db() as conn:
+        session_a = resolve_session(conn, args.agent_a)
+        session_b = resolve_session(conn, args.agent_b)
+        project = session_project_name(session_a)
+        removed = delete_edge(conn, project, session_a["name"], session_b["name"])
+
+    if not removed:
+        raise SystemExit(f"No connection between '{session_a['name']}' and '{session_b['name']}'.")
+    print(f"Disconnected {session_a['name']} <-> {session_b['name']}")
+
+
+def neighbors_command(args: argparse.Namespace) -> None:
+    identifier = (args.agent or os.environ.get("AGENTMUX_AGENT_NAME") or "").strip()
+    if not identifier:
+        raise SystemExit("Agent name is required (or run inside a managed terminal).")
+
+    with db() as conn:
+        session = resolve_session(conn, identifier)
+        neighbors = compute_agent_neighbors(conn, session)
+
+    if args.json:
+        print(json.dumps(
+            {
+                "agent": session["name"],
+                "project": session_project_name(session),
+                "neighbors": neighbors,
+            },
+            sort_keys=True,
+        ))
+        return
+
+    if not neighbors:
+        print(f"{session['name']} has no connections.")
+        return
+
+    print(f"Connections for {session['name']}:")
+    for neighbor in neighbors:
+        print(f"  - {neighbor['name']} ({neighbor['kind']})")
 
 
 def adapters_command(_: argparse.Namespace) -> None:
@@ -2298,6 +2459,7 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--session", help="Resume an existing harness-native session (e.g. opencode ses_xxx)")
     new.add_argument("--startup-delay", type=float, default=1.0)
     new.add_argument("--ready-timeout", type=float, default=25.0)
+    new.add_argument("--no-briefing", action="store_true", help="Skip the spawn briefing injected into AI harnesses")
     new.set_defaults(func=create_session)
 
     imp = sub.add_parser("import", help="Adopt an existing tmux-backed agent runtime")
@@ -2334,6 +2496,20 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--no-enter", action="store_true")
     send.set_defaults(func=send_to_session)
 
+    ask = sub.add_parser("ask", help="Send a prompt to an agent and block until its turn ends, printing the answer")
+    ask.add_argument("agent")
+    ask.add_argument("text")
+    ask.add_argument("--timeout", type=float, default=300.0, help="Seconds to wait for the turn to end (default: 300)")
+    ask.add_argument("--stable", type=float, default=2.0, help="Seconds of unchanged output that count as turn end (default: 2)")
+    ask.add_argument("--lines", type=int, default=120, help="Fallback answer lines when the prompt echo is not found (default: 120)")
+    ask.add_argument("--force", action="store_true", help="Skip the graph connection requirement")
+    ask.set_defaults(func=ask_session)
+
+    check = sub.add_parser("check", help="Peek at an agent's current terminal output without sending anything")
+    check.add_argument("agent")
+    check.add_argument("--lines", type=int, default=120)
+    check.set_defaults(func=check_session)
+
     attach = sub.add_parser("attach", help="Attach to the agent tmux session")
     attach.add_argument("agent")
     attach.set_defaults(func=attach_session)
@@ -2364,14 +2540,7 @@ def build_parser() -> argparse.ArgumentParser:
     delete.add_argument("--force", action="store_true", help="Kill the runtime first if it is still running")
     delete.set_defaults(func=delete_agent)
 
-    project_sync = sub.add_parser("project-sync", help="Ensure a project manager and emit project session data")
-    project_sync.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
-    project_sync.add_argument("--workdir")
-    project_sync.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the manager session (default: shell)")
-    project_sync.add_argument("--json", action="store_true")
-    project_sync.set_defaults(func=project_sync_command)
-
-    tree = sub.add_parser("tree", help="Show a project commander/worker tree with command hints")
+    tree = sub.add_parser("tree", help="Show the project agent graph with command hints")
     tree.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
     tree.add_argument("--json", action="store_true")
     tree.set_defaults(func=project_tree_command)
@@ -2381,13 +2550,6 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--json", action="store_true")
     status.set_defaults(func=project_status_command)
 
-    mission = sub.add_parser("mission", help="Send a high-level mission to the project commander")
-    mission.add_argument("values", nargs="+", help="Use `<project> <mission>` or, inside a managed terminal, just `<mission>`")
-    mission.add_argument("--project", help="Project tag override, useful when the mission text is the only positional argument")
-    mission.add_argument("--workdir", help="Workspace root when creating a missing project manager")
-    mission.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for a missing manager session (default: shell)")
-    mission.set_defaults(func=mission_command)
-
     worker = sub.add_parser("worker", help="Create a managed project worker")
     worker.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
     worker.add_argument("agent")
@@ -2396,6 +2558,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--prompt")
     worker.add_argument("--model")
     worker.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the worker session (default: shell)")
+    worker.add_argument("--no-briefing", action="store_true", help="Skip the spawn briefing injected into AI harnesses")
     worker.set_defaults(func=project_worker_command)
 
     child = sub.add_parser("child", help="Create a child worker under an existing agent")
@@ -2405,7 +2568,24 @@ def build_parser() -> argparse.ArgumentParser:
     child.add_argument("--prompt")
     child.add_argument("--model")
     child.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the child session (default: shell)")
+    child.add_argument("--no-briefing", action="store_true", help="Skip the spawn briefing injected into AI harnesses")
     child.set_defaults(func=child_worker_command)
+
+    connect = sub.add_parser("connect", help="Create a graph connection between two agents")
+    connect.add_argument("agent_a")
+    connect.add_argument("agent_b")
+    connect.add_argument("--announce", action="store_true", help="Inject a briefing about the new peer into both terminals")
+    connect.set_defaults(func=connect_command)
+
+    disconnect = sub.add_parser("disconnect", help="Remove a graph connection between two agents")
+    disconnect.add_argument("agent_a")
+    disconnect.add_argument("agent_b")
+    disconnect.set_defaults(func=disconnect_command)
+
+    neighbors = sub.add_parser("neighbors", help="List agents connected to one agent")
+    neighbors.add_argument("agent", nargs="?", help="Agent name, defaults to AGENTMUX_AGENT_NAME in managed terminals")
+    neighbors.add_argument("--json", action="store_true")
+    neighbors.set_defaults(func=neighbors_command)
 
     adapters = sub.add_parser("adapters", help="List harness availability")
     adapters.set_defaults(func=adapters_command)

@@ -43,7 +43,15 @@ test("terminal close and copy actions live behind the node action menu", () => {
   assert.match(renderer, /function toggleTerminalNodeMenu\(nodeRecord\) \{/);
   assert.match(renderer, /menuButton\.className = "terminal-node-control terminal-node-menu-button";/);
   assert.match(renderer, /menuPopover\.className = "terminal-node-menu-popover";/);
-  assert.match(renderer, /menuPopover\.append\(copySessionButton, closeButton\);/);
+  assert.match(renderer, /menuPopover\.append\(copySessionButton, connectButton, closeButton\);/);
+  assert.match(renderer, /connectButton\.className = "terminal-node-menu-item terminal-node-connect";/);
+  assert.match(renderer, /connectButton\.textContent = "Connect to terminal…";/);
+  assert.match(renderer, /elements\.connectButton\.addEventListener\("click", \(event\) => \{[\s\S]*enterCanvasConnectMode\(nodeRecord\);/);
+  assert.match(renderer, /function enterCanvasConnectMode\(nodeRecord\) \{/);
+  assert.match(renderer, /function cancelCanvasConnectMode\(\) \{/);
+  assert.match(renderer, /connectCanvasAgents\(sourceAgent, targetAgent\)/);
+  assert.match(renderer, /async function ensureManagedAgentName\(nodeRecord\) \{/);
+  assert.match(renderer, /adoptCanvasAgent\(\{/);
   assert.match(renderer, /actions\.append\(renameButton, maximizeButton, menuRoot\);/);
   assert.doesNotMatch(renderer, /actions\.append\(status, maximizeButton, closeButton\);/);
 });
@@ -147,8 +155,8 @@ test("canvas export preserves terminal session and delegation metadata", () => {
   assert.match(renderer, /sessionKey: nodeRecord\.sessionKey/);
   assert.match(renderer, /tmuxSessionName: nodeRecord\.tmuxSessionName/);
   assert.match(renderer, /managedParentAgent: nodeRecord\.managedParentAgent/);
-  assert.match(renderer, /managedCommanderAgent: nodeRecord\.managedCommanderAgent/);
   assert.match(renderer, /managedDepth: nodeRecord\.managedDepth/);
+  assert.doesNotMatch(renderer, /managedCommanderAgent/);
   assert.match(renderer, /workspace: canvasRecord\.workspace \?\? null/);
   assert.match(renderer, /activeSessionKey: getCanvasActiveSessionKey\(canvasRecord\)/);
   assert.match(renderer, /function parseImportedTerminalNode\(nodeRecord\) \{/);
@@ -156,12 +164,11 @@ test("canvas export preserves terminal session and delegation metadata", () => {
   assert.match(renderer, /managedParentAgent: normalizeManagedAgentName\(nodeRecord\?\.managedParentAgent\)/);
 });
 
-test("managed agent snapshots reconcile managers before workers", () => {
+test("managed agent snapshots reconcile in stable name order", () => {
   const renderer = readRenderer();
 
   assert.match(renderer, /function sortManagedAgentSnapshots\(agentSnapshots\) \{/);
-  assert.match(renderer, /const leftRank = left\?\.is_project_manager === true \? 0 : 1;/);
-  assert.match(renderer, /const rightRank = right\?\.is_project_manager === true \? 0 : 1;/);
+  assert.doesNotMatch(renderer, /is_project_manager/);
   assert.match(renderer, /const sessions = sortManagedAgentSnapshots\(Array\.isArray\(snapshot\?\.sessions\) \? snapshot\.sessions : \[\]\);/);
 });
 
@@ -173,18 +180,16 @@ test("managed agent nodes preserve agentmux tmux sessions before first bind", ()
   assert.match(renderer, /tmuxSessionName: nodeRecord\.tmuxSessionName/);
 });
 
-test("managed agent labels use commander and worker roles", () => {
+test("managed agent labels use graph roles only", () => {
   const renderer = readRenderer();
 
-  assert.match(renderer, /function normalizeManagedAgentRole\(value, isManager = false\) \{/);
   assert.match(renderer, /function getTerminalNodeRoleLabel\(nodeRecord\) \{/);
-  assert.match(renderer, /return "commander";/);
-  assert.match(renderer, /return "worker";/);
-  assert.match(renderer, /return "Commander";/);
-  assert.match(renderer, /return "Worker";/);
+  assert.match(renderer, /return "Agent";/);
+  assert.match(renderer, /return "Solo";/);
+  assert.doesNotMatch(renderer, /return "Worker";/);
+  assert.doesNotMatch(renderer, /return "Commander";/);
   assert.match(renderer, /roleBadge\.className = "terminal-node-role-badge";/);
   assert.match(renderer, /nodeRecord\.roleBadge\.textContent = roleLabel;/);
   assert.match(renderer, /nodeRecord\.roleBadge\.dataset\.role = roleLabel\.toLowerCase\(\);/);
   assert.match(renderer, /parent_agent: nodeRecord\.managedParentAgent,/);
-  assert.match(renderer, /commander_agent: nodeRecord\.managedCommanderAgent,/);
 });

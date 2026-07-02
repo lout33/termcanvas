@@ -82,7 +82,6 @@ function buildPackagedRuntimePath(basePath = process.env.PATH) {
 }
 
 function createAgentmuxService(options = {}) {
-  const bootstrappedProjectKeys = new Set();
   const bundledRootPath = getBundledAgentmuxRootPath(options);
   const rootPath = path.resolve(
     options.agentmuxRootPath
@@ -251,27 +250,6 @@ function createAgentmuxService(options = {}) {
     }
   }
 
-  async function bootstrapCanvasProject(workspaceRootPath, projectTag) {
-    const output = await runAgentmuxCommand(
-      [
-        "project-sync",
-        projectTag,
-        "--workdir",
-        workspaceRootPath,
-        "--harness",
-        "shell",
-        "--json"
-      ],
-      `sync canvas project ${projectTag}`
-    );
-
-    try {
-      return JSON.parse(output);
-    } catch {
-      throw new Error("agentmux returned invalid JSON while syncing canvas agents.");
-    }
-  }
-
   async function syncCanvasProject(payload) {
     const workspaceRootPath = normalizeNonEmptyString(payload?.workspaceRootPath);
     const canvasId = normalizeNonEmptyString(payload?.canvasId);
@@ -284,25 +262,10 @@ function createAgentmuxService(options = {}) {
       throw new Error("Canvas id is required.");
     }
 
+    // The canvas is a graph with no mandatory commander: an empty project is a
+    // valid state, so syncing only reads — it never creates agents.
     const projectTag = normalizeNonEmptyString(payload?.projectTag) ?? deriveCanvasProjectTag(workspaceRootPath, canvasId);
-    const projectCacheKey = `${workspaceRootPath}\n${projectTag}`;
-
-    if (!bootstrappedProjectKeys.has(projectCacheKey)) {
-      const snapshot = await bootstrapCanvasProject(workspaceRootPath, projectTag);
-      bootstrappedProjectKeys.add(projectCacheKey);
-      return snapshot;
-    }
-
-    const snapshot = await readCanvasProject(projectTag);
-
-    if (snapshot?.manager === null) {
-      bootstrappedProjectKeys.delete(projectCacheKey);
-      const nextSnapshot = await bootstrapCanvasProject(workspaceRootPath, projectTag);
-      bootstrappedProjectKeys.add(projectCacheKey);
-      return nextSnapshot;
-    }
-
-    return snapshot;
+    return readCanvasProject(projectTag);
   }
 
   async function deleteAgent(agentName) {
@@ -315,6 +278,111 @@ function createAgentmuxService(options = {}) {
     await runAgentmuxCommand(["delete", normalizedAgentName, "--force"], `delete agent ${normalizedAgentName}`);
   }
 
+  async function sendAgentPrompt(agentName, message) {
+    const normalizedAgentName = normalizeNonEmptyString(agentName);
+    const normalizedMessage = normalizeNonEmptyString(message);
+
+    if (normalizedAgentName === null) {
+      throw new Error("Agent name is required.");
+    }
+
+    if (normalizedMessage === null) {
+      throw new Error("Prompt message is required.");
+    }
+
+    await runAgentmuxCommand(
+      ["send", normalizedAgentName, normalizedMessage],
+      `send prompt to agent ${normalizedAgentName}`
+    );
+  }
+
+  async function adoptAgent(payload) {
+    const tmuxSessionName = normalizeNonEmptyString(payload?.tmuxSessionName);
+    const projectTag = normalizeNonEmptyString(payload?.projectTag);
+    const agentName = slugifySegment(payload?.agentName, "terminal");
+
+    if (tmuxSessionName === null) {
+      throw new Error("A tmux session name is required to adopt a terminal.");
+    }
+
+    if (projectTag === null) {
+      throw new Error("A project tag is required to adopt a terminal.");
+    }
+
+    const args = ["import", "--agent", agentName, "--tmux-session", tmuxSessionName, "--harness", "shell", "--project", projectTag];
+    const workdir = normalizeNonEmptyString(payload?.workdir);
+
+    if (workdir !== null) {
+      args.push("--workdir", workdir);
+    }
+
+    await runAgentmuxCommand(args, `adopt terminal ${tmuxSessionName} as ${agentName}`);
+    return { agentName };
+  }
+
+  function getAgentmuxBinPath() {
+    if (fs.existsSync(wrapperPath)) {
+      return wrapperPath;
+    }
+
+    return fs.existsSync(scriptPath) ? scriptPath : null;
+  }
+
+  function buildTerminalAgentEnv(payload) {
+    const projectTag = normalizeNonEmptyString(payload?.projectTag);
+    const agentName = normalizeNonEmptyString(payload?.agentName);
+
+    if (projectTag === null || agentName === null) {
+      return {};
+    }
+
+    const env = {
+      AGENTMUX_PROJECT: projectTag,
+      AGENTMUX_AGENT_NAME: agentName,
+      AGENTMUX_ROLE: "agent",
+      AGENTMUX_DEPTH: "0",
+      AGENTMUX_PARENT_AGENT: ""
+    };
+    const workdir = normalizeNonEmptyString(payload?.workdir);
+    const tmuxSessionName = normalizeNonEmptyString(payload?.tmuxSessionName);
+    const binPath = getAgentmuxBinPath();
+    // Mirror the AGENTMUX_HOME the app's own CLI invocations use so the
+    // terminal and the app read the same agent database.
+    const homePath = normalizeNonEmptyString(getAgentmuxInvocation()?.envOverrides?.AGENTMUX_HOME ?? process.env.AGENTMUX_HOME);
+
+    if (workdir !== null) {
+      env.AGENTMUX_WORKDIR = workdir;
+    }
+
+    if (tmuxSessionName !== null) {
+      env.AGENTMUX_TMUX_SESSION = tmuxSessionName;
+    }
+
+    if (binPath !== null) {
+      env.AGENTMUX_BIN = binPath;
+    }
+
+    if (homePath !== null) {
+      env.AGENTMUX_HOME = homePath;
+    }
+
+    return env;
+  }
+
+  async function connectAgents(agentNameA, agentNameB) {
+    const normalizedA = normalizeNonEmptyString(agentNameA);
+    const normalizedB = normalizeNonEmptyString(agentNameB);
+
+    if (normalizedA === null || normalizedB === null) {
+      throw new Error("Both agent names are required.");
+    }
+
+    await runAgentmuxCommand(
+      ["connect", normalizedA, normalizedB, "--announce"],
+      `connect agents ${normalizedA} and ${normalizedB}`
+    );
+  }
+
   return {
     rootPath,
     scriptPath,
@@ -322,7 +390,12 @@ function createAgentmuxService(options = {}) {
     deriveCanvasProjectTag,
     getAgentmuxInvocation,
     syncCanvasProject,
-    deleteAgent
+    deleteAgent,
+    sendAgentPrompt,
+    adoptAgent,
+    connectAgents,
+    getAgentmuxBinPath,
+    buildTerminalAgentEnv
   };
 }
 

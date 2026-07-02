@@ -6,7 +6,6 @@ function serializeCanvasSessionRecord(canvasRecord, exportedCanvas) {
     viewportScale: exportedCanvas.viewportScale,
     workspace: canvasRecord.workspace ?? null,
     agentProjectTag: canvasRecord.agentProjectTag ?? null,
-    managerAgentName: canvasRecord.managerAgentName ?? null,
     activeSessionKey: canvasRecord.activeSessionKey ?? null,
     terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
       ...exportedCanvas.terminalNodes[index],
@@ -15,10 +14,8 @@ function serializeCanvasSessionRecord(canvasRecord, exportedCanvas) {
       managedAgentRole: nodeRecord.managedAgentRole ?? null,
       managedProjectTag: nodeRecord.managedProjectTag ?? null,
       managedParentAgent: nodeRecord.managedParentAgent ?? null,
-      managedCommanderAgent: nodeRecord.managedCommanderAgent ?? null,
       managedDepth: Number.isInteger(nodeRecord.managedDepth) ? nodeRecord.managedDepth : null,
       tmuxSessionName: nodeRecord.tmuxSessionName ?? null,
-      isManager: nodeRecord.isManager === true,
       isExited: nodeRecord.isExited,
       exitCode: nodeRecord.exitCode,
       exitSignal: nodeRecord.exitSignal

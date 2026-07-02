@@ -28,7 +28,7 @@ function createAgentmuxHarness() {
       "  fs.appendFileSync(process.env.FAKE_TMUX_LOG, `${JSON.stringify(args)}\\n`, 'utf8');",
       "}",
       "if (args[0] === 'capture-pane') {",
-      "  process.stdout.write('$\\n');",
+      "  process.stdout.write((process.env.FAKE_TMUX_PANE ?? '$') + '\\n');",
       "  process.exit(0);",
       "}",
       "if (args[0] === 'list-panes' || args[0] === 'list-sessions') {",
@@ -115,70 +115,55 @@ test("agentmux installs the bundled TermCanvas skill", () => {
   }
 });
 
-test("agentmux workers can spawn child workers with parent and depth metadata", () => {
+test("agentmux workers are graph roots and can spawn children with lineage metadata", () => {
   const harness = createAgentmuxHarness();
 
   try {
-    assertAgentmuxOk(runAgentmux(harness, ["project-sync", "proj", "--workdir", harness.workspacePath, "--harness", "shell", "--json"]));
-    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "root-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
     assertAgentmuxOk(runAgentmux(
       harness,
       ["worker", "proj", "grandchild", "--workdir", harness.workspacePath, "--harness", "shell"],
       {
-        AGENTMUX_AGENT_NAME: "worker-a",
+        AGENTMUX_AGENT_NAME: "root-a",
         AGENTMUX_PROJECT: "proj",
-        AGENTMUX_ROLE: "worker",
-        AGENTMUX_DEPTH: "1"
+        AGENTMUX_ROLE: "agent",
+        AGENTMUX_DEPTH: "0"
       }
     ));
-    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "explicit-child", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "worker-a"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "explicit-child", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "root-a"]));
 
     const payload = readProjectPayload(harness, "proj");
     const sessions = sessionsByName(payload);
 
-    assert.equal(payload.manager.name, "proj-general");
-    assert.equal(sessions.get("proj-general").role, "commander");
-    assert.equal(sessions.get("proj-general").depth, 0);
-    assert.equal(sessions.get("proj-general").parent_agent, "");
-    assert.equal(sessions.get("worker-a").role, "worker");
-    assert.equal(sessions.get("worker-a").parent_agent, "proj-general");
-    assert.equal(sessions.get("worker-a").depth, 1);
-    assert.equal(sessions.get("worker-a").commander_agent, "proj-general");
-    assert.equal(sessions.get("grandchild").parent_agent, "worker-a");
-    assert.equal(sessions.get("grandchild").depth, 2);
-    assert.equal(sessions.get("grandchild").commander_agent, "proj-general");
-    assert.equal(sessions.get("explicit-child").parent_agent, "worker-a");
-    assert.equal(sessions.get("explicit-child").depth, 2);
+    assert.equal(payload.manager, undefined, "the manager concept is gone from project payloads");
+    assert.equal(sessions.get("root-a").role, "agent");
+    assert.equal(sessions.get("root-a").parent_agent, "");
+    assert.equal(sessions.get("root-a").depth, 0);
+    assert.equal(sessions.get("grandchild").parent_agent, "root-a");
+    assert.equal(sessions.get("grandchild").depth, 1);
+    assert.equal(sessions.get("explicit-child").parent_agent, "root-a");
+    assert.equal(sessions.get("explicit-child").depth, 1);
 
     const grandchildCall = readNewSessionCalls(harness).find((args) => args.some((arg) => /^agentmux-grandchild-/u.test(arg)));
 
     assert.ok(grandchildCall, "expected fake tmux to record grandchild creation");
-    assert.ok(grandchildCall.includes("AGENTMUX_PARENT_AGENT=worker-a"));
-    assert.ok(grandchildCall.includes("AGENTMUX_DEPTH=2"));
-    assert.ok(grandchildCall.includes("AGENTMUX_COMMANDER_AGENT=proj-general"));
+    assert.ok(grandchildCall.includes("AGENTMUX_PARENT_AGENT=root-a"));
+    assert.ok(grandchildCall.includes("AGENTMUX_DEPTH=1"));
+    assert.ok(grandchildCall.includes("AGENTMUX_ROLE=agent"));
+    assert.ok(!grandchildCall.some((arg) => typeof arg === "string" && arg.startsWith("AGENTMUX_COMMANDER_AGENT=")), "commander env var must be gone");
     assert.ok(grandchildCall.includes("AGENTMUX_PROJECT=proj"));
     assert.ok(grandchildCall.includes(`AGENTMUX_HOME=${harness.homePath}`));
     assert.ok(grandchildCall.some((arg) => /^LANG=.*UTF-?8$/iu.test(arg)));
-    assert.ok(grandchildCall.some((arg) => /^LC_CTYPE=.*UTF-?8$/iu.test(arg)));
     assert.ok(grandchildCall.some((arg) => /^AGENTMUX_BIN=.*vendor\/agentmux\/agentmux$/u.test(arg)));
     assert.ok(grandchildCall.some((arg) => arg.startsWith("PATH=") && arg.includes(harness.binPath)));
-    assert.ok(grandchildCall.includes("-u"));
-    assert.ok(grandchildCall.includes("NO_COLOR"));
-    assert.ok(grandchildCall.includes("COLORTERM=truecolor"));
-    assert.ok(grandchildCall.includes("CLICOLOR=1"));
-    assert.ok(grandchildCall.includes("CLICOLOR_FORCE=1"));
-    assert.ok(grandchildCall.includes("FORCE_COLOR=3"));
 
-    const showWorker = runAgentmux(harness, ["show", "worker-a"]);
+    const showWorker = runAgentmux(harness, ["show", "grandchild"]);
     assertAgentmuxOk(showWorker);
-    assert.match(showWorker.stdout, /role:\s+worker/u);
-    assert.match(showWorker.stdout, /parent:\s+proj-general/u);
+    assert.match(showWorker.stdout, /role:\s+agent/u);
+    assert.match(showWorker.stdout, /parent:\s+root-a/u);
     assert.match(showWorker.stdout, /depth:\s+1/u);
+    assert.doesNotMatch(showWorker.stdout, /commander:/u);
     assert.match(showWorker.stdout, /session awareness:/u);
-    assert.match(showWorker.stdout, /env \| grep '\^AGENTMUX_'/u);
-    assert.match(showWorker.stdout, /worker proj "<worker-name>" --workdir/u);
-    assert.match(showWorker.stdout, /--parent worker-a/u);
-    assert.match(showWorker.stdout, /do not create raw tmux worker sessions/u);
   } finally {
     harness.cleanup();
   }
@@ -188,8 +173,7 @@ test("agentmux rejects invalid explicit worker parents", () => {
   const harness = createAgentmuxHarness();
 
   try {
-    assertAgentmuxOk(runAgentmux(harness, ["project-sync", "proj", "--workdir", harness.workspacePath, "--harness", "shell", "--json"]));
-    assertAgentmuxOk(runAgentmux(harness, ["project-sync", "other", "--workdir", harness.workspacePath, "--harness", "shell", "--json"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
     assertAgentmuxOk(runAgentmux(harness, ["worker", "other", "other-worker", "--workdir", harness.workspacePath, "--harness", "shell"]));
 
     const missingParent = runAgentmux(harness, ["worker", "proj", "bad-child", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "missing-agent"]);
@@ -200,7 +184,7 @@ test("agentmux rejects invalid explicit worker parents", () => {
     assert.notEqual(crossProjectParent.status, 0);
     assert.match(`${crossProjectParent.stderr}\n${crossProjectParent.stdout}`, /belongs to project 'other', not 'proj'/u);
 
-    const selfParent = runAgentmux(harness, ["worker", "proj", "proj-general", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "proj-general"]);
+    const selfParent = runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "worker-a"]);
     assert.notEqual(selfParent.status, 0);
     assert.match(`${selfParent.stderr}\n${selfParent.stdout}`, /Worker cannot use itself as its parent/u);
   } finally {
@@ -208,16 +192,15 @@ test("agentmux rejects invalid explicit worker parents", () => {
   }
 });
 
-test("agentmux command center shows tree and status for child-worker projects", () => {
+test("agentmux command center shows the agent graph tree and status", () => {
   const harness = createAgentmuxHarness();
 
   try {
-    assertAgentmuxOk(runAgentmux(harness, ["project-sync", "proj", "--workdir", harness.workspacePath, "--harness", "shell", "--json"]));
     assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
     assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--prompt", "Handle the subtask"]));
     assertAgentmuxOk(runAgentmux(
       harness,
-      ["worker", "env-child", "--workdir", harness.workspacePath, "--harness", "shell"],
+      ["worker", "env-root", "--workdir", harness.workspacePath, "--harness", "shell"],
       { AGENTMUX_PROJECT: "proj" }
     ));
 
@@ -225,76 +208,243 @@ test("agentmux command center shows tree and status for child-worker projects", 
     const sessions = sessionsByName(payload);
 
     assert.equal(sessions.get("child-a").parent_agent, "worker-a");
-    assert.equal(sessions.get("child-a").depth, 2);
-    assert.equal(sessions.get("env-child").parent_agent, "proj-general");
-    assert.equal(sessions.get("env-child").depth, 1);
+    assert.equal(sessions.get("child-a").depth, 1);
+    assert.equal(sessions.get("env-root").parent_agent, "", "no agent name in env means the worker becomes a root");
+    assert.equal(sessions.get("env-root").depth, 0);
 
     const tree = runAgentmux(harness, ["tree", "proj"]);
     assertAgentmuxOk(tree);
     assert.match(tree.stdout, /Project: proj/u);
-    assert.match(tree.stdout, /proj-general \(commander\)/u);
-    assert.match(tree.stdout, /worker-a \(worker\)/u);
-    assert.match(tree.stdout, /child-a \(worker\).*depth=2/u);
+    assert.doesNotMatch(tree.stdout, /Manager:/u);
+    assert.match(tree.stdout, /worker-a \(agent\)/u);
+    assert.match(tree.stdout, /child-a \(agent\).*depth=1/u);
+    assert.match(tree.stdout, /env-root \(agent\)/u);
     assert.match(tree.stdout, /Command center:/u);
-    assert.match(tree.stdout, /agentmux.* mission proj "<mission>"/u);
+    assert.doesNotMatch(tree.stdout, /mission/u);
     assert.match(tree.stdout, /agentmux.* child <parent-agent> <worker-name> --prompt "<task>"/u);
+    assert.match(tree.stdout, /agentmux.* connect <agent-a> <agent-b> --announce/u);
+    assert.match(tree.stdout, /agentmux.* ask <agent> "<prompt>"/u);
     assert.match(tree.stdout, /agentmux.* logs <agent> --lines 120/u);
-    assert.match(tree.stdout, /agentmux.* send <agent> "<prompt>"/u);
-    assert.match(tree.stdout, /agentmux.* stop <agent>/u);
 
     const status = runAgentmux(harness, ["status"], { AGENTMUX_PROJECT: "proj" });
     assertAgentmuxOk(status);
     assert.match(status.stdout, /Project: proj/u);
+    assert.doesNotMatch(status.stdout, /Manager:/u);
     assert.match(status.stdout, /Runtime:/u);
     assert.match(status.stdout, /Attention:/u);
-    assert.match(status.stdout, /Command center:/u);
 
     const treeJson = runAgentmux(harness, ["tree", "proj", "--json"]);
     assertAgentmuxOk(treeJson);
     const treePayload = JSON.parse(treeJson.stdout);
     assert.equal(treePayload.project, "proj");
-    assert.equal(treePayload.manager.name, "proj-general");
+    assert.equal(treePayload.manager, undefined);
     assert.ok(Array.isArray(treePayload.tree));
+    assert.equal(treePayload.tree.length, 2, "worker-a and env-root are both roots");
   } finally {
     harness.cleanup();
   }
 });
 
-test("agentmux mission sends a delegation-oriented prompt to the project commander", () => {
+test("agentmux stores spawn edges and supports connect/disconnect/neighbors", () => {
   const harness = createAgentmuxHarness();
 
   try {
-    const mission = runAgentmux(harness, [
-      "mission",
-      "proj",
-      "Build the next feature",
-      "--workdir",
-      harness.workspacePath,
-      "--harness",
-      "shell"
-    ]);
-    assertAgentmuxOk(mission);
-    assert.match(mission.stdout, /Sent mission to proj-general/u);
-    assert.match(mission.stdout, /agentmux.* tree proj/u);
-    assert.match(mission.stdout, /agentmux.* logs proj-general --lines 120/u);
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-b", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--prompt", "Handle the subtask"]));
 
-    const sendLiteralCall = readTmuxCalls(harness).find((args) => (
+    const spawnPayload = readProjectPayload(harness, "proj");
+    assert.deepEqual(
+      spawnPayload.edges.map((edge) => [edge.from, edge.to, edge.kind]),
+      [["worker-a", "child-a", "spawn"]]
+    );
+
+    const connect = runAgentmux(harness, ["connect", "worker-a", "worker-b"]);
+    assertAgentmuxOk(connect);
+    assert.match(connect.stdout, /Connected worker-a <-> worker-b \(link\)/u);
+
+    const repeatConnect = runAgentmux(harness, ["connect", "worker-b", "worker-a"]);
+    assertAgentmuxOk(repeatConnect);
+
+    const selfConnect = runAgentmux(harness, ["connect", "worker-a", "worker-a"]);
+    assert.notEqual(selfConnect.status, 0);
+    assert.match(`${selfConnect.stderr}\n${selfConnect.stdout}`, /cannot connect to itself/u);
+
+    const linkedPayload = readProjectPayload(harness, "proj");
+    assert.equal(linkedPayload.edges.length, 2);
+    assert.deepEqual(
+      linkedPayload.edges.filter((edge) => edge.kind === "link").map((edge) => [edge.from, edge.to]),
+      [["worker-a", "worker-b"]]
+    );
+
+    const neighbors = runAgentmux(harness, ["neighbors", "worker-a", "--json"]);
+    assertAgentmuxOk(neighbors);
+    const neighborsPayload = JSON.parse(neighbors.stdout);
+    assert.equal(neighborsPayload.agent, "worker-a");
+    assert.deepEqual(
+      neighborsPayload.neighbors.map((neighbor) => [neighbor.name, neighbor.kind]),
+      [["child-a", "spawn"], ["worker-b", "link"]]
+    );
+
+    const envNeighbors = runAgentmux(harness, ["neighbors", "--json"], { AGENTMUX_AGENT_NAME: "worker-b" });
+    assertAgentmuxOk(envNeighbors);
+    assert.equal(JSON.parse(envNeighbors.stdout).agent, "worker-b");
+
+    const disconnect = runAgentmux(harness, ["disconnect", "worker-b", "worker-a"]);
+    assertAgentmuxOk(disconnect);
+    assert.match(disconnect.stdout, /Disconnected worker-b <-> worker-a/u);
+
+    const missingDisconnect = runAgentmux(harness, ["disconnect", "worker-b", "worker-a"]);
+    assert.notEqual(missingDisconnect.status, 0);
+    assert.match(`${missingDisconnect.stderr}\n${missingDisconnect.stdout}`, /No connection between/u);
+
+    assertAgentmuxOk(runAgentmux(harness, ["delete", "child-a", "--force"]));
+    const cleanedPayload = readProjectPayload(harness, "proj");
+    assert.equal(cleanedPayload.edges.some((edge) => edge.from === "child-a" || edge.to === "child-a"), false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux connect --announce briefs both agents about their new peer", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-b", "--workdir", harness.workspacePath, "--harness", "shell"]));
+
+    const connect = runAgentmux(harness, ["connect", "worker-a", "worker-b", "--announce"]);
+    assertAgentmuxOk(connect);
+    assert.match(connect.stdout, /Connected worker-a <-> worker-b \(link\)/u);
+    assert.match(connect.stdout, /announced: worker-a, worker-b/u);
+
+    const briefingCalls = readTmuxCalls(harness).filter((args) => (
       args[0] === "send-keys"
       && args.includes("-l")
-      && args.some((arg) => typeof arg === "string" && arg.includes("Build the next feature"))
+      && args.some((arg) => typeof arg === "string" && arg.includes("[TermCanvas] You are now connected to agent"))
     ));
 
-    assert.ok(sendLiteralCall, "expected mission text to be sent to the commander");
-    const sentText = sendLiteralCall[sendLiteralCall.indexOf("-l") + 1];
+    assert.equal(briefingCalls.length, 2, "expected one briefing per side");
+    const briefingTexts = briefingCalls.map((args) => args[args.indexOf("-l") + 1]);
+    const briefingAboutB = briefingTexts.find((text) => text.includes("connected to agent 'worker-b'"));
+    const briefingAboutA = briefingTexts.find((text) => text.includes("connected to agent 'worker-a'"));
 
-    assert.match(sentText, /Mission for TermCanvas project `proj`:/u);
-    assert.match(sentText, /Create child workers when delegation helps/u);
-    assert.match(sentText, /agentmux.* child "\$AGENTMUX_AGENT_NAME" <worker-name> --prompt "<task>"/u);
-    assert.match(sentText, /Do not create raw tmux sessions/u);
+    assert.ok(briefingAboutB, "worker-a should be briefed about worker-b");
+    assert.ok(briefingAboutA, "worker-b should be briefed about worker-a");
+    assert.match(briefingAboutB, /agentmux ask worker-b "<task>"/u);
+    assert.match(briefingAboutB, /agentmux check worker-b/u);
+    assert.match(briefingAboutB, /agentmux neighbors/u);
+  } finally {
+    harness.cleanup();
+  }
+});
 
-    const envMission = runAgentmux(harness, ["mission", "Follow up from env"], { AGENTMUX_PROJECT: "proj" });
-    assertAgentmuxOk(envMission);
-    assert.match(envMission.stdout, /Sent mission to proj-general/u);
+test("agentmux import adopts a terminal as a root graph agent that can connect", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, [
+      "import",
+      "--agent", "My Terminal",
+      "--tmux-session", "termcanvas-plain-1",
+      "--harness", "shell",
+      "--project", "proj",
+      "--workdir", harness.workspacePath,
+      "--cmd", "zsh"
+    ]));
+
+    const payload = readProjectPayload(harness, "proj");
+    const adopted = sessionsByName(payload).get("my-terminal");
+
+    assert.ok(adopted, "expected the imported terminal to appear in the project");
+    assert.equal(adopted.role, "agent");
+    assert.equal(adopted.parent_agent, "");
+    assert.equal(adopted.depth, 0);
+
+    const connect = runAgentmux(harness, ["connect", "my-terminal", "worker-a"]);
+    assertAgentmuxOk(connect);
+
+    const linkedPayload = readProjectPayload(harness, "proj");
+    assert.deepEqual(
+      linkedPayload.edges.map((edge) => [edge.from, edge.to, edge.kind]),
+      [["my-terminal", "worker-a", "link"]]
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux injects a spawn briefing into AI-harness agents", () => {
+  const harness = createAgentmuxHarness();
+  const claudeReadyPane = { FAKE_TMUX_PANE: "❯" };
+
+  try {
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["worker", "proj", "root-agent", "--workdir", harness.workspacePath, "--harness", "claude"],
+      claudeReadyPane
+    ));
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["child", "root-agent", "child-agent", "--harness", "claude", "--prompt", "Handle the subtask"],
+      claudeReadyPane
+    ));
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["worker", "proj", "quiet-agent", "--workdir", harness.workspacePath, "--harness", "claude", "--prompt", "Just do this", "--no-briefing"],
+      claudeReadyPane
+    ));
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["worker", "proj", "shell-agent", "--workdir", harness.workspacePath, "--harness", "shell", "--prompt", "echo hi"]
+    ));
+
+    const injectedTexts = readTmuxCalls(harness)
+      .filter((args) => args[0] === "send-keys" && args.includes("-l"))
+      .map((args) => args[args.indexOf("-l") + 1]);
+
+    const rootBriefing = injectedTexts.find((text) => text.includes("You are agent 'root-agent'"));
+    assert.ok(rootBriefing, "claude worker without a prompt should still receive a briefing");
+    assert.match(rootBriefing, /\[TermCanvas\] You are agent 'root-agent' on canvas project 'proj'/u);
+    assert.match(rootBriefing, /"\$AGENTMUX_BIN" neighbors/u);
+    assert.match(rootBriefing, /"\$AGENTMUX_BIN" ask <agent>/u);
+    assert.match(rootBriefing, /"\$AGENTMUX_BIN" check <agent>/u);
+    assert.match(rootBriefing, /"\$AGENTMUX_BIN" child root-agent <child-name>/u);
+    assert.doesNotMatch(rootBriefing, /Your first task/u);
+
+    const childBriefing = injectedTexts.find((text) => text.includes("You are agent 'child-agent'"));
+    assert.ok(childBriefing, "child agent should receive a briefing");
+    assert.match(childBriefing, /spawned by agent 'root-agent'/u);
+    assert.match(childBriefing, /Your first task from the operator: Handle the subtask$/u);
+
+    assert.ok(injectedTexts.includes("Just do this"), "--no-briefing should send the bare prompt");
+    assert.equal(
+      injectedTexts.some((text) => text.includes("You are agent 'quiet-agent'")),
+      false,
+      "--no-briefing should skip the briefing"
+    );
+
+    assert.ok(injectedTexts.includes("echo hi"), "shell prompt should be sent unchanged");
+    assert.equal(
+      injectedTexts.some((text) => text.includes("You are agent 'shell-agent'")),
+      false,
+      "shell harness should never receive a briefing"
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux removed the commander-era commands", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    const projectSync = runAgentmux(harness, ["project-sync", "proj"]);
+    assert.notEqual(projectSync.status, 0);
+
+    const mission = runAgentmux(harness, ["mission", "proj", "do things"]);
+    assert.notEqual(mission.status, 0);
   } finally {
     harness.cleanup();
   }
