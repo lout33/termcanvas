@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const path = require("node:path");
 
 const DEFAULT_ENTRY_LIMIT = 5000;
@@ -205,8 +206,148 @@ function createDirectorySnapshot(rootPath, options = {}) {
   };
 }
 
+async function resolveDirectoryEntryAsync(currentDirectoryPath, childEntry, rootRealPath) {
+  const entryPath = path.join(currentDirectoryPath, childEntry.name);
+
+  if (childEntry.isDirectory()) {
+    return {
+      kind: "directory",
+      directoryPath: entryPath
+    };
+  }
+
+  if (!childEntry.isSymbolicLink()) {
+    return {
+      kind: "file",
+      directoryPath: null
+    };
+  }
+
+  try {
+    const resolvedStats = await fsp.stat(entryPath);
+
+    if (!resolvedStats.isDirectory()) {
+      return {
+        kind: "file",
+        directoryPath: null
+      };
+    }
+
+    const realEntryPath = await fsp.realpath(entryPath);
+
+    if (!isPathWithinDirectory(rootRealPath, realEntryPath)) {
+      return {
+        kind: "file",
+        directoryPath: null
+      };
+    }
+
+    return {
+      kind: "directory",
+      directoryPath: entryPath
+    };
+  } catch {
+    return {
+      kind: "file",
+      directoryPath: null
+    };
+  }
+}
+
+// Same walk as createDirectorySnapshot, but every filesystem touch awaits so
+// the main-process event loop stays responsive during large tree reads.
 async function createDirectorySnapshotAsync(rootPath, options = {}) {
-  return createDirectorySnapshot(rootPath, options);
+  if (typeof rootPath !== "string" || rootPath.trim().length === 0) {
+    throw new Error("A root directory path is required.");
+  }
+
+  const resolvedRootPath = path.resolve(rootPath);
+  const rootStats = await fsp.stat(resolvedRootPath);
+  const rootRealPath = await fsp.realpath(resolvedRootPath);
+
+  if (!rootStats.isDirectory()) {
+    throw new Error("The selected path must be a directory.");
+  }
+
+  const entryLimit = normalizeEntryLimit(options.entryLimit);
+  const ignoredDirectoryNames = new Set(options.ignoredDirectoryNames ?? DEFAULT_IGNORED_DIRECTORY_NAMES);
+  const usesExplicitExpansion = Array.isArray(options.expandedDirectoryPaths);
+  const expandedDirectoryPaths = normalizeExpandedDirectoryPaths(options.expandedDirectoryPaths);
+  const entries = [];
+  const loadedDirectoryPaths = [];
+  const pendingDirectories = [{
+    directoryPath: resolvedRootPath,
+    parentRelativePath: "",
+    depth: 0
+  }];
+  let isTruncated = false;
+
+  while (pendingDirectories.length > 0 && !isTruncated) {
+    const currentDirectory = pendingDirectories.shift();
+
+    if (currentDirectory == null) {
+      break;
+    }
+
+    let childEntries = null;
+
+    try {
+      childEntries = (await fsp.readdir(currentDirectory.directoryPath, { withFileTypes: true })).sort(compareDirectoryEntries);
+    } catch (error) {
+      if (currentDirectory.parentRelativePath.length === 0) {
+        throw error;
+      }
+
+      continue;
+    }
+
+    loadedDirectoryPaths.push(currentDirectory.parentRelativePath);
+
+    const childDirectories = [];
+
+    for (const childEntry of childEntries) {
+      const resolvedEntry = await resolveDirectoryEntryAsync(currentDirectory.directoryPath, childEntry, rootRealPath);
+      const isDirectory = resolvedEntry.kind === "directory";
+
+      if (isDirectory && ignoredDirectoryNames.has(childEntry.name)) {
+        continue;
+      }
+
+      const relativePath = currentDirectory.parentRelativePath.length > 0
+        ? path.posix.join(currentDirectory.parentRelativePath, childEntry.name)
+        : childEntry.name;
+
+      entries.push({
+        name: childEntry.name,
+        relativePath,
+        kind: resolvedEntry.kind,
+        depth: currentDirectory.depth
+      });
+
+      if (entries.length >= entryLimit) {
+        isTruncated = true;
+        break;
+      }
+
+      if (isDirectory && (!usesExplicitExpansion || shouldReadExpandedDirectory(relativePath, expandedDirectoryPaths))) {
+        childDirectories.push({
+          directoryPath: resolvedEntry.directoryPath,
+          parentRelativePath: relativePath,
+          depth: currentDirectory.depth + 1
+        });
+      }
+    }
+
+    pendingDirectories.push(...childDirectories);
+  }
+
+  return {
+    rootPath: resolvedRootPath,
+    rootName: path.basename(resolvedRootPath) || resolvedRootPath,
+    entries,
+    loadedDirectoryPaths,
+    isTruncated
+  };
 }
 
 module.exports = {

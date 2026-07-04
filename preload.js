@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld(
     resolveTrackedTerminalCwds: (terminalIds) => ipcRenderer.invoke("terminal:resolve-tracked-cwds", { terminalIds }),
     writeTerminal: (terminalId, data) => ipcRenderer.invoke("terminal:write", { terminalId, data }),
     resizeTerminal: (terminalId, cols, rows) => ipcRenderer.invoke("terminal:resize", { terminalId, cols, rows }),
+    redrawTerminal: (terminalId) => ipcRenderer.invoke("terminal:redraw", { terminalId }),
     destroyTerminal: (terminalId, options = {}) => ipcRenderer.invoke("terminal:destroy", {
       terminalId,
       preserveSession: options?.preserveSession === true

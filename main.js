@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, webContents, Menu, Notificat
 const { spawnSync } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const pty = require("node-pty");
@@ -966,7 +967,8 @@ function createMainWindow() {
         await delay(1800);
         if (captureScript.length > 0) {
           try {
-            await window.webContents.executeJavaScript(captureScript);
+            const captureResult = await window.webContents.executeJavaScript(captureScript);
+            console.log("[capture] result:", captureResult);
             await delay(600);
           } catch (error) {
             console.error("[capture] script error", error);
@@ -2288,6 +2290,41 @@ ipcMain.handle("terminal:resize", (event, payload) => {
   session.pty.resize(cols, rows);
 });
 
+// Ask tmux to repaint the whole pane for every attached client. Used when a
+// hidden terminal node is revealed after its output was dropped renderer-side.
+ipcMain.handle("terminal:redraw", (event, payload) => {
+  const session = getSession(payload.terminalId);
+
+  if (session === undefined) {
+    return;
+  }
+
+  if (session.ownerWebContentsId !== event.sender.id) {
+    throw new Error("Terminal session is not owned by this window.");
+  }
+
+  if (session.backend !== "tmux" || typeof session.tmuxSessionName !== "string") {
+    return;
+  }
+
+  const clients = runTmuxCommand(["list-clients", "-t", session.tmuxSessionName, "-F", "#{client_tty}"]);
+
+  if (clients === null || clients.status !== 0) {
+    return;
+  }
+
+  clients.stdout
+    .split("\n")
+    .map((clientTty) => clientTty.trim())
+    .filter((clientTty) => clientTty.length > 0)
+    .forEach((clientTty) => {
+      warnIfTmuxCommandFailed(
+        runTmuxCommand(["refresh-client", "-t", clientTty]),
+        "refresh tmux client"
+      );
+    });
+});
+
 ipcMain.handle("terminal:destroy", (event, payload) => {
   const session = getSession(payload.terminalId);
 
@@ -2355,13 +2392,25 @@ function getCanvasSnapshotFilePath() {
   return path.join(app.getPath("userData"), "canvas-snapshot.json");
 }
 
+let canvasSnapshotWriteChain = Promise.resolve();
+
 ipcMain.handle("canvas-snapshot:update", (_event, payload) => {
   const snapshotFilePath = getCanvasSnapshotFilePath();
 
   if (payload?.snapshot != null && typeof payload.snapshot === "object") {
-    const temporaryPath = `${snapshotFilePath}.tmp`;
-    fs.writeFileSync(temporaryPath, `${JSON.stringify(payload.snapshot, null, 2)}\n`);
-    fs.renameSync(temporaryPath, snapshotFilePath);
+    const contents = `${JSON.stringify(payload.snapshot, null, 2)}\n`;
+
+    // Chain writes so they stay ordered and atomic without ever blocking the
+    // main-process event loop on the renderer's periodic snapshot tick.
+    canvasSnapshotWriteChain = canvasSnapshotWriteChain
+      .then(async () => {
+        const temporaryPath = `${snapshotFilePath}.tmp`;
+        await fsp.writeFile(temporaryPath, contents);
+        await fsp.rename(temporaryPath, snapshotFilePath);
+      })
+      .catch((error) => {
+        console.warn("Failed to persist canvas snapshot.", error);
+      });
   }
 
   return { path: snapshotFilePath };

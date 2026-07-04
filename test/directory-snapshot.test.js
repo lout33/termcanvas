@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { createDirectorySnapshot } = require("../directory_snapshot.js");
+const { createDirectorySnapshot, createDirectorySnapshotAsync } = require("../directory_snapshot.js");
 
 function withTempDirectory(callback) {
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-directory-snapshot-"));
@@ -104,4 +104,33 @@ test("createDirectorySnapshot loads expanded deep directory chains on demand", (
   ]);
   assert.equal(snapshot.entries.some((entry) => entry.relativePath === "src/features/auth/screens/login.js"), true);
   assert.equal(snapshot.entries.some((entry) => entry.relativePath === "src/features/billing/screens/invoice.js"), false);
+}));
+
+async function withTempDirectoryAsync(callback) {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-directory-snapshot-"));
+
+  try {
+    return await callback(tempDirectory);
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+}
+
+test("createDirectorySnapshotAsync matches the sync snapshot", () => withTempDirectoryAsync(async (rootPath) => {
+  fs.mkdirSync(path.join(rootPath, "notes", "daily"), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, "notes", "daily", "todo.txt"), "ship it\n", "utf8");
+  fs.mkdirSync(path.join(rootPath, "node_modules", "left-pad"), { recursive: true });
+  fs.writeFileSync(path.join(rootPath, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n", "utf8");
+  fs.writeFileSync(path.join(rootPath, "canvas.json"), "{}\n", "utf8");
+  fs.symlinkSync(path.join(rootPath, "notes"), path.join(rootPath, "notes-link"));
+
+  const syncSnapshot = createDirectorySnapshot(rootPath, { entryLimit: 20 });
+  const asyncSnapshot = await createDirectorySnapshotAsync(rootPath, { entryLimit: 20 });
+
+  assert.deepEqual(asyncSnapshot, syncSnapshot);
+
+  const expandedSync = createDirectorySnapshot(rootPath, { entryLimit: 20, expandedDirectoryPaths: ["notes"] });
+  const expandedAsync = await createDirectorySnapshotAsync(rootPath, { entryLimit: 20, expandedDirectoryPaths: ["notes"] });
+
+  assert.deepEqual(expandedAsync, expandedSync);
 }));

@@ -42,10 +42,34 @@ const {
 const {
   deriveCanvasDelegationEdges
 } = window.noteCanvasRendererCanvasDelegation;
-const {
-  createMarkdownEditor,
-  createCodeEditor
-} = window.noteCanvasRendererWorkspaceMarkdown ?? {};
+// The CodeMirror bundle is ~770KB, so it loads on demand the first time a
+// file preview needs an editor instead of blocking startup.
+let workspaceMarkdownBundlePromise = null;
+let didWorkspaceMarkdownBundleFail = false;
+
+function ensureWorkspaceMarkdownBundle() {
+  if (window.noteCanvasRendererWorkspaceMarkdown !== undefined || didWorkspaceMarkdownBundleFail) {
+    return Promise.resolve();
+  }
+
+  if (workspaceMarkdownBundlePromise === null) {
+    workspaceMarkdownBundlePromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "./renderer_workspace_markdown.bundle.js";
+      script.addEventListener("load", () => {
+        resolve();
+      });
+      script.addEventListener("error", () => {
+        didWorkspaceMarkdownBundleFail = true;
+        console.warn("Workspace markdown editor bundle failed to load; using plain editors.");
+        resolve();
+      });
+      document.head.append(script);
+    });
+  }
+
+  return workspaceMarkdownBundlePromise;
+}
 
 if (window.noteCanvas?.isSmokeTest) {
   window.__canvasLearningBootError = null;
@@ -118,6 +142,7 @@ const sidebarPanel = document.querySelector(".canvas-sidebar-panel");
 const TerminalConstructor = window.Terminal;
 const FitAddonConstructor = window.FitAddon?.FitAddon;
 const Unicode11AddonConstructor = window.Unicode11Addon?.Unicode11Addon;
+const WebglAddonConstructor = window.WebglAddon?.WebglAddon;
 const DRAG_THRESHOLD = 3;
 const CANVAS_EXPORT_VERSION = 3;
 const LEGACY_CANVAS_EXPORT_VERSION = 1;
@@ -172,6 +197,11 @@ let viewportRenderFrame = 0;
 let terminalSizeSyncFrame = 0;
 let terminalRefreshFrame = 0;
 let shouldRefreshTerminalsAfterViewportRender = false;
+// Pure pan is fully handled by the container CSS transform, so per-node
+// position resnapping is deferred to zoom frames and a trailing settle render.
+let shouldSyncNodePositionsOnViewportRender = false;
+let viewportSettleTimer = 0;
+const VIEWPORT_SETTLE_DELAY_MS = 120;
 let zoomIndicatorTimeout = 0;
 let canvasStripOverflowSyncFrame = 0;
 let terminalStripOverflowSyncFrame = 0;
@@ -291,10 +321,24 @@ const listReorderState = {
 const removeTerminalDataListener = window.noteCanvas.onTerminalData(({ terminalId, data }) => {
   const nodeRecord = terminalNodeMap.get(terminalId);
 
-  if (nodeRecord !== undefined) {
-    nodeRecord.lastDataAt = Date.now();
-    nodeRecord.terminal?.write(data);
+  if (nodeRecord === undefined) {
+    return;
   }
+
+  nodeRecord.lastDataAt = Date.now();
+
+  // Hidden tmux-backed terminals skip VT parsing entirely; tmux holds the
+  // real screen state and repaints the pane when the node is revealed.
+  if (
+    nodeRecord.backend === "tmux"
+    && nodeRecord.element instanceof HTMLElement
+    && nodeRecord.element.hidden
+  ) {
+    nodeRecord.needsTerminalRepaint = true;
+    return;
+  }
+
+  nodeRecord.terminal?.write(data);
 });
 
 const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalId, exitCode, signal }) => {
@@ -1342,6 +1386,7 @@ async function releaseTerminalSession(nodeRecord, options = {}) {
   }
 
   nodeRecord.terminalId = null;
+  detachTerminalWebglRenderer(nodeRecord);
   nodeRecord.terminal?.dispose();
   nodeRecord.terminal = null;
   nodeRecord.fitAddon = null;
@@ -1393,6 +1438,10 @@ async function bindTerminalSession(nodeRecord, options = {}) {
   nodeRecord.terminal = terminal;
   nodeRecord.fitAddon = fitAddon;
   terminalNodeMap.set(terminalId, nodeRecord);
+
+  if (nodeRecord.element instanceof HTMLElement && !nodeRecord.element.hidden) {
+    attachTerminalWebglRenderer(nodeRecord);
+  }
 
   const initialSize = fitTerminalNode(nodeRecord) ?? {
     cols: TERMINAL_FALLBACK_COLS,
@@ -1481,6 +1530,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
           return;
         }
 
+        attachTerminalWebglRenderer(nodeRecord);
         scheduleTerminalRefresh([nodeRecord]);
 
         if (fittedSize.cols === lastSyncedCols && fittedSize.rows === lastSyncedRows) {
@@ -1869,7 +1919,13 @@ function setActiveCanvasViewport(nextX, nextY, nextScale) {
 
   if (didScaleChange) {
     shouldRefreshTerminalsAfterViewportRender = true;
+    shouldSyncNodePositionsOnViewportRender = true;
   }
+
+  window.clearTimeout(viewportSettleTimer);
+  viewportSettleTimer = window.setTimeout(() => {
+    renderCanvas();
+  }, VIEWPORT_SETTLE_DELAY_MS);
 
   requestViewportRender();
   scheduleAppSessionSave();
@@ -2911,6 +2967,55 @@ function enableTerminalUnicodeWidthSupport(terminal) {
   }
 }
 
+// WebGL contexts are a scarce browser resource (~16 per page), so only
+// visible terminals hold one; hidden terminals fall back to buffer-only state
+// and reattach on reveal.
+function attachTerminalWebglRenderer(nodeRecord) {
+  if (
+    typeof WebglAddonConstructor !== "function"
+    || nodeRecord.terminal === null
+    || nodeRecord.webglAddon !== null
+  ) {
+    return;
+  }
+
+  try {
+    const webglAddon = new WebglAddonConstructor();
+
+    webglAddon.onContextLoss(() => {
+      detachTerminalWebglRenderer(nodeRecord);
+    });
+    nodeRecord.terminal.loadAddon(webglAddon);
+    nodeRecord.webglAddon = webglAddon;
+  } catch (error) {
+    console.warn("Terminal WebGL renderer unavailable; using DOM renderer.", error);
+  }
+}
+
+function detachTerminalWebglRenderer(nodeRecord) {
+  const webglAddon = nodeRecord.webglAddon;
+
+  nodeRecord.webglAddon = null;
+
+  if (webglAddon === null) {
+    return;
+  }
+
+  try {
+    webglAddon.dispose();
+  } catch {
+    // The addon is already disposed when the terminal itself was disposed.
+  }
+}
+
+function requestTerminalRepaint(nodeRecord) {
+  if (nodeRecord.backend !== "tmux" || typeof nodeRecord.terminalId !== "string") {
+    return;
+  }
+
+  void window.noteCanvas.redrawTerminal(nodeRecord.terminalId);
+}
+
 function getTerminalMountRect(nodeRecord) {
   if (
     !(nodeRecord?.terminalMount instanceof HTMLElement)
@@ -2976,6 +3081,7 @@ function scheduleTerminalRefresh(nodeRecords) {
         && nodeRecord.terminal !== null
         && nodeRecord.terminal.rows > 0
       ) {
+        attachTerminalWebglRenderer(nodeRecord);
         nodeRecord.terminal.clearTextureAtlas?.();
         nodeRecord.terminal.refresh(0, nodeRecord.terminal.rows - 1);
       }
@@ -3000,6 +3106,18 @@ function setNodeCanvasVisibility(nodeRecord, shouldShow) {
   }
 
   nodeRecord.element.hidden = !shouldShow;
+
+  if (shouldShow) {
+    attachTerminalWebglRenderer(nodeRecord);
+
+    if (nodeRecord.needsTerminalRepaint) {
+      nodeRecord.needsTerminalRepaint = false;
+      requestTerminalRepaint(nodeRecord);
+    }
+  } else {
+    detachTerminalWebglRenderer(nodeRecord);
+  }
+
   return true;
 }
 
@@ -3026,7 +3144,14 @@ function flushViewportRender() {
 
   cancelAnimationFrame(viewportRenderFrame);
   viewportRenderFrame = 0;
-  renderCanvas();
+  renderViewportFrame();
+}
+
+function renderViewportFrame() {
+  const syncNodePositions = shouldSyncNodePositionsOnViewportRender;
+
+  shouldSyncNodePositionsOnViewportRender = false;
+  renderCanvas({ syncNodePositions });
   const activeCanvas = getActiveCanvas();
   if (activeCanvas !== null && shouldRefreshTerminalsAfterViewportRender) {
     shouldRefreshTerminalsAfterViewportRender = false;
@@ -3041,12 +3166,7 @@ function requestViewportRender() {
 
   viewportRenderFrame = requestAnimationFrame(() => {
     viewportRenderFrame = 0;
-    renderCanvas();
-    const activeCanvas = getActiveCanvas();
-    if (activeCanvas !== null && shouldRefreshTerminalsAfterViewportRender) {
-      shouldRefreshTerminalsAfterViewportRender = false;
-      scheduleTerminalRefresh(activeCanvas.nodes);
-    }
+    renderViewportFrame();
   });
 }
 
@@ -3361,7 +3481,12 @@ function renderCanvas(options = {}) {
   }
 
   scheduleMinimapRender();
-  scheduleCanvasEdgeRender();
+
+  // Edges live in the transformed SVG layer, so pan/zoom never changes their
+  // world-space geometry; rebuilding is only needed when the node set changes.
+  if (didChangeMountedNodes) {
+    scheduleCanvasEdgeRender();
+  }
 }
 
 function createCanvasStripItem(itemView) {
@@ -4723,6 +4848,17 @@ function renderFileInspector() {
   }
 
   destroyWorkspaceMarkdownEditor();
+
+  const { createMarkdownEditor, createCodeEditor } = window.noteCanvasRendererWorkspaceMarkdown ?? {};
+
+  if (window.noteCanvasRendererWorkspaceMarkdown === undefined && !didWorkspaceMarkdownBundleFail) {
+    void ensureWorkspaceMarkdownBundle().then(() => {
+      if (window.noteCanvasRendererWorkspaceMarkdown !== undefined && isWorkspacePreviewOpen()) {
+        renderFileInspector();
+      }
+    });
+  }
+
   const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
   const isMarkdownFile = isMarkdownWorkspacePreview();
   const relativePath = workspacePreviewState.relativePath ?? "";
@@ -7165,6 +7301,8 @@ async function createTerminalNode(options) {
     overlayMeta: null,
     terminal: null,
     fitAddon: null,
+    webglAddon: null,
+    needsTerminalRepaint: false,
     resizeObserver: null,
     syncSize: () => {},
     disposeInput: () => {},
@@ -7836,6 +7974,7 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     updateEmptyState();
     applyCanvasFocusMode();
     renderCanvasSwitcher();
+    scheduleCanvasEdgeRender();
   }
 
   scheduleAppSessionSave();
