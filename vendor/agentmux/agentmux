@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Older TermCanvas tmux sessions may predate AGENTMUX_HOME being exported by
+# the shell. The app repairs the tmux session environment on reattach; recover
+# that value here so existing terminals and newly-created children keep using
+# the same app-scoped database as the canvas.
+if [[ -z "${AGENTMUX_HOME:-}" && -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+  AGENTMUX_TMUX_SESSION_NAME="$(tmux display-message -p '#{session_name}' 2>/dev/null || true)"
+  if [[ -n "$AGENTMUX_TMUX_SESSION_NAME" ]]; then
+    AGENTMUX_HOME_ENTRY="$(tmux show-environment -t "$AGENTMUX_TMUX_SESSION_NAME" AGENTMUX_HOME 2>/dev/null || true)"
+    if [[ "$AGENTMUX_HOME_ENTRY" == AGENTMUX_HOME=* ]]; then
+      export AGENTMUX_HOME="${AGENTMUX_HOME_ENTRY#AGENTMUX_HOME=}"
+    fi
+  fi
+fi
+
 exec python3 "$SCRIPT_DIR/agentmux.py" "$@"

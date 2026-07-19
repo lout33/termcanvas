@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const { buildPackagedRuntimePath, createAgentmuxService, deriveCanvasProjectTag } = require("../main_agentmux_service.js");
 
@@ -85,6 +86,7 @@ test("development agentmux service uses vendored runtime by default", () => {
     assert.equal(service.rootPath, path.join(repoRoot, "vendor", "agentmux"));
     assert.equal(invocation.command, path.join(repoRoot, "vendor", "agentmux", "agentmux"));
     assert.deepEqual(invocation.argsPrefix, []);
+    assert.equal(invocation.envOverrides.AGENTMUX_HOME, path.join(repoRoot, ".tmp-agentmux-home"));
   } finally {
     if (originalAgentmuxRoot === undefined) {
       delete process.env.TERMCANVAS_AGENTMUX_ROOT;
@@ -113,9 +115,85 @@ test("buildTerminalAgentEnv gives canvas terminals full agentmux context", () =>
   assert.equal(env.AGENTMUX_WORKDIR, "/tmp/workspace");
   assert.equal(env.AGENTMUX_TMUX_SESSION, "termcanvas-node-1");
   assert.equal(env.AGENTMUX_BIN, path.join(repoRoot, "vendor", "agentmux", "agentmux"));
+  assert.equal(env.AGENTMUX_HOME, path.join(repoRoot, ".tmp-agentmux-home"));
+  assert.deepEqual(service.buildTerminalRuntimeEnv(), {
+    AGENTMUX_HOME: path.join(repoRoot, ".tmp-agentmux-home"),
+    AGENTMUX_BIN: path.join(repoRoot, "vendor", "agentmux", "agentmux")
+  });
 
   assert.deepEqual(service.buildTerminalAgentEnv({ projectTag: "", agentName: "x" }), {});
   assert.deepEqual(service.buildTerminalAgentEnv({ projectTag: "proj", agentName: null }), {});
+});
+
+test("canvas sync accepts a persisted project tag without a workspace folder", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-project-only-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    "import json\nprint(json.dumps({'project': 'persisted-project', 'sessions': [], 'edges': []}))\n",
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+    const snapshot = await service.syncCanvasProject({
+      canvasId: "canvas-1",
+      projectTag: "persisted-project",
+      workspaceRootPath: null
+    });
+
+    assert.equal(snapshot.project, "persisted-project");
+    assert.deepEqual(snapshot.sessions, []);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("vendored agentmux recovers app-scoped home from a repaired tmux session", () => {
+  const repoRoot = path.join(__dirname, "..");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-wrapper-home-"));
+  const binPath = path.join(tempRoot, "bin");
+  const recoveredHomePath = path.join(tempRoot, "recovered-home");
+
+  fs.mkdirSync(binPath, { recursive: true });
+  fs.writeFileSync(
+    path.join(binPath, "tmux"),
+    [
+      "#!/usr/bin/env bash",
+      "if [[ \"$1\" == \"display-message\" ]]; then printf '%s\\n' 'canvas-session'; exit 0; fi",
+      "if [[ \"$1\" == \"show-environment\" ]]; then printf 'AGENTMUX_HOME=%s\\n' \"$FAKE_AGENTMUX_HOME\"; exit 0; fi",
+      "exit 1",
+      ""
+    ].join("\n"),
+    { mode: 0o755 }
+  );
+
+  const env = {
+    ...process.env,
+    PATH: `${binPath}${path.delimiter}${process.env.PATH ?? ""}`,
+    TMUX: "fake-tmux-socket,1,0",
+    FAKE_AGENTMUX_HOME: recoveredHomePath
+  };
+  delete env.AGENTMUX_HOME;
+
+  try {
+    const result = spawnSync(path.join(repoRoot, "vendor", "agentmux", "agentmux"), ["ls", "--json"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(path.join(recoveredHomePath, "agentmux.db")), true);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("release config bundles agentmux from electron-builder config", () => {

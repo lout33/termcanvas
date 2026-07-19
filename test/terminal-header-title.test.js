@@ -172,6 +172,31 @@ test("managed agent snapshots reconcile in stable name order", () => {
   assert.match(renderer, /const sessions = sortManagedAgentSnapshots\(Array\.isArray\(snapshot\?\.sessions\) \? snapshot\.sessions : \[\]\);/);
 });
 
+test("agent sync works for persisted folderless canvases and batches node chrome updates", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const hasProjectTag = typeof canvasRecord\?\.agentProjectTag === "string"/);
+  assert.match(renderer, /if \(canvasRecord === null \|\| \(!hasProjectTag && !hasWorkspaceRoot\)\) \{/);
+  assert.match(renderer, /workspaceRootPath: hasWorkspaceRoot \? canvasRecord\.workspace\.rootPath : null/);
+  assert.match(renderer, /const managedNodeByName = new Map\(\);/);
+  assert.match(renderer, /const unmanagedNodeByTmuxSession = new Map\(\);/);
+  assert.match(renderer, /deferChromeRefresh: true,/);
+  assert.match(renderer, /if \(didChangeNodeSet\) \{[\s\S]*renderCanvasSwitcher\(\);/);
+});
+
+test("removing a reconciled node detaches its PTY while preserving tmux", () => {
+  const renderer = readRenderer();
+
+  assert.match(
+    renderer,
+    /if \(typeof terminalId === "string"\) \{[\s\S]*destroyTerminal\(terminalId, \{[\s\S]*preserveSession: preserveSession \|\| !shouldDestroySession/
+  );
+  assert.match(
+    renderer,
+    /destroyTerminalNode\(staleNode, \{[\s\S]*shouldDestroySession: false,[\s\S]*deferChromeRefresh: true/
+  );
+});
+
 test("managed agent nodes preserve agentmux tmux sessions before first bind", () => {
   const renderer = readRenderer();
 

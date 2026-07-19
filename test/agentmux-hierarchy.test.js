@@ -192,6 +192,34 @@ test("agentmux rejects invalid explicit worker parents", () => {
   }
 });
 
+test("project-scoped agent lists refresh only that project's tmux sessions", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "project-worker", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "other", "other-worker", "--workdir", harness.workspacePath, "--harness", "shell"]));
+
+    const allResult = runAgentmux(harness, ["ls", "--json"]);
+    assertAgentmuxOk(allResult);
+    const allSessions = JSON.parse(allResult.stdout).sessions;
+    const projectSession = allSessions.find((session) => session.name === "project-worker");
+    const otherSession = allSessions.find((session) => session.name === "other-worker");
+
+    fs.writeFileSync(harness.tmuxLogPath, "", "utf8");
+    const projectResult = runAgentmux(harness, ["ls", "--project", "proj", "--json"]);
+    assertAgentmuxOk(projectResult);
+
+    const refreshTargets = readTmuxCalls(harness)
+      .filter((args) => args[0] === "has-session" || args[0] === "capture-pane")
+      .map((args) => args[args.indexOf("-t") + 1]);
+
+    assert.ok(refreshTargets.includes(projectSession.tmux_session));
+    assert.equal(refreshTargets.includes(otherSession.tmux_session), false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("agentmux command center shows the agent graph tree and status", () => {
   const harness = createAgentmuxHarness();
 

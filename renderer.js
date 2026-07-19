@@ -1377,8 +1377,10 @@ async function releaseTerminalSession(nodeRecord, options = {}) {
   nodeRecord.resizeObserver = null;
   nodeRecord.syncSize = () => {};
 
-  if (shouldDestroySession && typeof terminalId === "string") {
-    await window.noteCanvas.destroyTerminal(terminalId, { preserveSession });
+  if (typeof terminalId === "string") {
+    await window.noteCanvas.destroyTerminal(terminalId, {
+      preserveSession: preserveSession || !shouldDestroySession
+    });
   }
 
   if (typeof terminalId === "string") {
@@ -7266,6 +7268,7 @@ function createTerminalElement(nodeRecord) {
 async function createTerminalNode(options) {
   const activeCanvas = getActiveCanvas();
   const shouldFocus = options?.shouldFocus !== false;
+  const shouldDeferChromeRefresh = options?.deferChromeRefresh === true;
 
   if (activeCanvas === null) {
     return;
@@ -7542,7 +7545,9 @@ async function createTerminalNode(options) {
   });
 
   activeCanvas.nodes.push(nodeRecord);
-  renderCanvasSwitcher();
+  if (!shouldDeferChromeRefresh) {
+    renderCanvasSwitcher();
+  }
 
   if (activeCanvas.id === activeCanvasId) {
     nodesLayer.append(elements.node);
@@ -7813,6 +7818,21 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
 
   const sessions = sortManagedAgentSnapshots(Array.isArray(snapshot?.sessions) ? snapshot.sessions : []);
   const seenAgentNames = new Set();
+  const managedNodeByName = new Map();
+  const unmanagedNodeByTmuxSession = new Map();
+  let didChangeNodeSet = false;
+
+  for (const nodeRecord of canvasRecord.nodes) {
+    if (nodeRecord.isRemoved) {
+      continue;
+    }
+
+    if (nodeRecord.managedAgentName !== null) {
+      managedNodeByName.set(nodeRecord.managedAgentName, nodeRecord);
+    } else if (nodeRecord.tmuxSessionName !== null) {
+      unmanagedNodeByTmuxSession.set(nodeRecord.tmuxSessionName, nodeRecord);
+    }
+  }
 
   canvasRecord.agentProjectTag = typeof snapshot?.project === "string" && snapshot.project.length > 0
     ? snapshot.project
@@ -7830,15 +7850,10 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
     const agentTmuxSessionName = typeof agentSnapshot?.tmux_session === "string" && agentSnapshot.tmux_session.length > 0
       ? agentSnapshot.tmux_session
       : null;
-    const existingNode = canvasRecord.nodes.find((nodeRecord) => nodeRecord.managedAgentName === agentName && !nodeRecord.isRemoved)
+    const existingNode = managedNodeByName.get(agentName)
       // A terminal adopted moments ago may not carry its agent name yet —
       // match by tmux session so it never materializes as a duplicate node.
-      ?? canvasRecord.nodes.find((nodeRecord) => (
-        !nodeRecord.isRemoved
-        && nodeRecord.managedAgentName === null
-        && agentTmuxSessionName !== null
-        && nodeRecord.tmuxSessionName === agentTmuxSessionName
-      ))
+      ?? (agentTmuxSessionName === null ? null : unmanagedNodeByTmuxSession.get(agentTmuxSessionName))
       ?? null;
 
     if (existingNode !== null) {
@@ -7850,7 +7865,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
     const nextPosition = getManagedNodePlacement(canvasRecord, agentSnapshot);
 
     try {
-      await createTerminalNode({
+      const createdNode = await createTerminalNode({
         x: nextPosition.x,
         y: nextPosition.y,
         width: DEFAULT_NODE_WIDTH,
@@ -7866,8 +7881,13 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
         managedDepth: agentSnapshot.depth,
         managedRuntimeState: agentSnapshot.runtime_state,
         managedAgentState: agentSnapshot.agent_state,
+        deferChromeRefresh: true,
         shouldFocus: false
       });
+      if (createdNode !== undefined) {
+        managedNodeByName.set(agentName, createdNode);
+        didChangeNodeSet = true;
+      }
     } catch (error) {
       console.error(error);
     }
@@ -7876,7 +7896,18 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
   const staleNodes = getManagedCanvasNodes(canvasRecord).filter((nodeRecord) => !seenAgentNames.has(nodeRecord.managedAgentName));
 
   for (const staleNode of staleNodes) {
-    await destroyTerminalNode(staleNode, { shouldDestroySession: false });
+    await destroyTerminalNode(staleNode, {
+      shouldDestroySession: false,
+      deferChromeRefresh: true
+    });
+    didChangeNodeSet = true;
+  }
+
+  if (didChangeNodeSet) {
+    renderCanvasSwitcher();
+    updateEmptyState();
+    applyCanvasFocusMode();
+    scheduleCanvasEdgeRender();
   }
 
   scheduleAttentionRefresh();
@@ -7890,7 +7921,10 @@ async function syncActiveCanvasAgentProject() {
 
   const canvasRecord = getActiveCanvas();
 
-  if (canvasRecord === null || typeof canvasRecord.workspace?.rootPath !== "string") {
+  const hasProjectTag = typeof canvasRecord?.agentProjectTag === "string" && canvasRecord.agentProjectTag.length > 0;
+  const hasWorkspaceRoot = typeof canvasRecord?.workspace?.rootPath === "string" && canvasRecord.workspace.rootPath.length > 0;
+
+  if (canvasRecord === null || (!hasProjectTag && !hasWorkspaceRoot)) {
     return;
   }
 
@@ -7900,7 +7934,7 @@ async function syncActiveCanvasAgentProject() {
     const snapshot = await window.noteCanvas.syncCanvasAgentProject({
       canvasId: canvasRecord.id,
       canvasName: canvasRecord.name,
-      workspaceRootPath: canvasRecord.workspace.rootPath,
+      workspaceRootPath: hasWorkspaceRoot ? canvasRecord.workspace.rootPath : null,
       projectTag: canvasRecord.agentProjectTag
     });
 
@@ -7934,6 +7968,7 @@ function scheduleCanvasAgentSync(delay = 0) {
 
 async function destroyTerminalNode(nodeRecord, options = {}) {
   const shouldDestroySession = options.shouldDestroySession !== false;
+  const shouldDeferChromeRefresh = options.deferChromeRefresh === true;
 
   if (nodeRecord.isRemoved) {
     return;
@@ -7973,8 +8008,10 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
   if (nodeRecord.canvas.id === activeCanvasId) {
     updateEmptyState();
     applyCanvasFocusMode();
-    renderCanvasSwitcher();
-    scheduleCanvasEdgeRender();
+    if (!shouldDeferChromeRefresh) {
+      renderCanvasSwitcher();
+      scheduleCanvasEdgeRender();
+    }
   }
 
   scheduleAppSessionSave();

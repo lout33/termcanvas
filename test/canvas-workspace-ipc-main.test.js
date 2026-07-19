@@ -612,6 +612,15 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
       "session env should carry the CLI path"
     );
     assert.ok(newSession.args.includes("AGENTMUX_TMUX_SESSION=termcanvas-agent-env"));
+    assert.ok(
+      spawnCalls.some(({ command, args }) => (
+        command === "tmux"
+        && args[0] === "set-environment"
+        && args.includes("termcanvas-agent-env")
+        && args.includes("AGENTMUX_HOME")
+      )),
+      "expected the tmux session environment to retain the app-scoped agentmux home"
+    );
 
     const importCall = agentmuxSpawnCalls.find(({ args }) => Array.isArray(args) && args.includes("import"));
 
@@ -642,6 +651,15 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
     );
 
     assert.equal(restored.managedAgentName, null, "restored terminals must not re-adopt");
+    assert.ok(
+      spawnCalls.some(({ command, args }) => (
+        command === "tmux"
+        && args[0] === "set-environment"
+        && args.includes("termcanvas-agent-env")
+        && args.includes("AGENTMUX_BIN")
+      )),
+      "expected restored tmux sessions to receive the repaired agentmux runtime environment"
+    );
   } finally {
     delete require.cache[mainPath];
   }

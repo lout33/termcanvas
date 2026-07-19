@@ -785,6 +785,12 @@ def refresh_all(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return [refresh_one(conn, session) for session in sessions]
 
 
+def refresh_project(conn: sqlite3.Connection, project: str | None) -> list[sqlite3.Row]:
+    sessions = conn.execute("SELECT * FROM sessions ORDER BY created_at ASC").fetchall()
+    project_sessions = filter_sessions_by_project(sessions, project)
+    return [refresh_one(conn, session) for session in project_sessions]
+
+
 def fetch_recent_events(conn: sqlite3.Connection, session_id: str, limit: int) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT event_type, message, created_at FROM events WHERE session_id = ? ORDER BY id DESC LIMIT ?",
@@ -1317,7 +1323,7 @@ def project_detail(conn: sqlite3.Connection, project_name: str, event_limit: int
     if not normalized:
         raise SystemExit("Project is required.")
 
-    sessions = sort_sessions_for_attention(filter_sessions_by_project(refresh_all(conn), normalized))
+    sessions = sort_sessions_for_attention(refresh_project(conn, normalized))
     if not sessions:
         raise SystemExit(f"No project found for '{normalized}'.")
 
@@ -1336,7 +1342,7 @@ def project_payload_from_sessions(project_name: str, sessions: list[sqlite3.Row]
 
 def project_status_payload(conn: sqlite3.Connection, project_name: str) -> dict[str, object]:
     normalized = normalize_project(project_name)
-    sessions = sort_sessions_for_attention(filter_sessions_by_project(refresh_all(conn), normalized))
+    sessions = sort_sessions_for_attention(refresh_project(conn, normalized))
     return project_payload_from_sessions(normalized, sessions, edges=list_project_edges(conn, normalized))
 
 
@@ -1379,7 +1385,7 @@ def build_project_tree_nodes(summaries: list[dict[str, object]]) -> list[dict[st
 
 def project_tree_payload(conn: sqlite3.Connection, project_name: str) -> dict[str, object]:
     normalized = project_from_arg_or_env(project_name)
-    sessions = sort_sessions_for_attention(filter_sessions_by_project(refresh_all(conn), normalized))
+    sessions = sort_sessions_for_attention(refresh_project(conn, normalized))
     if not sessions:
         raise SystemExit(f"No project found for '{normalized}'.")
 
@@ -2036,8 +2042,7 @@ def console_command(args: argparse.Namespace) -> None:
 
 def list_sessions(args: argparse.Namespace) -> None:
     with db() as conn:
-        sessions = refresh_all(conn)
-        sessions = filter_sessions_by_project(sessions, args.project)
+        sessions = refresh_project(conn, args.project) if args.project else refresh_all(conn)
         if args.json:
             if args.project:
                 edges = list_project_edges(conn, normalize_project(args.project))

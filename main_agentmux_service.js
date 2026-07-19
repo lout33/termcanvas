@@ -113,12 +113,10 @@ function createAgentmuxService(options = {}) {
       return null;
     }
 
-    const envOverrides = bundledRootPath !== null && rootPath === bundledRootPath
-      ? {
-          ...packagedRuntimeEnv,
-          AGENTMUX_HOME: agentmuxHomePath
-        }
-      : {};
+    const envOverrides = {
+      ...packagedRuntimeEnv,
+      AGENTMUX_HOME: agentmuxHomePath
+    };
     const envPrefix = formatEnvPrefix(envOverrides);
     const commandPrefix = envPrefix.length > 0 ? `${envPrefix} ` : "";
 
@@ -159,8 +157,14 @@ function createAgentmuxService(options = {}) {
       ? {
           command: "agentmux",
           argsPrefix: [],
-          envOverrides: {},
-          displayText: "agentmux"
+          envOverrides: {
+            ...packagedRuntimeEnv,
+            AGENTMUX_HOME: agentmuxHomePath
+          },
+          displayText: `${formatEnvPrefix({
+            ...packagedRuntimeEnv,
+            AGENTMUX_HOME: agentmuxHomePath
+          })} agentmux`
         }
       : null;
   }
@@ -253,18 +257,19 @@ function createAgentmuxService(options = {}) {
   async function syncCanvasProject(payload) {
     const workspaceRootPath = normalizeNonEmptyString(payload?.workspaceRootPath);
     const canvasId = normalizeNonEmptyString(payload?.canvasId);
+    const requestedProjectTag = normalizeNonEmptyString(payload?.projectTag);
 
-    if (workspaceRootPath === null) {
-      throw new Error("Canvas workspace root path is required.");
+    if (requestedProjectTag === null && workspaceRootPath === null) {
+      throw new Error("A canvas project tag or workspace root path is required.");
     }
 
-    if (canvasId === null) {
-      throw new Error("Canvas id is required.");
+    if (requestedProjectTag === null && canvasId === null) {
+      throw new Error("Canvas id is required when deriving a project tag.");
     }
 
     // The canvas is a graph with no mandatory commander: an empty project is a
     // valid state, so syncing only reads — it never creates agents.
-    const projectTag = normalizeNonEmptyString(payload?.projectTag) ?? deriveCanvasProjectTag(workspaceRootPath, canvasId);
+    const projectTag = requestedProjectTag ?? deriveCanvasProjectTag(workspaceRootPath, canvasId);
     return readCanvasProject(projectTag);
   }
 
@@ -328,6 +333,19 @@ function createAgentmuxService(options = {}) {
     return fs.existsSync(scriptPath) ? scriptPath : null;
   }
 
+  function buildTerminalRuntimeEnv() {
+    const env = {
+      AGENTMUX_HOME: agentmuxHomePath
+    };
+    const binPath = getAgentmuxBinPath();
+
+    if (binPath !== null) {
+      env.AGENTMUX_BIN = binPath;
+    }
+
+    return env;
+  }
+
   function buildTerminalAgentEnv(payload) {
     const projectTag = normalizeNonEmptyString(payload?.projectTag);
     const agentName = normalizeNonEmptyString(payload?.agentName);
@@ -337,6 +355,7 @@ function createAgentmuxService(options = {}) {
     }
 
     const env = {
+      ...buildTerminalRuntimeEnv(),
       AGENTMUX_PROJECT: projectTag,
       AGENTMUX_AGENT_NAME: agentName,
       AGENTMUX_ROLE: "agent",
@@ -345,10 +364,6 @@ function createAgentmuxService(options = {}) {
     };
     const workdir = normalizeNonEmptyString(payload?.workdir);
     const tmuxSessionName = normalizeNonEmptyString(payload?.tmuxSessionName);
-    const binPath = getAgentmuxBinPath();
-    // Mirror the AGENTMUX_HOME the app's own CLI invocations use so the
-    // terminal and the app read the same agent database.
-    const homePath = normalizeNonEmptyString(getAgentmuxInvocation()?.envOverrides?.AGENTMUX_HOME ?? process.env.AGENTMUX_HOME);
 
     if (workdir !== null) {
       env.AGENTMUX_WORKDIR = workdir;
@@ -356,14 +371,6 @@ function createAgentmuxService(options = {}) {
 
     if (tmuxSessionName !== null) {
       env.AGENTMUX_TMUX_SESSION = tmuxSessionName;
-    }
-
-    if (binPath !== null) {
-      env.AGENTMUX_BIN = binPath;
-    }
-
-    if (homePath !== null) {
-      env.AGENTMUX_HOME = homePath;
     }
 
     return env;
@@ -395,6 +402,7 @@ function createAgentmuxService(options = {}) {
     adoptAgent,
     connectAgents,
     getAgentmuxBinPath,
+    buildTerminalRuntimeEnv,
     buildTerminalAgentEnv
   };
 }

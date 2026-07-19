@@ -552,6 +552,17 @@ function configureTmuxSession(sessionName) {
   });
 }
 
+function configureTmuxSessionEnvironment(sessionName, sessionEnv = {}) {
+  Object.entries(sessionEnv)
+    .filter(([, value]) => typeof value === "string" && value.length > 0)
+    .forEach(([name, value]) => {
+      warnIfTmuxCommandFailed(
+        runTmuxCommand(["set-environment", "-t", sessionName, name, value]),
+        `set tmux ${name}`
+      );
+    });
+}
+
 function createTmuxSession(sessionName, cwd, sessionEnv = {}) {
   configureTmuxColorEnvironment();
   const environmentArgs = Object.entries(sessionEnv)
@@ -563,6 +574,7 @@ function createTmuxSession(sessionName, cwd, sessionEnv = {}) {
   );
   configureTmuxSession(sessionName);
   configureTmuxColorEnvironment(sessionName);
+  configureTmuxSessionEnvironment(sessionName, sessionEnv);
 }
 
 function destroyTmuxSession(sessionName) {
@@ -873,6 +885,7 @@ async function createTmuxClientSession(options) {
   } else {
     configureTmuxSession(tmuxSessionName);
     configureTmuxColorEnvironment(tmuxSessionName);
+    configureTmuxSessionEnvironment(tmuxSessionName, options.sessionEnv ?? {});
   }
 
   configureTmuxTruecolorSupport();
@@ -2110,14 +2123,17 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   const shouldAdoptAsAgent = agentProjectTag !== null && requestedTmuxSessionName === null;
   const plannedAgentName = shouldAdoptAsAgent ? `terminal-${randomUUID().slice(0, 6)}` : null;
   const plannedTmuxSessionName = requestedTmuxSessionName ?? getTmuxSessionName(sessionKey);
-  const sessionEnv = shouldAdoptAsAgent
-    ? agentmuxService.buildTerminalAgentEnv({
-        projectTag: agentProjectTag,
-        agentName: plannedAgentName,
-        workdir: terminalCwd,
-        tmuxSessionName: plannedTmuxSessionName
-      })
-    : {};
+  const sessionEnv = agentProjectTag === null
+    ? {}
+    : {
+        ...agentmuxService.buildTerminalRuntimeEnv(),
+        ...(shouldAdoptAsAgent ? agentmuxService.buildTerminalAgentEnv({
+          projectTag: agentProjectTag,
+          agentName: plannedAgentName,
+          workdir: terminalCwd,
+          tmuxSessionName: plannedTmuxSessionName
+        }) : {})
+      };
 
   let tmuxSession = null;
 
