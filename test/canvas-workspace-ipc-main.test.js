@@ -380,6 +380,78 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
   }
 });
 
+test("terminal:create reserves stable identity before concurrent requests can spawn duplicates", async () => {
+  const ptyProcesses = [];
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: (command, args) => {
+        if (command === "tmux" && args[0] === "-V") {
+          return { status: 1, stdout: "", stderr: "" };
+        }
+
+        return { status: 0, stdout: "", stderr: "" };
+      }
+    },
+    nodePtyStub: {
+      spawn: () => {
+        const ptyProcess = createMockPtyProcess();
+        ptyProcesses.push(ptyProcess);
+        return ptyProcess;
+      }
+    }
+  });
+  const createTerminal = handlers.get("terminal:create");
+  const destroyTerminal = handlers.get("terminal:destroy");
+  const ownerEvent = { sender: { id: 41 } };
+  const firstCreate = createTerminal(ownerEvent, {
+    terminalId: "attachment-a",
+    sessionKey: "stable-session",
+    cols: 80,
+    rows: 24,
+    cwd: os.homedir()
+  });
+  const duplicateCreate = createTerminal(ownerEvent, {
+    terminalId: "attachment-b",
+    sessionKey: "stable-session",
+    cols: 80,
+    rows: 24,
+    cwd: os.homedir()
+  });
+
+  await assert.rejects(
+    duplicateCreate,
+    (error) => error.code === "TERMINAL_SESSION_ALREADY_ATTACHED"
+  );
+  const created = await firstCreate;
+
+  assert.equal(created.sessionKey, "stable-session");
+  assert.equal(ptyProcesses.length, 1);
+
+  await destroyTerminal(ownerEvent, {
+    terminalId: "attachment-a",
+    preserveSession: true
+  });
+
+  const reattached = await createTerminal(ownerEvent, {
+    terminalId: "attachment-c",
+    sessionKey: "stable-session",
+    cols: 80,
+    rows: 24,
+    cwd: os.homedir()
+  });
+
+  assert.equal(reattached.sessionKey, "stable-session");
+  assert.equal(ptyProcesses.length, 2);
+
+  await destroyTerminal(ownerEvent, {
+    terminalId: "attachment-c",
+    preserveSession: false
+  });
+  delete require.cache[mainPath];
+});
+
 test("terminal:create advertises truecolor support to spawned shells", async () => {
   const ptySpawnCalls = [];
   const originalNoColor = process.env.NO_COLOR;
@@ -550,7 +622,17 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
         }
 
         if (command === "tmux" && args[0] === "has-session") {
-          return { status: 1, stdout: "", stderr: "no such session" };
+          const targetSession = args[2];
+          const wasCreated = targetSession === "termcanvas-agent-env"
+            && spawnCalls.some(({ command: priorCommand, args: priorArgs }) => (
+              priorCommand === "tmux"
+              && priorArgs[0] === "new-session"
+              && priorArgs.includes(targetSession)
+            ));
+
+          return wasCreated
+            ? { status: 0, stdout: "", stderr: "" }
+            : { status: 1, stdout: "", stderr: "no such session" };
         }
 
         if (command === "tmux" && args[0] === "display-message") {
@@ -581,6 +663,7 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
 
   try {
     const createTerminalHandler = handlers.get("terminal:create");
+    const destroyTerminalHandler = handlers.get("terminal:destroy");
 
     const created = await createTerminalHandler(
       { sender: { id: 47 } },
@@ -637,11 +720,16 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
       ]
     );
 
+    await destroyTerminalHandler(
+      { sender: { id: 47 } },
+      { terminalId: "managed-terminal", preserveSession: true }
+    );
+
     const restored = await createTerminalHandler(
       { sender: { id: 47 } },
       {
         terminalId: "restored-terminal",
-        sessionKey: "agent-env-2",
+        sessionKey: "agent-env",
         tmuxSessionName: "termcanvas-agent-env",
         cols: 100,
         rows: 30,
@@ -659,6 +747,20 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
         && args.includes("AGENTMUX_BIN")
       )),
       "expected restored tmux sessions to receive the repaired agentmux runtime environment"
+    );
+
+    await destroyTerminalHandler(
+      { sender: { id: 47 } },
+      { terminalId: "restored-terminal", preserveSession: false }
+    );
+    assert.equal(
+      spawnCalls.filter(({ command, args }) => (
+        command === "tmux"
+        && args[0] === "kill-session"
+        && args[2] === "termcanvas-agent-env"
+      )).length,
+      1,
+      "closing a restored terminal must destroy its tmux session exactly once"
     );
   } finally {
     delete require.cache[mainPath];
