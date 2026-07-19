@@ -113,8 +113,8 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     tmuxSessionName: null,
     x: 0,
     y: 0,
-    width: 544,
-    height: 352,
+    width: 636,
+    height: 414,
     cwd: null,
     shellName: "Shell",
     title: "",
@@ -124,6 +124,38 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     exitSignal: null
   });
   assert.equal(snapshot.canvases[1].activeSessionKey, null);
+});
+
+test("normalizeAppSessionSnapshot migrates the previous large terminal default once", () => {
+  const migratedSnapshot = normalizeAppSessionSnapshot({
+    version: 1,
+    canvases: [{
+      id: "canvas-1",
+      terminalNodes: [{ width: 848, height: 552 }]
+    }]
+  });
+  const currentSnapshot = normalizeAppSessionSnapshot({
+    version: APP_SESSION_VERSION,
+    canvases: [{
+      id: "canvas-1",
+      terminalNodes: [{ width: 848, height: 552 }]
+    }]
+  });
+
+  assert.deepEqual(
+    {
+      width: migratedSnapshot.canvases[0].terminalNodes[0].width,
+      height: migratedSnapshot.canvases[0].terminalNodes[0].height
+    },
+    { width: 636, height: 414 }
+  );
+  assert.deepEqual(
+    {
+      width: currentSnapshot.canvases[0].terminalNodes[0].width,
+      height: currentSnapshot.canvases[0].terminalNodes[0].height
+    },
+    { width: 848, height: 552 }
+  );
 });
 
 test("normalizeAppSessionSnapshot keeps only safe terminal session keys", () => {
@@ -172,6 +204,51 @@ test("normalizeAppSessionSnapshot keeps a canvas active session key only when it
   assert.equal(snapshot.canvases[0].activeSessionKey, "terminal_session-1");
   assert.equal(snapshot.canvases[1].activeSessionKey, null);
   assert.equal(snapshot.canvases[2].activeSessionKey, null);
+});
+
+test("normalizeAppSessionSnapshot heals duplicate terminal identities across canvases", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    activeCanvasId: "canvas-life5",
+    canvases: [
+      {
+        id: "canvas-life5",
+        agentProjectTag: "life5-project",
+        activeSessionKey: "terminal-agent-a",
+        terminalNodes: [
+          {
+            title: "My saved terminal",
+            sessionKey: "stable-session-a",
+            tmuxSessionName: "termcanvas-stable-session-a",
+            managedAgentName: "terminal-agent-a",
+            managedProjectTag: "life5-project"
+          },
+          {
+            title: "terminal-agent-a (Agent)",
+            sessionKey: "terminal-agent-a",
+            tmuxSessionName: "termcanvas-stable-session-a",
+            managedAgentName: "terminal-agent-a",
+            managedProjectTag: "life5-project"
+          }
+        ]
+      },
+      {
+        id: "canvas-other",
+        agentProjectTag: "other-project",
+        terminalNodes: [{
+          title: "terminal-agent-a (Agent)",
+          sessionKey: "terminal-agent-a",
+          tmuxSessionName: "termcanvas-stable-session-a",
+          managedAgentName: "terminal-agent-a",
+          managedProjectTag: "life5-project"
+        }]
+      }
+    ]
+  });
+
+  assert.deepEqual(snapshot.canvases[0].terminalNodes.map((node) => node.title), ["My saved terminal"]);
+  assert.equal(snapshot.canvases[0].terminalNodes[0].sessionKey, "stable-session-a");
+  assert.equal(snapshot.canvases[0].activeSessionKey, null);
+  assert.deepEqual(snapshot.canvases[1].terminalNodes, []);
 });
 
 test("normalizeAppSessionSnapshot migrates legacy top-level workspace onto the active canvas only", () => {

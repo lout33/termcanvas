@@ -38,6 +38,15 @@ test("canvas header, board hints, and terminal cards adopt dark workbench surfac
   assert.match(styles, /\.terminal-node\s*\{[\s\S]*background:\s*var\(--color-terminal-card\);/);
 });
 
+test("new terminal cards default to 75 percent of the previous large size", () => {
+  const styles = readStyles();
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "renderer.js"), "utf8");
+
+  assert.match(renderer, /const DEFAULT_NODE_WIDTH = 636;/);
+  assert.match(renderer, /const DEFAULT_NODE_HEIGHT = 414;/);
+  assert.match(styles, /\.terminal-node\s*\{[\s\S]*width:\s*39\.75rem;[\s\S]*height:\s*25\.875rem;/);
+});
+
 test("terminal surfaces keep xterm glyph rendering crisp", () => {
   const styles = readStyles();
 

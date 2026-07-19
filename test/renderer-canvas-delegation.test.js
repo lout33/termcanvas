@@ -1,7 +1,53 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { deriveCanvasDelegationEdges } = require("../renderer_canvas_delegation.js");
+const {
+  deriveCanvasDelegationEdges,
+  sortCanvasAgentSnapshotsForPlacement,
+  findHorizontalCanvasNodePlacement
+} = require("../renderer_canvas_delegation.js");
+
+test("orders parents before alphabetically earlier children", () => {
+  const snapshots = sortCanvasAgentSnapshotsForPlacement([
+    { name: "alpha-child", parent_agent: "zulu-parent" },
+    { name: "beta-child", parent_agent: "zulu-parent" },
+    { name: "zulu-parent", parent_agent: null }
+  ]);
+
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.name), [
+    "zulu-parent",
+    "alpha-child",
+    "beta-child"
+  ]);
+});
+
+test("places child terminals in a centered collision-free row below their parent", () => {
+  const parent = { x: 100, y: 200, width: 636, height: 414 };
+  const childRowY = parent.y + parent.height + 72;
+  const firstChild = findHorizontalCanvasNodePlacement(
+    { x: parent.x, y: childRowY, width: 636, height: 414 },
+    [parent],
+    72
+  );
+  const secondChild = findHorizontalCanvasNodePlacement(
+    { x: parent.x, y: childRowY, width: 636, height: 414 },
+    [parent, { ...firstChild, width: 636, height: 414 }],
+    72
+  );
+  const thirdChild = findHorizontalCanvasNodePlacement(
+    { x: parent.x, y: childRowY, width: 636, height: 414 },
+    [
+      parent,
+      { ...firstChild, width: 636, height: 414 },
+      { ...secondChild, width: 636, height: 414 }
+    ],
+    72
+  );
+
+  assert.deepEqual(firstChild, { x: 100, y: 686 });
+  assert.deepEqual(secondChild, { x: 808, y: 686 });
+  assert.deepEqual(thirdChild, { x: -608, y: 686 });
+});
 
 test("links each worker to its commander by parent_agent name", () => {
   const edges = deriveCanvasDelegationEdges([

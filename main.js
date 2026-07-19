@@ -158,6 +158,12 @@ function createApplicationMenu() {
       requestAgentSkillInstallFromFocusedWindow();
     }
   };
+  const openFullDiskAccessSettingsItem = {
+    label: "Open Full Disk Access Settings...",
+    click: () => {
+      void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
+    }
+  };
   const viewMenu = {
     label: "View",
     submenu: [
@@ -179,6 +185,7 @@ function createApplicationMenu() {
             { role: "about" },
             { type: "separator" },
             installAgentSkillItem,
+            openFullDiskAccessSettingsItem,
             { type: "separator" },
             { role: "hide" },
             { role: "hideOthers" },

@@ -2966,8 +2966,8 @@ button {
   z-index: 2;
   display: flex;
   flex-direction: column;
-  width: 26.5rem;
-  height: 17.25rem;
+  width: 39.75rem;
+  height: 25.875rem;
   border: 1px solid rgba(236, 220, 170, 0.14);
   border-radius: 0.55rem;
   overflow: hidden;
@@ -3795,7 +3795,10 @@ button {
 }
 
 .terminal-node-tail {
+  flex: 0 0 1.35rem;
+  height: 1.35rem;
   padding: 0.22rem 0.55rem;
+  box-sizing: border-box;
   border-bottom: 1px solid var(--color-terminal-rule);
   background: rgba(12, 14, 18, 0.88);
   color: #9aa7bc;
@@ -3810,7 +3813,8 @@ button {
 }
 
 .terminal-node-tail[hidden] {
-  display: none;
+  display: block;
+  visibility: hidden;
 }
 
 .terminal-node[data-state="needs-input"] .terminal-node-tail {

@@ -77,6 +77,14 @@ brew install tmux
 
 On a fresh launch, TermCanvas now waits for you to open a folder. Creating a new canvas with the `+` button also asks for the workspace folder first. If you cancel the folder picker, no canvas is created.
 
+### macOS File And App Access
+
+macOS attributes privacy-sensitive access from terminal commands to the terminal app that launched them. A command running inside TermCanvas may therefore produce a prompt saying that TermCanvas wants access to Desktop, Apple Music, another app, or another protected resource.
+
+For unrestricted developer workflows, install TermCanvas in `/Applications`, then open `TermCanvas > Open Full Disk Access Settings...` and enable TermCanvas. If it is not listed, click `+` and select `/Applications/TermCanvas.app`. Full Disk Access covers protected files and other apps' containers, but macOS can still request separate approval for services such as Apple Music, Camera, or Automation when a command first uses them. TermCanvas cannot enable those approvals automatically; choose Allow only when you intended the terminal command to use that resource.
+
+TermCanvas remains an unsigned developer app and does not require a paid Apple Developer account. macOS may ask for access again after installing an updated build; if that happens, re-enable the new `/Applications/TermCanvas.app` entry in Full Disk Access.
+
 ## How It Works
 
 - Double-click empty space to create a terminal

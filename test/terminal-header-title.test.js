@@ -36,6 +36,24 @@ test("terminal title editing starts from the rename button, not header double cl
   assert.match(renderer, /elements\.titleInput\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*if \(!nodeRecord\.isTitleEditing\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*return;[\s\S]*event\.stopPropagation\(\);/);
 });
 
+test("custom terminal titles survive managed-agent background sync", () => {
+  const renderer = readRenderer();
+
+  assert.match(
+    renderer,
+    /function commitNodeTitle\(nodeRecord, rawTitle\) \{[\s\S]*nodeRecord\.isTitleCustomized = normalizedTitle !== null;[\s\S]*scheduleAppSessionSave\(\);/
+  );
+  assert.match(
+    renderer,
+    /function syncManagedNodeState\(nodeRecord, agentSnapshot\) \{[\s\S]*if \(!nodeRecord\.isTitleCustomized && !nodeRecord\.isTitleEditing\) \{[\s\S]*nodeRecord\.titleText = getDefaultTerminalTitle\(nodeRecord\);[\s\S]*updateNodeTitleInput\(nodeRecord\);/
+  );
+  assert.match(
+    renderer,
+    /const isTitleCustomized = isInitialTerminalTitleCustomized\(\{[\s\S]*title: options\.title,[\s\S]*managedAgentName[\s\S]*\}\);/
+  );
+  assert.match(renderer, /title: nodeRecord\.titleText,/);
+});
+
 test("terminal close and copy actions live behind the node action menu", () => {
   const renderer = readRenderer();
 
@@ -169,6 +187,7 @@ test("managed agent snapshots reconcile in stable name order", () => {
 
   assert.match(renderer, /function sortManagedAgentSnapshots\(agentSnapshots\) \{/);
   assert.doesNotMatch(renderer, /is_project_manager/);
+  assert.match(renderer, /return sortCanvasAgentSnapshotsForPlacement\(agentSnapshots\);/);
   assert.match(renderer, /const sessions = sortManagedAgentSnapshots\(Array\.isArray\(snapshot\?\.sessions\) \? snapshot\.sessions : \[\]\);/);
 });
 
@@ -179,9 +198,17 @@ test("agent sync works for persisted folderless canvases and batches node chrome
   assert.match(renderer, /if \(canvasRecord === null \|\| \(!hasProjectTag && !hasWorkspaceRoot\)\) \{/);
   assert.match(renderer, /workspaceRootPath: hasWorkspaceRoot \? canvasRecord\.workspace\.rootPath : null/);
   assert.match(renderer, /const managedNodeByName = new Map\(\);/);
-  assert.match(renderer, /const unmanagedNodeByTmuxSession = new Map\(\);/);
+  assert.match(renderer, /const nodeByTmuxSession = new Map\(\);/);
+  assert.match(renderer, /nodeByTmuxSession\.get\(agentTmuxSessionName\)/);
   assert.match(renderer, /deferChromeRefresh: true,/);
   assert.match(renderer, /if \(didChangeNodeSet\) \{[\s\S]*renderCanvasSwitcher\(\);/);
+});
+
+test("app hydration finishes before the first agent sync can reconcile nodes", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /function scheduleCanvasAgentSync\(delay = 0\) \{[\s\S]*if \(isSessionHydrating\) \{[\s\S]*return;/);
+  assert.match(renderer, /finally \{[\s\S]*isSessionHydrating = false;[\s\S]*flushAppSessionSave\(\);[\s\S]*scheduleCanvasAgentSync\(\);/);
 });
 
 test("removing a reconciled node detaches its PTY while preserving tmux", () => {
@@ -215,6 +242,7 @@ test("managed agent labels use graph roles only", () => {
   assert.doesNotMatch(renderer, /return "Commander";/);
   assert.match(renderer, /roleBadge\.className = "terminal-node-role-badge";/);
   assert.match(renderer, /nodeRecord\.roleBadge\.textContent = roleLabel;/);
-  assert.match(renderer, /nodeRecord\.roleBadge\.dataset\.role = roleLabel\.toLowerCase\(\);/);
+  assert.match(renderer, /const roleKey = roleLabel\.toLowerCase\(\);/);
+  assert.match(renderer, /nodeRecord\.roleBadge\.dataset\.role = roleKey;/);
   assert.match(renderer, /parent_agent: nodeRecord\.managedParentAgent,/);
 });

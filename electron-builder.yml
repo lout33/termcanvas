@@ -25,6 +25,28 @@ extraResources:
 mac:
   category: public.app-category.developer-tools
   icon: assets/branding/termcanvas.icns
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  extendInfo:
+    NSAppleEventsUsageDescription: Commands run in TermCanvas terminals can automate other apps when you request it.
+    NSAppleMusicUsageDescription: Commands run in TermCanvas terminals can access your media library when you request it.
+    NSBluetoothAlwaysUsageDescription: Commands run in TermCanvas terminals can use Bluetooth when you request it.
+    NSCalendarsUsageDescription: Commands run in TermCanvas terminals can access your calendars when you request it.
+    NSCameraUsageDescription: Commands run in TermCanvas terminals can use your camera when you request it.
+    NSContactsUsageDescription: Commands run in TermCanvas terminals can access your contacts when you request it.
+    NSDesktopFolderUsageDescription: TermCanvas workspaces and terminal commands can access files on your Desktop when you request it.
+    NSDocumentsFolderUsageDescription: TermCanvas workspaces and terminal commands can access files in Documents when you request it.
+    NSDownloadsFolderUsageDescription: TermCanvas workspaces and terminal commands can access files in Downloads when you request it.
+    NSLocalNetworkUsageDescription: Commands run in TermCanvas terminals can access your local network when you request it.
+    NSLocationUsageDescription: Commands run in TermCanvas terminals can use your location when you request it.
+    NSMicrophoneUsageDescription: Commands run in TermCanvas terminals can use your microphone when you request it.
+    NSNetworkVolumesUsageDescription: TermCanvas workspaces and terminal commands can access files on network volumes when you request it.
+    NSPhotoLibraryUsageDescription: Commands run in TermCanvas terminals can access your photo library when you request it.
+    NSRemindersUsageDescription: Commands run in TermCanvas terminals can access your reminders when you request it.
+    NSRemovableVolumesUsageDescription: TermCanvas workspaces and terminal commands can access files on removable volumes when you request it.
+    NSSpeechRecognitionUsageDescription: Commands run in TermCanvas terminals can use speech recognition when you request it.
+    NSSystemAdministrationUsageDescription: Commands run in TermCanvas terminals can perform administrative operations when you request it.
   target:
     - dmg
     - zip
