@@ -2,35 +2,37 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  flattenTmuxCommands,
+  tmuxTerminalFeaturesInclude
+} = require("../main_tmux_backend");
 
 function readRenderer() {
   return fs.readFileSync(path.join(__dirname, "..", "renderer.js"), "utf8");
-}
-
-function readMain() {
-  return fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
 }
 
 function readHtml() {
   return fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 }
 
-test("terminal sessions advertise truecolor capability", () => {
-  const main = readMain();
+test("tmux feature detection and command batching preserve color and clipboard capabilities", () => {
+  const features = [
+    "terminal-features[0] xterm-256color:RGB:clipboard",
+    "terminal-features[1] screen*:title"
+  ].join("\n");
+  const batched = flattenTmuxCommands([
+    ["set-environment", "-g", "COLORTERM", "truecolor"],
+    ["set-option", "-t", "termcanvas-test", "set-clipboard", "external"]
+  ]);
 
-  assert.match(main, /TERM:\s*"xterm-256color"/);
-  assert.match(main, /COLORTERM:\s*"truecolor"/);
-  assert.match(main, /TERM_PROGRAM:\s*"TermCanvas"/);
-  assert.match(main, /CLICOLOR:\s*"1"/);
-  assert.match(main, /CLICOLOR_FORCE:\s*"1"/);
-  assert.match(main, /FORCE_COLOR:\s*"3"/);
-  assert.match(main, /delete environment\.NO_COLOR/);
-  assert.match(main, /set-environment",\s*\.\.\.targetArgs,\s*"-u",\s*"NO_COLOR"/);
-  assert.match(main, /set-environment",\s*\.\.\.targetArgs,\s*name,\s*value/);
-  assert.match(main, /terminal-features",\s*",xterm-256color:RGB"/);
-  assert.match(main, /terminal-features",\s*",xterm-256color:clipboard"/);
-  assert.match(main, /terminal-overrides",\s*",xterm-256color:Tc"/);
-  assert.match(main, /\["set-clipboard",\s*"external"\]/);
+  assert.equal(tmuxTerminalFeaturesInclude(features, "RGB"), true);
+  assert.equal(tmuxTerminalFeaturesInclude(features, "clipboard"), true);
+  assert.equal(tmuxTerminalFeaturesInclude(features, "focus"), false);
+  assert.deepEqual(batched, [
+    "set-environment", "-g", "COLORTERM", "truecolor",
+    ";",
+    "set-option", "-t", "termcanvas-test", "set-clipboard", "external"
+  ]);
 });
 
 test("xterm renderer uses a vivid ANSI palette", () => {

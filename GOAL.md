@@ -66,13 +66,13 @@ Do not add a frontend framework. Use plain JavaScript modules and explicit event
 
 ## Milestone 2: Fast terminal creation
 
-- [ ] Terminal creation no longer runs synchronous tmux subprocesses on the main-thread hot path.
-- [ ] Global tmux configuration runs once per tmux-server lifecycle.
-- [ ] Per-session configuration runs once unless repair is necessary.
-- [ ] Tmux options are batched into as few invocations as practical.
-- [ ] Multiple restored terminals use bounded concurrent initialization.
-- [ ] Creating one terminal does not wait for unrelated agent synchronization.
-- [ ] Terminal input, output, resize, detach, destroy, and reattach semantics remain correct.
+- [x] Terminal creation no longer runs synchronous tmux subprocesses on the main-thread hot path.
+- [x] Global tmux configuration runs once per tmux-server lifecycle.
+- [x] Per-session configuration runs once unless repair is necessary.
+- [x] Tmux options are batched into as few invocations as practical.
+- [x] Multiple restored terminals use bounded concurrent initialization.
+- [x] Creating one terminal does not wait for unrelated agent synchronization.
+- [x] Terminal input, output, resize, detach, destroy, and reattach semantics remain correct.
 
 ## Milestone 3: Event-driven agent synchronization
 
@@ -166,9 +166,9 @@ A missing Developer ID certificate is an external limitation. The implementation
 
 ## Performance targets
 
-- [ ] A new terminal becomes interactive within one second after initial app warm-up.
+- [x] A new terminal becomes interactive within one second after initial app warm-up.
 - [ ] A new agent child appears on the canvas within one second of registration.
-- [ ] Restoring 20 terminals does not block the window from becoming interactive.
+- [x] Restoring 20 terminals does not block the window from becoming interactive.
 - [ ] Panning and zooming remain responsive with at least 30 terminal nodes.
 - [ ] The active accelerated-renderer count never exceeds its configured budget.
 - [ ] Idle CPU activity is not driven by repeated full-tree, full-canvas, or persistence work.

@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, webContents, Menu, Notification } = require("electron");
-const { spawnSync } = require("node:child_process");
+const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
@@ -12,6 +12,7 @@ const { readWorkspaceFilePreviewAsync, resolveWorkspaceFilePath } = require("./w
 const { createWorkspaceService } = require("./main_workspace_service");
 const { buildPackagedRuntimePath, createAgentmuxService, isAgentmuxUnavailableError } = require("./main_agentmux_service");
 const { createTerminalSessionRegistry } = require("./main_terminal_registry");
+const { createTmuxBackend } = require("./main_tmux_backend");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
 
 const terminalSessionRegistry = createTerminalSessionRegistry();
@@ -37,8 +38,6 @@ const TMUX_COLOR_ENV = Object.freeze({
   CLICOLOR_FORCE: TERMINAL_COLOR_ENV.CLICOLOR_FORCE,
   FORCE_COLOR: TERMINAL_COLOR_ENV.FORCE_COLOR
 });
-let cachedTmuxBinary = undefined;
-let cachedTmuxPtyBackendAvailability = null;
 
 function resolveShell() {
   return process.env.SHELL || "/bin/zsh";
@@ -293,33 +292,17 @@ function getTerminalEnvironment() {
   return environment;
 }
 
-function tmuxTerminalFeaturesIncludeTruecolor(value) {
-  if (typeof value !== "string" || value.length === 0) {
-    return false;
-  }
-
-  return value.split(/\r?\n/u).some((line) => {
-    const optionValue = line.replace(/^terminal-features(?:\[\d+\])?\s+/u, "").trim();
-    const [terminalPattern, ...features] = optionValue.split(":");
-
-    return (terminalPattern === "xterm-256color" || terminalPattern === "xterm*" || terminalPattern === "xterm-*")
-      && features.includes("RGB");
-  });
-}
-
-function tmuxTerminalFeaturesIncludeClipboard(value) {
-  if (typeof value !== "string" || value.length === 0) {
-    return false;
-  }
-
-  return value.split(/\r?\n/u).some((line) => {
-    const optionValue = line.replace(/^terminal-features(?:\[\d+\])?\s+/u, "").trim();
-    const [terminalPattern, ...features] = optionValue.split(":");
-
-    return (terminalPattern === "xterm-256color" || terminalPattern === "xterm*" || terminalPattern === "xterm-*")
-      && features.includes("clipboard");
-  });
-}
+const tmuxBackend = createTmuxBackend({
+  spawnProcess: spawn,
+  pty,
+  getEnvironment: getTerminalEnvironment,
+  getConfigurationEnvironment: () => ({
+    ...getTerminalLocaleEnvironment(),
+    ...TMUX_COLOR_ENV
+  }),
+  resolveExistingDirectory: resolveExistingDirectoryPath,
+  sessionPrefix: TMUX_SESSION_PREFIX
+});
 
 function normalizeTerminalSessionKey(value) {
   return typeof value === "string" && /^[A-Za-z0-9_-]+$/u.test(value)
@@ -327,280 +310,15 @@ function normalizeTerminalSessionKey(value) {
     : null;
 }
 
-function getTmuxBinary() {
-  if (cachedTmuxBinary !== undefined) {
-    return cachedTmuxBinary;
-  }
-
-  const tmuxCheck = spawnSync("tmux", ["-V"], {
-    encoding: "utf8",
-    env: getTerminalEnvironment()
-  });
-
-  cachedTmuxBinary = tmuxCheck.status === 0 ? "tmux" : null;
-  return cachedTmuxBinary;
-}
-
 function getTmuxSessionName(sessionKey) {
   return `${TMUX_SESSION_PREFIX}-${sessionKey}`;
 }
 
-function waitForTmuxPtyBackend(tmuxBinary, cwd) {
-  return new Promise((resolve) => {
-    const probeSessionName = `${TMUX_SESSION_PREFIX}-probe-${process.pid}-${Date.now()}`;
-    const probeEnvironment = getTerminalEnvironment();
-    let probePty = null;
-    let isSettled = false;
-    let timeoutId = null;
-
-    const cleanup = () => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-
-      if (probePty !== null) {
-        try {
-          probePty.kill();
-        } catch {
-          // Best effort cleanup for a short-lived compatibility probe.
-        }
-      }
-
-      try {
-        destroyTmuxSession(probeSessionName);
-      } catch {
-        // The probe may already have crashed the tmux server.
-      }
-    };
-
-    const settle = (isAvailable) => {
-      if (isSettled) {
-        return;
-      }
-
-      isSettled = true;
-      cleanup();
-      resolve(isAvailable);
-    };
-
-    try {
-      createTmuxSession(probeSessionName, cwd);
-      probePty = pty.spawn(tmuxBinary, ["-u", "attach-session", "-t", probeSessionName], {
-        name: "xterm-256color",
-        cols: 80,
-        rows: 24,
-        cwd,
-        env: probeEnvironment
-      });
-
-      probePty.onData((data) => {
-        if (/server exited unexpectedly|open terminal failed|not a terminal/iu.test(data)) {
-          settle(false);
-        }
-      });
-
-      probePty.onExit(({ exitCode }) => {
-        settle(exitCode === 0);
-      });
-
-      timeoutId = setTimeout(() => {
-        settle(true);
-      }, 500);
-    } catch {
-      settle(false);
-    }
-  });
-}
-
-function getTmuxPtyBackendAvailability(cwd) {
-  const tmuxBinary = getTmuxBinary();
-
-  if (tmuxBinary === null) {
-    return Promise.resolve(false);
-  }
-
-  if (cachedTmuxPtyBackendAvailability === null) {
-    cachedTmuxPtyBackendAvailability = waitForTmuxPtyBackend(tmuxBinary, cwd).then((isAvailable) => {
-      if (!isAvailable) {
-        cachedTmuxBinary = null;
-        console.warn("tmux is installed but cannot run inside node-pty; falling back to plain shell PTYs.");
-      }
-
-      return isAvailable;
-    });
-  }
-
-  return cachedTmuxPtyBackendAvailability;
-}
-
-function runTmuxCommand(args) {
-  const tmuxBinary = getTmuxBinary();
-
-  if (tmuxBinary === null) {
-    return null;
-  }
-
-  return spawnSync(tmuxBinary, args, {
-    encoding: "utf8",
-    env: getTerminalEnvironment()
-  });
-}
-
-function isTmuxSessionMissing(result) {
-  return typeof result?.stderr === "string" && /can't find session/u.test(result.stderr);
-}
-
 function isMissingTmuxSessionError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /tmux session '.+' is not running\./u.test(message) || /can't find session/u.test(message);
-}
-
-function hasTmuxSession(sessionName) {
-  const result = runTmuxCommand(["has-session", "-t", sessionName]);
-  return result !== null && result.status === 0;
-}
-
-function ensureTmuxCommandSucceeded(result, actionLabel) {
-  if (result === null || result.status !== 0) {
-    const details = typeof result?.stderr === "string" && result.stderr.trim().length > 0
-      ? result.stderr.trim()
-      : `tmux failed while trying to ${actionLabel}.`;
-    throw new Error(details);
-  }
-}
-
-function warnIfTmuxCommandFailed(result, actionLabel) {
-  if (result !== null && result.status !== 0) {
-    const details = typeof result.stderr === "string" && result.stderr.trim().length > 0
-      ? result.stderr.trim()
-      : `tmux failed while trying to ${actionLabel}.`;
-    console.warn(details);
-  }
-}
-
-function configureTmuxColorEnvironment(sessionName = null) {
-  const targetArgs = typeof sessionName === "string" && sessionName.trim().length > 0
-    ? ["-t", sessionName.trim()]
-    : ["-g"];
-
-  warnIfTmuxCommandFailed(
-    runTmuxCommand(["set-environment", ...targetArgs, "-u", "NO_COLOR"]),
-    "unset tmux NO_COLOR"
-  );
-
-  Object.entries({
-    ...getTerminalLocaleEnvironment(),
-    ...TMUX_COLOR_ENV
-  }).forEach(([name, value]) => {
-    warnIfTmuxCommandFailed(
-      runTmuxCommand(["set-environment", ...targetArgs, name, value]),
-      `set tmux ${name}`
-    );
-  });
-}
-
-function configureTmuxTruecolorSupport() {
-  const currentFeatures = runTmuxCommand(["show-options", "-s", "terminal-features"]);
-
-  if (
-    currentFeatures !== null
-    && currentFeatures.status === 0
-    && tmuxTerminalFeaturesIncludeTruecolor(currentFeatures.stdout)
-  ) {
-    return;
-  }
-
-  const featureResult = runTmuxCommand(["set-option", "-s", "-a", "terminal-features", ",xterm-256color:RGB"]);
-
-  if (featureResult !== null && featureResult.status === 0) {
-    return;
-  }
-
-  const overrideResult = runTmuxCommand(["set-option", "-s", "-a", "terminal-overrides", ",xterm-256color:Tc"]);
-
-  if (overrideResult !== null && overrideResult.status === 0) {
-    return;
-  }
-
-  const details = featureResult?.stderr?.trim() || overrideResult?.stderr?.trim() || "tmux rejected truecolor capability options.";
-  console.warn(`Could not enable tmux truecolor support: ${details}`);
-}
-
-function configureTmuxClipboardSupport() {
-  const currentFeatures = runTmuxCommand(["show-options", "-s", "terminal-features"]);
-
-  if (
-    currentFeatures !== null
-    && currentFeatures.status === 0
-    && tmuxTerminalFeaturesIncludeClipboard(currentFeatures.stdout)
-  ) {
-    return;
-  }
-
-  warnIfTmuxCommandFailed(
-    runTmuxCommand(["set-option", "-s", "-a", "terminal-features", ",xterm-256color:clipboard"]),
-    "enable tmux clipboard capability"
-  );
-}
-
-function configureTmuxSession(sessionName) {
-  [
-    ["status", "off"],
-    ["destroy-unattached", "off"],
-    ["default-terminal", "tmux-256color"],
-    ["mouse", "on"],
-    ["history-limit", "20000"],
-    ["set-clipboard", "external"]
-  ].forEach(([optionName, optionValue]) => {
-    ensureTmuxCommandSucceeded(
-      runTmuxCommand(["set-option", "-t", sessionName, optionName, optionValue]),
-      `configure tmux session ${sessionName}`
-    );
-  });
-}
-
-function configureTmuxSessionEnvironment(sessionName, sessionEnv = {}) {
-  Object.entries(sessionEnv)
-    .filter(([, value]) => typeof value === "string" && value.length > 0)
-    .forEach(([name, value]) => {
-      warnIfTmuxCommandFailed(
-        runTmuxCommand(["set-environment", "-t", sessionName, name, value]),
-        `set tmux ${name}`
-      );
-    });
-}
-
-function createTmuxSession(sessionName, cwd, sessionEnv = {}) {
-  configureTmuxColorEnvironment();
-  const environmentArgs = Object.entries(sessionEnv)
-    .filter(([, value]) => typeof value === "string")
-    .flatMap(([name, value]) => ["-e", `${name}=${value}`]);
-  ensureTmuxCommandSucceeded(
-    runTmuxCommand(["new-session", "-d", "-s", sessionName, "-c", cwd, ...environmentArgs]),
-    `create tmux session ${sessionName}`
-  );
-  configureTmuxSession(sessionName);
-  configureTmuxColorEnvironment(sessionName);
-  configureTmuxSessionEnvironment(sessionName, sessionEnv);
-}
-
-function destroyTmuxSession(sessionName) {
-  const result = runTmuxCommand(["kill-session", "-t", sessionName]);
-
-  if (result !== null && result.status !== 0 && !isTmuxSessionMissing(result)) {
-    throw new Error(result.stderr?.trim() || `Failed to close tmux session ${sessionName}.`);
-  }
-}
-
-function resolveTmuxSessionWorkingDirectory(sessionName) {
-  const result = runTmuxCommand(["display-message", "-p", "-t", sessionName, "#{pane_current_path}"]);
-
-  if (result === null || result.status !== 0) {
-    return null;
-  }
-
-  return resolveExistingDirectoryPath(result.stdout?.trim() ?? "");
+  return error?.code === "TMUX_SESSION_MISSING"
+    || /tmux session '.+' is not running\./u.test(message)
+    || /can't find session/u.test(message);
 }
 
 function shouldPreserveTerminalSessionsOnWindowClose() {
@@ -815,7 +533,7 @@ function isToggleActiveTerminalMaximizeShortcut(input) {
     && input?.shift !== true;
 }
 
-function destroyTerminalSession(terminalId, options = {}) {
+async function destroyTerminalSession(terminalId, options = {}) {
   const session = getSession(terminalId);
   const preserveSession = options.preserveSession === true;
 
@@ -832,7 +550,7 @@ function destroyTerminalSession(terminalId, options = {}) {
     && typeof session.tmuxSessionName === "string"
   ) {
     try {
-      destroyTmuxSession(session.tmuxSessionName);
+      await tmuxBackend.destroySession(session.tmuxSessionName);
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
     }
@@ -845,7 +563,7 @@ function destroyTerminalSession(terminalId, options = {}) {
 function destroyOwnedTerminalSessions(ownerWebContentsId, options = {}) {
   terminalSessionRegistry.forEachAttachment((session, terminalId) => {
     if (session.ownerWebContentsId === ownerWebContentsId) {
-      destroyTerminalSession(terminalId, options);
+      void destroyTerminalSession(terminalId, options);
     }
   });
 }
@@ -873,72 +591,26 @@ function ensureAuthorizedSession(event, terminalId) {
 }
 
 async function createTmuxClientSession(options) {
-  const tmuxBinary = getTmuxBinary();
+  const backendSession = await tmuxBackend.createClientSession(options);
 
-  if (tmuxBinary === null) {
+  if (backendSession === null) {
     return null;
   }
 
-  if (!await getTmuxPtyBackendAvailability(options.cwd)) {
-    return null;
-  }
-
-  const tmuxSessionName = typeof options.tmuxSessionName === "string" && options.tmuxSessionName.trim().length > 0
-    ? options.tmuxSessionName.trim()
-    : getTmuxSessionName(options.sessionKey);
-  configureTmuxColorEnvironment();
-  const sessionAlreadyExists = hasTmuxSession(tmuxSessionName);
-
-  if (!sessionAlreadyExists && options.createIfMissing === false) {
-    throw new Error(`tmux session '${tmuxSessionName}' is not running.`);
-  }
-
-  if (!sessionAlreadyExists) {
-    createTmuxSession(tmuxSessionName, options.cwd, options.sessionEnv ?? {});
-  } else {
-    configureTmuxSession(tmuxSessionName);
-    configureTmuxColorEnvironment(tmuxSessionName);
-    configureTmuxSessionEnvironment(tmuxSessionName, options.sessionEnv ?? {});
-  }
-
-  configureTmuxTruecolorSupport();
-  configureTmuxClipboardSupport();
-
-  try {
-    const terminalPty = pty.spawn(tmuxBinary, ["-u", "attach-session", "-t", tmuxSessionName], {
-      name: "xterm-256color",
-      cols: options.cols,
-      rows: options.rows,
-      cwd: options.cwd,
-      env: getTerminalEnvironment()
-    });
-    const resolvedCwd = resolveTmuxSessionWorkingDirectory(tmuxSessionName) ?? options.cwd;
-
-    return {
-      session: {
-        ownerWebContentsId: options.ownerWebContentsId,
-        pty: terminalPty,
-        shellName: options.shellName,
-        cwd: resolvedCwd,
-        isDisposing: false,
-        backend: "tmux",
-        sessionKey: options.sessionKey,
-        tmuxSessionName,
-        canDestroyTmuxSession: true
-      },
-      cwd: resolvedCwd
-    };
-  } catch (error) {
-    if (!sessionAlreadyExists) {
-      try {
-        destroyTmuxSession(tmuxSessionName);
-      } catch {
-        // Best effort cleanup when attach fails after creating the tmux session.
-      }
-    }
-
-    throw error;
-  }
+  return {
+    session: {
+      ownerWebContentsId: options.ownerWebContentsId,
+      pty: backendSession.pty,
+      shellName: options.shellName,
+      cwd: backendSession.cwd,
+      isDisposing: false,
+      backend: "tmux",
+      sessionKey: options.sessionKey,
+      tmuxSessionName: backendSession.tmuxSessionName,
+      canDestroyTmuxSession: true
+    },
+    cwd: backendSession.cwd
+  };
 }
 
 function createMainWindow() {
@@ -2342,7 +2014,7 @@ ipcMain.handle("terminal:resize", (event, payload) => {
 
 // Ask tmux to repaint the whole pane for every attached client. Used when a
 // hidden terminal node is revealed after its output was dropped renderer-side.
-ipcMain.handle("terminal:redraw", (event, payload) => {
+ipcMain.handle("terminal:redraw", async (event, payload) => {
   const session = getSession(payload.terminalId);
 
   if (session === undefined) {
@@ -2357,25 +2029,10 @@ ipcMain.handle("terminal:redraw", (event, payload) => {
     return;
   }
 
-  const clients = runTmuxCommand(["list-clients", "-t", session.tmuxSessionName, "-F", "#{client_tty}"]);
-
-  if (clients === null || clients.status !== 0) {
-    return;
-  }
-
-  clients.stdout
-    .split("\n")
-    .map((clientTty) => clientTty.trim())
-    .filter((clientTty) => clientTty.length > 0)
-    .forEach((clientTty) => {
-      warnIfTmuxCommandFailed(
-        runTmuxCommand(["refresh-client", "-t", clientTty]),
-        "refresh tmux client"
-      );
-    });
+  await tmuxBackend.redrawSession(session.tmuxSessionName);
 });
 
-ipcMain.handle("terminal:destroy", (event, payload) => {
+ipcMain.handle("terminal:destroy", async (event, payload) => {
   const session = getSession(payload.terminalId);
 
   if (session === undefined) {
@@ -2386,7 +2043,7 @@ ipcMain.handle("terminal:destroy", (event, payload) => {
     throw new Error("Terminal session is not owned by this window.");
   }
 
-  destroyTerminalSession(payload.terminalId, {
+  await destroyTerminalSession(payload.terminalId, {
     preserveSession: payload?.preserveSession === true
   });
 });

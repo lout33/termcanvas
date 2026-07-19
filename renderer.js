@@ -44,6 +44,7 @@ const {
   sortCanvasAgentSnapshotsForPlacement,
   findHorizontalCanvasNodePlacement
 } = window.noteCanvasRendererCanvasDelegation;
+const { mapWithConcurrency } = window.noteCanvasRendererAsyncPool;
 // The CodeMirror bundle is ~770KB, so it loads on demand the first time a
 // file preview needs an editor instead of blocking startup.
 let workspaceMarkdownBundlePromise = null;
@@ -177,6 +178,7 @@ const TERMINAL_MIN_ROWS = 8;
 const TERMINAL_FALLBACK_COLS = 80;
 const TERMINAL_FALLBACK_ROWS = 24;
 const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 240];
+const TERMINAL_RESTORE_CONCURRENCY = 4;
 const MANAGED_AGENT_NODE_GAP = 72;
 // Leave headroom below Chromium's per-page WebGL context limit. Terminals
 // beyond this budget keep xterm's stable DOM renderer instead of causing the
@@ -6414,18 +6416,23 @@ async function restoreCanvasSession(sessionSnapshot) {
     });
   });
 
-  for (const canvasSnapshot of persistedCanvases) {
+  const terminalRestoreJobs = persistedCanvases.flatMap((canvasSnapshot) => {
     const restoredCanvas = getCanvasById(canvasSnapshot.id);
 
     if (restoredCanvas === null) {
-      continue;
+      return [];
     }
 
-    setActiveCanvas(restoredCanvas.id);
+    return canvasSnapshot.terminalNodes.map((nodeSnapshot) => ({ restoredCanvas, nodeSnapshot }));
+  });
 
-    for (const nodeSnapshot of canvasSnapshot.terminalNodes) {
+  await mapWithConcurrency(
+    terminalRestoreJobs,
+    TERMINAL_RESTORE_CONCURRENCY,
+    async ({ restoredCanvas, nodeSnapshot }) => {
       try {
         await createTerminalNode({
+          canvasRecord: restoredCanvas,
           x: nodeSnapshot.x,
           y: nodeSnapshot.y,
           width: nodeSnapshot.width,
@@ -6444,13 +6451,14 @@ async function restoreCanvasSession(sessionSnapshot) {
           managedParentAgent: nodeSnapshot.managedParentAgent,
           managedDepth: nodeSnapshot.managedDepth,
           tmuxSessionName: nodeSnapshot.tmuxSessionName,
-          shouldFocus: false
+          shouldFocus: false,
+          deferChromeRefresh: true
         });
       } catch (error) {
         console.error(error);
       }
     }
-  }
+  );
 
   const restoredActiveCanvas = getCanvasById(sessionSnapshot.activeCanvasId) ?? canvases[0] ?? null;
 
@@ -6484,6 +6492,7 @@ async function restoreCanvasSession(sessionSnapshot) {
 }
 
 async function initializeApp() {
+  performance.mark("termcanvas:app-initialization-start");
   isSessionHydrating = true;
 
   try {
@@ -6517,6 +6526,12 @@ async function initializeApp() {
     console.error(error);
   } finally {
     isSessionHydrating = false;
+    performance.mark("termcanvas:app-initialization-end");
+    performance.measure(
+      "termcanvas:app-initialization",
+      "termcanvas:app-initialization-start",
+      "termcanvas:app-initialization-end"
+    );
     // Render once more so the board reflects the final state — in particular the
     // no-canvas welcome prompt, which otherwise never renders without an active canvas.
     renderCanvas();
@@ -7414,7 +7429,10 @@ function createTerminalElement(nodeRecord) {
 }
 
 async function createTerminalNode(options) {
-  const activeCanvas = getActiveCanvas();
+  const requestedCanvas = options?.canvasRecord;
+  const activeCanvas = requestedCanvas != null && canvasMap.get(requestedCanvas.id) === requestedCanvas
+    ? requestedCanvas
+    : getActiveCanvas();
   const shouldFocus = options?.shouldFocus !== false;
   const shouldDeferChromeRefresh = options?.deferChromeRefresh === true;
 
@@ -7442,7 +7460,9 @@ async function createTerminalNode(options) {
     y: options.y,
     width: DEFAULT_NODE_WIDTH,
     height: DEFAULT_NODE_HEIGHT,
-    cwd: typeof options.cwd === "string" && options.cwd.trim().length > 0 ? options.cwd : getDefaultTerminalWorkingDirectory(),
+    cwd: typeof options.cwd === "string" && options.cwd.trim().length > 0
+      ? options.cwd
+      : getCanvasWorkspaceRootPath(activeCanvas),
     isRemoved: false,
     isExited: options.isExited === true,
     isMaximized: options.isMaximized === true,

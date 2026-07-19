@@ -34,6 +34,14 @@ function loadMainWithMocks({
   nodePtyStub = {},
   childProcessStub = null
 }) {
+  const effectiveChildProcessStub = childProcessStub !== null
+    && typeof childProcessStub.spawn !== "function"
+    && typeof childProcessStub.spawnSync === "function"
+    ? {
+      ...childProcessStub,
+      spawn: createMockSpawn((command, args, options) => childProcessStub.spawnSync(command, args, options))
+    }
+    : childProcessStub;
   const handlers = new Map();
   const openPathCalls = [];
   const openExternalCalls = [];
@@ -144,8 +152,8 @@ function loadMainWithMocks({
       return nodePtyStub;
     }
 
-    if (request === "node:child_process" && childProcessStub !== null) {
-      return childProcessStub;
+    if (request === "node:child_process" && effectiveChildProcessStub !== null) {
+      return effectiveChildProcessStub;
     }
 
     return originalLoad.call(this, request, parent, isMain);
@@ -209,7 +217,7 @@ function createMockPtyProcess({ autoExitCode = null } = {}) {
 }
 
 function createMockSpawn(handler) {
-  return (command, args) => {
+  return (command, args, options) => {
     const childProcess = new EventEmitter();
     childProcess.stdout = new EventEmitter();
     childProcess.stderr = new EventEmitter();
@@ -217,7 +225,7 @@ function createMockSpawn(handler) {
 
     setImmediate(() => {
       try {
-        const result = handler(command, args);
+        const result = handler(command, args, options);
 
         if (result?.error instanceof Error) {
           childProcess.emit("error", result.error);
@@ -240,6 +248,31 @@ function createMockSpawn(handler) {
 
     return childProcess;
   };
+}
+
+function splitTmuxCommandArgs(args) {
+  const commands = [[]];
+
+  for (const arg of args) {
+    if (arg === ";") {
+      commands.push([]);
+    } else {
+      commands.at(-1).push(arg);
+    }
+  }
+
+  return commands.filter((command) => command.length > 0);
+}
+
+function hasSpawnedTmuxCommand(spawnCalls, ...expectedArgs) {
+  return spawnCalls.some(({ command, args }) => (
+    command === "tmux"
+    && Array.isArray(args)
+    && splitTmuxCommandArgs(args).some((tmuxCommand) => (
+      tmuxCommand.length === expectedArgs.length
+      && expectedArgs.every((expectedArg, index) => tmuxCommand[index] === expectedArg)
+    ))
+  ));
 }
 
 test("workspace-directory:choose-canvas replaces the owner's existing workspace registry", async () => {
@@ -517,6 +550,80 @@ test("terminal:create advertises truecolor support to spawned shells", async () 
   }
 });
 
+test("terminal:create uses asynchronous tmux subprocesses on the main-process hot path", async () => {
+  const asyncSpawnCalls = [];
+  const tmuxSessions = new Set();
+  const asyncSpawn = createMockSpawn((command, args) => {
+    asyncSpawnCalls.push({ command, args });
+
+    if (command === "tmux" && args[0] === "-V") {
+      return { status: 0, stdout: "tmux 3.4\n", stderr: "" };
+    }
+
+    if (command === "tmux" && args[0] === "new-session") {
+      tmuxSessions.add(args[args.indexOf("-s") + 1]);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+
+    if (command === "tmux" && args[0] === "kill-session") {
+      tmuxSessions.delete(args[args.indexOf("-t") + 1]);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+
+    if (command === "tmux" && args[0] === "has-session") {
+      const sessionName = args[args.indexOf("-t") + 1];
+      return tmuxSessions.has(sessionName)
+        ? { status: 0, stdout: "", stderr: "" }
+        : { status: 1, stdout: "", stderr: "no server running" };
+    }
+
+    if (command === "tmux" && args[0] === "show-options") {
+      return { status: 0, stdout: "terminal-features[0] xterm-256color:RGB:clipboard\n", stderr: "" };
+    }
+
+    if (command === "tmux" && args[0] === "display-message") {
+      return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
+    }
+
+    return { status: 0, stdout: "", stderr: "" };
+  });
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: () => {
+        throw new Error("terminal creation must not call spawnSync");
+      },
+      spawn: asyncSpawn
+    },
+    nodePtyStub: {
+      spawn: (command, args) => {
+        const sessionName = args[args.indexOf("-t") + 1];
+        return createMockPtyProcess({ autoExitCode: sessionName.startsWith("termcanvas-probe-") ? 0 : null });
+      }
+    }
+  });
+  const createTerminal = handlers.get("terminal:create");
+  const destroyTerminal = handlers.get("terminal:destroy");
+  const ownerEvent = { sender: { id: 46 } };
+  const created = await createTerminal(ownerEvent, {
+    terminalId: "async-tmux-terminal",
+    sessionKey: "async-tmux-session",
+    cols: 100,
+    rows: 30,
+    cwd: os.homedir()
+  });
+
+  assert.equal(created.backend, "tmux");
+  assert.ok(asyncSpawnCalls.some(({ command, args }) => command === "tmux" && args[0] === "new-session"));
+
+  await destroyTerminal(ownerEvent, {
+    terminalId: "async-tmux-terminal",
+    preserveSession: false
+  });
+  delete require.cache[mainPath];
+});
+
 test("packaged terminal:create finds tmux in common macOS CLI paths", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-packaged-tmux-"));
   const spawnCalls = [];
@@ -597,6 +704,34 @@ test("packaged terminal:create finds tmux in common macOS CLI paths", async () =
 test("terminal:create registers fresh canvas terminals as managed agents with AGENTMUX env", async () => {
   const spawnCalls = [];
   const agentmuxSpawnCalls = [];
+  const runTmuxStub = (command, args, options) => {
+    spawnCalls.push({ command, args, options });
+
+    if (command === "tmux" && args[0] === "-V") {
+      return { status: 0, stdout: "tmux 3.4", stderr: "" };
+    }
+
+    if (command === "tmux" && args[0] === "has-session") {
+      const targetSession = args[2];
+      const wasCreated = targetSession === "termcanvas-agent-env"
+        && spawnCalls.some(({ command: priorCommand, args: priorArgs }) => (
+          priorCommand === "tmux"
+          && priorArgs[0] === "new-session"
+          && priorArgs.includes(targetSession)
+        ));
+
+      return wasCreated
+        ? { status: 0, stdout: "", stderr: "" }
+        : { status: 1, stdout: "", stderr: "no such session" };
+    }
+
+    if (command === "tmux" && args[0] === "display-message") {
+      return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
+    }
+
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  const spawnTmux = createMockSpawn(runTmuxStub);
 
   function createFakeAgentmuxChild() {
     const child = new EventEmitter();
@@ -614,34 +749,12 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
     smokeTest: true,
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
     childProcessStub: {
-      spawnSync: (command, args, options) => {
-        spawnCalls.push({ command, args, options });
-
-        if (command === "tmux" && args[0] === "-V") {
-          return { status: 0, stdout: "tmux 3.4", stderr: "" };
+      spawnSync: runTmuxStub,
+      spawn: (command, args, options) => {
+        if (command === "tmux") {
+          return spawnTmux(command, args, options);
         }
 
-        if (command === "tmux" && args[0] === "has-session") {
-          const targetSession = args[2];
-          const wasCreated = targetSession === "termcanvas-agent-env"
-            && spawnCalls.some(({ command: priorCommand, args: priorArgs }) => (
-              priorCommand === "tmux"
-              && priorArgs[0] === "new-session"
-              && priorArgs.includes(targetSession)
-            ));
-
-          return wasCreated
-            ? { status: 0, stdout: "", stderr: "" }
-            : { status: 1, stdout: "", stderr: "no such session" };
-        }
-
-        if (command === "tmux" && args[0] === "display-message") {
-          return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
-        }
-
-        return { status: 0, stdout: "", stderr: "" };
-      },
-      spawn: (command, args) => {
         agentmuxSpawnCalls.push({ command, args });
         return createFakeAgentmuxChild();
       }
@@ -696,12 +809,14 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
     );
     assert.ok(newSession.args.includes("AGENTMUX_TMUX_SESSION=termcanvas-agent-env"));
     assert.ok(
-      spawnCalls.some(({ command, args }) => (
-        command === "tmux"
-        && args[0] === "set-environment"
-        && args.includes("termcanvas-agent-env")
-        && args.includes("AGENTMUX_HOME")
-      )),
+      hasSpawnedTmuxCommand(
+        spawnCalls,
+        "set-environment",
+        "-t",
+        "termcanvas-agent-env",
+        "AGENTMUX_HOME",
+        path.join(os.homedir(), "agentmux")
+      ),
       "expected the tmux session environment to retain the app-scoped agentmux home"
     );
 
@@ -740,12 +855,12 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
 
     assert.equal(restored.managedAgentName, null, "restored terminals must not re-adopt");
     assert.ok(
-      spawnCalls.some(({ command, args }) => (
-        command === "tmux"
-        && args[0] === "set-environment"
-        && args.includes("termcanvas-agent-env")
-        && args.includes("AGENTMUX_BIN")
-      )),
+      spawnCalls.some(({ command, args }) => command === "tmux" && splitTmuxCommandArgs(args).some((tmuxCommand) => (
+        tmuxCommand[0] === "set-environment"
+        && tmuxCommand[1] === "-t"
+        && tmuxCommand[2] === "termcanvas-agent-env"
+        && tmuxCommand[3] === "AGENTMUX_BIN"
+      ))),
       "expected restored tmux sessions to receive the repaired agentmux runtime environment"
     );
 
@@ -843,24 +958,21 @@ test("terminal:create repairs tmux color environment before attaching sessions",
   assert.equal(realAttach.options.env.CLICOLOR_FORCE, "1");
   assert.equal(realAttach.options.env.FORCE_COLOR, "3");
 
-  const hasTmuxCall = (...expectedArgs) => spawnCalls.some(({ command, args }) => (
-    command === "tmux"
-    && Array.isArray(args)
-    && args.length === expectedArgs.length
-    && expectedArgs.every((expectedArg, index) => args[index] === expectedArg)
+  const hasTmuxCall = (...expectedArgs) => hasSpawnedTmuxCommand(spawnCalls, ...expectedArgs);
+  const hasTmuxUtf8EnvironmentCall = (targetFlag, targetName, envName) => spawnCalls.some(({ command, args }) => (
+    command === "tmux" && splitTmuxCommandArgs(args).some((tmuxCommand) => {
+      if (tmuxCommand[0] !== "set-environment" || tmuxCommand[1] !== targetFlag) {
+        return false;
+      }
+
+      const nameIndex = targetFlag === "-t" ? 3 : 2;
+      const valueIndex = nameIndex + 1;
+
+      return (targetFlag !== "-t" || tmuxCommand[2] === targetName)
+        && tmuxCommand[nameIndex] === envName
+        && /UTF-?8/iu.test(String(tmuxCommand[valueIndex] ?? ""));
+    })
   ));
-  const hasTmuxUtf8EnvironmentCall = (targetFlag, targetName, envName) => spawnCalls.some(({ command, args }) => {
-    if (command !== "tmux" || !Array.isArray(args) || args[0] !== "set-environment" || args[1] !== targetFlag) {
-      return false;
-    }
-
-    const nameIndex = targetFlag === "-t" ? 3 : 2;
-    const valueIndex = nameIndex + 1;
-
-    return (targetFlag !== "-t" || args[2] === targetName)
-      && args[nameIndex] === envName
-      && /UTF-?8/iu.test(String(args[valueIndex] ?? ""));
-  });
 
   assert.ok(
     hasTmuxCall("set-environment", "-g", "-u", "NO_COLOR"),
