@@ -6849,10 +6849,23 @@ async function importCanvas() {
   return importCanvasFromData(importedCanvas);
 }
 
+function syncInteractionOverlayPanning(isPanning) {
+  const activeCanvas = getActiveCanvas();
+  if (activeCanvas === null) {
+    return;
+  }
+  activeCanvas.nodes.forEach((nodeRecord) => {
+    if (nodeRecord.interactionOverlay instanceof HTMLElement) {
+      nodeRecord.interactionOverlay.classList.toggle("is-panning", isPanning);
+    }
+  });
+}
+
 function stopPan() {
   panState.pointerId = null;
   panState.hasMoved = false;
   board.classList.remove("is-ready-to-pan", "is-panning");
+  syncInteractionOverlayPanning(false);
 }
 
 function stopNodeDrag(event) {
@@ -8545,6 +8558,7 @@ function handleBoardPointerMove(event) {
   if (!panState.hasMoved && (Math.abs(deltaX) > DRAG_THRESHOLD || Math.abs(deltaY) > DRAG_THRESHOLD)) {
     panState.hasMoved = true;
     board.classList.add("is-panning");
+    syncInteractionOverlayPanning(true);
   }
 
   setActiveCanvasViewportOffset(panState.originX + deltaX, panState.originY + deltaY);
@@ -9669,7 +9683,7 @@ board.addEventListener("pointerdown", handleBoardPointerDown);
 board.addEventListener("pointermove", handleBoardPointerMove);
 board.addEventListener("pointerup", handleBoardPointerUp);
 board.addEventListener("pointercancel", handleBoardPointerCancel);
-board.addEventListener("wheel", handleBoardWheel, { passive: false });
+board.addEventListener("wheel", handleBoardWheel, { passive: false, capture: true });
 board.addEventListener("dblclick", handleBoardDoubleClick);
 renderWorkspaceActionDialog();
 window.addEventListener("click", handleWindowClick);

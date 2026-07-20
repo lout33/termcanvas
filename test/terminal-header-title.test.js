@@ -90,7 +90,7 @@ test("keyboard app zoom shortcuts are not captured by canvas zoom", () => {
   assert.doesNotMatch(renderer, /const isViewportShortcut = \(event\.metaKey \|\| event\.ctrlKey\) && !event\.altKey;/);
   assert.doesNotMatch(renderer, /shortcutKey === "=" \|\| shortcutKey === "\+"[\s\S]*zoomActiveCanvasByStep\("in"\)/);
   assert.match(renderer, /boardZoomInButton\?\.addEventListener\("click", \(\) => \{[\s\S]*zoomActiveCanvasByStep\("in"\);/);
-  assert.match(renderer, /board\.addEventListener\("wheel", handleBoardWheel, \{ passive: false \}\);/);
+  assert.match(renderer, /board\.addEventListener\("wheel", handleBoardWheel, \{ passive: false, capture: true \}\);/);
 });
 
 test("maximized terminal headers expose a clear exit fullscreen action", () => {

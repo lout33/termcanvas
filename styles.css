@@ -3401,15 +3401,22 @@ button {
   inset: 0 var(--space-3) var(--space-3);
   z-index: 1;
   pointer-events: none;
+  cursor: grab;
 }
 
 .terminal-node-interaction-overlay.is-enabled {
   pointer-events: auto;
+  cursor: grab;
+}
+
+.terminal-node-interaction-overlay.is-enabled.is-panning {
+  cursor: grabbing;
 }
 
 .terminal-node-terminal .xterm {
   width: 100%;
   height: 100%;
+  cursor: grab;
   font-family: var(--font-mono);
   font-kerning: none;
   font-variant-ligatures: none;
@@ -3417,6 +3424,10 @@ button {
   -webkit-font-smoothing: antialiased;
   text-rendering: auto;
   color: var(--color-terminal-text);
+}
+
+.terminal-node.is-active .terminal-node-terminal .xterm {
+  cursor: text;
 }
 
 .terminal-node-terminal .xterm-rows {
