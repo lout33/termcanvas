@@ -93,7 +93,8 @@ A low-frequency liveness check is allowed, but it must not rebuild UI or write p
 - [ ] Revealing a suspended terminal requests a complete tmux redraw.
 - [ ] The number of active accelerated terminal renderers stays within a safe limit.
 - [ ] Rendering work scales with visible terminals rather than total terminals.
-- [ ] Pan-only frames do not walk every node across every project.
+- [x] Pan-only frames do not walk every node across every project.
+- [x] Terminal tail lines update on data events instead of a global 4s interval.
 - [ ] Terminal refreshes do not clear texture atlases unnecessarily.
 - [ ] Resize events are coalesced and send IPC only when rows or columns changed.
 - [ ] Terminal text remains readable after pan, zoom, resize, canvas switching, and maximize/restore.
@@ -169,9 +170,9 @@ A missing Developer ID certificate is an external limitation. The implementation
 - [x] A new terminal becomes interactive within one second after initial app warm-up.
 - [x] A new agent child appears on the canvas within one second of registration.
 - [x] Restoring 20 terminals does not block the window from becoming interactive.
-- [ ] Panning and zooming remain responsive with at least 30 terminal nodes.
-- [ ] The active accelerated-renderer count never exceeds its configured budget.
-- [ ] Idle CPU activity is not driven by repeated full-tree, full-canvas, or persistence work.
+- [x] Panning and zooming remain responsive with at least 30 terminal nodes.
+- [x] The active accelerated-renderer count never exceeds its configured budget.
+- [x] Idle CPU activity is not driven by repeated full-tree, full-canvas, or persistence work.
 
 Record measurements before and after the relevant milestones.
 
