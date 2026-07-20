@@ -3275,6 +3275,14 @@ function setNodeCanvasVisibility(nodeRecord, shouldShow) {
 }
 
 function syncMountedCanvasNodes(activeCanvas) {
+  // Fast path: when the active canvas has not changed since the last mount
+  // pass, every node is already in the correct visibility state and we can
+  // skip the O(total nodes across all canvases) iteration. This is what
+  // makes non-structural renders (pan, zoom, focus changes) cheap.
+  if (activeCanvas !== null && renderedCanvasId === activeCanvas.id) {
+    return false;
+  }
+
   let didChange = false;
 
   canvases.forEach((canvasRecord) => {
@@ -3308,8 +3316,27 @@ function flushViewportRender() {
 
 function renderViewportFrame() {
   const syncNodePositions = shouldSyncNodePositionsOnViewportRender;
+  const isPanOnly = !syncNodePositions && !shouldRefreshTerminalsAfterViewportRender;
 
   shouldSyncNodePositionsOnViewportRender = false;
+
+  if (isPanOnly) {
+    // Pan-only fast path: the nodes layer is transformed via CSS variables,
+    // so updating the three board CSS vars is enough to move every node.
+    // Walking all nodes of all canvases on every pointermove frame is the
+    // primary source of canvas lag, so skip it when nothing structural
+    // changed.
+    const activeCanvas = getActiveCanvas();
+    if (activeCanvas !== null) {
+      board.style.setProperty("--grid-offset-x", `${activeCanvas.viewportOffset.x}px`);
+      board.style.setProperty("--grid-offset-y", `${activeCanvas.viewportOffset.y}px`);
+      board.style.setProperty("--viewport-scale", String(activeCanvas.viewportScale));
+      setBoardZoomIndicatorText(activeCanvas.viewportScale);
+      scheduleMinimapRender();
+      return;
+    }
+  }
+
   renderCanvas({ syncNodePositions });
   const activeCanvas = getActiveCanvas();
   if (activeCanvas !== null && shouldRefreshTerminalsAfterViewportRender) {
