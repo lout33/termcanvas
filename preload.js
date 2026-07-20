@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld(
       preserveSession: options?.preserveSession === true
     }),
     syncCanvasAgentProject: (payload) => ipcRenderer.invoke("canvas-agent:sync", payload),
+    subscribeCanvasAgentChanges: (payload) => ipcRenderer.invoke("canvas-agent:subscribe", payload),
+    unsubscribeCanvasAgentChanges: (payload) => ipcRenderer.invoke("canvas-agent:unsubscribe", payload),
     deleteCanvasAgent: (agentName) => ipcRenderer.invoke("canvas-agent:delete", { agentName }),
     sendCanvasAgentPrompt: (agentName, message) => ipcRenderer.invoke("canvas-agent:send", { agentName, message }),
     connectCanvasAgents: (agentA, agentB) => ipcRenderer.invoke("canvas-agent:connect", { agentA, agentB }),
@@ -111,6 +113,14 @@ contextBridge.exposeInMainWorld(
 
       return () => {
         ipcRenderer.removeListener("workspace-directory:data", listener);
+      };
+    },
+    onCanvasAgentChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("canvas-agent:changed", listener);
+
+      return () => {
+        ipcRenderer.removeListener("canvas-agent:changed", listener);
       };
     },
     onToggleActiveTerminalMaximize: (callback) => {

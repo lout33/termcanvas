@@ -172,6 +172,8 @@ const RESIZE_HANDLE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 const APP_SESSION_VERSION = 2;
 const APP_SESSION_SAVE_DEBOUNCE_MS = 180;
 const CANVAS_AGENT_SYNC_INTERVAL_MS = 6000;
+const CANVAS_AGENT_LIVENESS_INTERVAL_MS = 30000;
+const CANVAS_AGENT_EVENT_DEBOUNCE_MS = 250;
 const MAX_WORKSPACE_PREVIEW_TABS = 5;
 const TERMINAL_MIN_COLS = 20;
 const TERMINAL_MIN_ROWS = 8;
@@ -232,7 +234,12 @@ let appSessionSaveTimeout = 0;
 let isSessionHydrating = false;
 let workspaceFilterQuery = "";
 let canvasAgentSyncTimeout = 0;
+let canvasAgentLivenessTimeout = 0;
+let canvasAgentEventDebounceTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
+let canvasAgentUnsubscribe = null;
+let canvasAgentChangeListenerRemover = null;
+let lastSyncedAgentProjectTag = null;
 let workspaceActionDialogResolve = null;
 let isAgentSkillInstallDialogOpen = false;
 let workspaceMarkdownEditor = null;
@@ -6536,6 +6543,7 @@ async function initializeApp() {
     // no-canvas welcome prompt, which otherwise never renders without an active canvas.
     renderCanvas();
     flushAppSessionSave();
+    await subscribeCanvasAgentChanges();
     scheduleCanvasAgentSync();
     void maybePromptForAgentSkillInstall();
   }
@@ -6982,6 +6990,11 @@ function setActiveCanvas(canvasId) {
     }
 
     closeCanvasSwitcherMenu();
+    if (canvasAgentLivenessTimeout !== 0) {
+      clearTimeout(canvasAgentLivenessTimeout);
+      canvasAgentLivenessTimeout = 0;
+    }
+    void resubscribeCanvasAgentChangesForActiveCanvas();
     scheduleCanvasAgentSync();
     scheduleAttentionRefresh();
 
@@ -8126,12 +8139,21 @@ async function syncActiveCanvasAgentProject() {
       return;
     }
 
+    const syncedProjectTag = typeof snapshot?.project === "string" && snapshot.project.length > 0
+      ? snapshot.project
+      : canvasRecord.agentProjectTag;
+
+    if (lastSyncedAgentProjectTag !== syncedProjectTag) {
+      lastSyncedAgentProjectTag = syncedProjectTag;
+      await resubscribeCanvasAgentChangesForActiveCanvas();
+    }
+
     await reconcileCanvasAgentProject(canvasRecord, snapshot);
   } catch (error) {
     console.error(error);
   } finally {
     isCanvasAgentSyncInFlight = false;
-    scheduleCanvasAgentSync(CANVAS_AGENT_SYNC_INTERVAL_MS);
+    scheduleCanvasAgentLiveness();
   }
 }
 
@@ -8148,6 +8170,84 @@ function scheduleCanvasAgentSync(delay = 0) {
     canvasAgentSyncTimeout = 0;
     void syncActiveCanvasAgentProject();
   }, Math.max(0, delay));
+}
+
+function scheduleCanvasAgentLiveness() {
+  if (canvasAgentLivenessTimeout !== 0) {
+    clearTimeout(canvasAgentLivenessTimeout);
+  }
+
+  canvasAgentLivenessTimeout = window.setTimeout(() => {
+    canvasAgentLivenessTimeout = 0;
+    void syncActiveCanvasAgentProject();
+  }, CANVAS_AGENT_LIVENESS_INTERVAL_MS);
+}
+
+function scheduleCanvasAgentEventSync(changedProjectTags) {
+  if (isSessionHydrating) {
+    return;
+  }
+
+  const activeCanvas = getActiveCanvas();
+  if (activeCanvas === null) {
+    return;
+  }
+
+  const activeProjectTag = typeof activeCanvas.agentProjectTag === "string" ? activeCanvas.agentProjectTag : null;
+  if (activeProjectTag === null) {
+    return;
+  }
+
+  if (Array.isArray(changedProjectTags) && changedProjectTags.length > 0 && !changedProjectTags.includes(activeProjectTag)) {
+    return;
+  }
+
+  if (canvasAgentEventDebounceTimeout !== 0) {
+    clearTimeout(canvasAgentEventDebounceTimeout);
+  }
+
+  canvasAgentEventDebounceTimeout = window.setTimeout(() => {
+    canvasAgentEventDebounceTimeout = 0;
+    void syncActiveCanvasAgentProject();
+  }, CANVAS_AGENT_EVENT_DEBOUNCE_MS);
+}
+
+async function subscribeCanvasAgentChanges() {
+  if (canvasAgentUnsubscribe !== null) {
+    return;
+  }
+
+  canvasAgentChangeListenerRemover = window.noteCanvas.onCanvasAgentChanged((payload) => {
+    scheduleCanvasAgentEventSync(Array.isArray(payload?.changedProjectTags) ? payload.changedProjectTags : null);
+  });
+
+  const activeCanvas = getActiveCanvas();
+  const projectTag = typeof activeCanvas?.agentProjectTag === "string" ? activeCanvas.agentProjectTag : null;
+
+  try {
+    await window.noteCanvas.subscribeCanvasAgentChanges({ projectTag });
+    canvasAgentUnsubscribe = () => {
+      if (canvasAgentChangeListenerRemover !== null) {
+        canvasAgentChangeListenerRemover();
+        canvasAgentChangeListenerRemover = null;
+      }
+      void window.noteCanvas.unsubscribeCanvasAgentChanges({ projectTag });
+      canvasAgentUnsubscribe = null;
+    };
+  } catch (error) {
+    console.error(error);
+    canvasAgentChangeListenerRemover?.();
+    canvasAgentChangeListenerRemover = null;
+    canvasAgentUnsubscribe = null;
+  }
+}
+
+async function resubscribeCanvasAgentChangesForActiveCanvas() {
+  if (canvasAgentUnsubscribe !== null) {
+    canvasAgentUnsubscribe();
+    canvasAgentUnsubscribe = null;
+  }
+  await subscribeCanvasAgentChanges();
 }
 
 async function destroyTerminalNode(nodeRecord, options = {}) {

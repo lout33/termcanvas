@@ -76,13 +76,13 @@ Do not add a frontend framework. Use plain JavaScript modules and explicit event
 
 ## Milestone 3: Event-driven agent synchronization
 
-- [ ] New child agents appear without waiting for a six-second polling cycle.
-- [ ] Agent graph mutations use filesystem, database, IPC, or explicit agentmux change events.
+- [x] New child agents appear without waiting for a six-second polling cycle.
+- [x] Agent graph mutations use filesystem, database, IPC, or explicit agentmux change events.
 - [ ] Expensive pane inspection is separated from graph discovery.
-- [ ] Unchanged agent state produces no renderer updates or session writes.
-- [ ] Agent synchronization cannot run during incomplete session hydration.
-- [ ] Switching projects cannot apply stale synchronization results.
-- [ ] Parent, child, depth, and peer-edge metadata remain correct.
+- [x] Unchanged agent state produces no renderer updates or session writes.
+- [x] Agent synchronization cannot run during incomplete session hydration.
+- [x] Switching projects cannot apply stale synchronization results.
+- [x] Parent, child, depth, and peer-edge metadata remain correct.
 
 A low-frequency liveness check is allowed, but it must not rebuild UI or write persistence when nothing changed.
 
@@ -167,7 +167,7 @@ A missing Developer ID certificate is an external limitation. The implementation
 ## Performance targets
 
 - [x] A new terminal becomes interactive within one second after initial app warm-up.
-- [ ] A new agent child appears on the canvas within one second of registration.
+- [x] A new agent child appears on the canvas within one second of registration.
 - [x] Restoring 20 terminals does not block the window from becoming interactive.
 - [ ] Panning and zooming remain responsive with at least 30 terminal nodes.
 - [ ] The active accelerated-renderer count never exceeds its configured budget.

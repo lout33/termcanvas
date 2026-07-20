@@ -1790,6 +1790,115 @@ test("canvas-agent:sync bootstraps once then polls agentmux without rewriting AG
   }
 });
 
+test("canvas-agent:subscribe receives canvas-agent:changed when an adoption notifies the project tag", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agent-subscribe-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.writeFileSync(path.join(agentmuxRoot, "agentmux.py"), "#!/usr/bin/env python3\n", "utf8");
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath, sentMessages } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawn: createMockSpawn(() => ({ status: 0, stdout: "", stderr: "" }))
+      }
+    });
+    const subscribe = handlers.get("canvas-agent:subscribe");
+    const adopt = handlers.get("canvas-agent:adopt");
+    const sender = {
+      id: 220,
+      once: () => {},
+      isDestroyed: () => false
+    };
+
+    await subscribe(
+      { sender },
+      { projectTag: "project-watch" }
+    );
+    await adopt(
+      { sender },
+      {
+        agentName: "terminal-abc",
+        tmuxSessionName: "termcanvas-abc",
+        projectTag: "project-watch",
+        workdir: tempRoot
+      }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const changedEvents = sentMessages.filter((entry) => entry.channel === "canvas-agent:changed");
+
+    assert.ok(changedEvents.length >= 1, "expected at least one canvas-agent:changed event");
+    assert.deepEqual(changedEvents[0].payload.changedProjectTags, ["project-watch"]);
+    delete require.cache[mainPath];
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("canvas-agent:subscribe ignores change notifications for unwatched project tags", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agent-subscribe-filter-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.writeFileSync(path.join(agentmuxRoot, "agentmux.py"), "#!/usr/bin/env python3\n", "utf8");
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath, sentMessages } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawn: createMockSpawn(() => ({ status: 0, stdout: "", stderr: "" }))
+      }
+    });
+    const subscribe = handlers.get("canvas-agent:subscribe");
+    const adopt = handlers.get("canvas-agent:adopt");
+    const sender = {
+      id: 221,
+      once: () => {},
+      isDestroyed: () => false
+    };
+
+    await subscribe(
+      { sender },
+      { projectTag: "project-watch" }
+    );
+    await adopt(
+      { sender },
+      {
+        agentName: "terminal-xyz",
+        tmuxSessionName: "termcanvas-xyz",
+        projectTag: "project-other",
+        workdir: tempRoot
+      }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const changedEvents = sentMessages.filter((entry) => entry.channel === "canvas-agent:changed");
+
+    assert.deepEqual(changedEvents, []);
+    delete require.cache[mainPath];
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("terminal:write ignores missing sessions", () => {
   const { handlers, mainPath } = loadMainWithMocks({
     smokeTest: true,

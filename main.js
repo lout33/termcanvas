@@ -11,6 +11,7 @@ const { getNodePtyHelperPaths } = require("./node_pty_runtime");
 const { readWorkspaceFilePreviewAsync, resolveWorkspaceFilePath } = require("./workspace_file_preview");
 const { createWorkspaceService } = require("./main_workspace_service");
 const { buildPackagedRuntimePath, createAgentmuxService, isAgentmuxUnavailableError } = require("./main_agentmux_service");
+const { createAgentGraphWatcher } = require("./main_agent_graph_watcher");
 const { createTerminalSessionRegistry } = require("./main_terminal_registry");
 const { createTmuxBackend } = require("./main_tmux_backend");
 const { normalizeAppSessionSnapshot } = require("./session_snapshot");
@@ -518,6 +519,15 @@ const workspaceService = createWorkspaceService({
   workspaceWatchDebounceMs: WORKSPACE_WATCH_DEBOUNCE_MS
 });
 const agentmuxService = createAgentmuxService({ app });
+const agentGraphWatcher = createAgentGraphWatcher({
+  databasePath: (() => {
+    try {
+      return path.join(app.getPath("userData"), "agentmux", "agentmux.db");
+    } catch {
+      return null;
+    }
+  })()
+});
 
 function resolveDialogDefaultDirectory(ownerWebContentsId) {
   return workspaceService.getActiveFolderRootPath(ownerWebContentsId) ?? app.getPath("documents");
@@ -1448,6 +1458,8 @@ void app.whenReady().then(() => {
   ensureNodePtyHelperPermissions();
   createApplicationMenu();
   createMainWindow();
+  agentGraphWatcher.setDatabasePath(path.join(app.getPath("userData"), "agentmux", "agentmux.db"));
+  agentGraphWatcher.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1883,6 +1895,7 @@ ipcMain.handle("terminal:create", async (event, payload) => {
           workdir: session.cwd
         });
         managedAgentName = adopted.agentName;
+        agentGraphWatcher.notifyProjectTagChanged(agentProjectTag);
       } catch (error) {
         console.warn(`Could not register terminal ${terminalId} as a canvas agent: ${error.message}`);
       }
@@ -2070,26 +2083,57 @@ ipcMain.handle("canvas-agent:sync", async (_event, payload) => {
 
 ipcMain.handle("canvas-agent:delete", async (_event, payload) => {
   await agentmuxService.deleteAgent(payload?.agentName);
+  agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
   return { ok: true };
 });
 
 ipcMain.handle("canvas-agent:send", async (_event, payload) => {
   await agentmuxService.sendAgentPrompt(payload?.agentName, payload?.message);
+  agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
   return { ok: true };
 });
 
 ipcMain.handle("canvas-agent:connect", async (_event, payload) => {
   await agentmuxService.connectAgents(payload?.agentA, payload?.agentB);
+  agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
   return { ok: true };
 });
 
 ipcMain.handle("canvas-agent:adopt", async (_event, payload) => {
-  return agentmuxService.adoptAgent({
+  const result = await agentmuxService.adoptAgent({
     agentName: payload?.agentName,
     tmuxSessionName: payload?.tmuxSessionName,
     projectTag: payload?.projectTag,
     workdir: payload?.workdir
   });
+  agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
+  return result;
+});
+
+ipcMain.handle("canvas-agent:subscribe", async (event, payload) => {
+  const ownerWebContentsId = event.sender.id;
+  const projectTag = typeof payload?.projectTag === "string" ? payload.projectTag : null;
+  if (projectTag !== null && projectTag.length > 0) {
+    agentGraphWatcher.watchProjectTag(projectTag);
+  }
+  const removeListener = agentGraphWatcher.registerListener(ownerWebContentsId, (changePayload) => {
+    sendToOwner(ownerWebContentsId, "canvas-agent:changed", changePayload);
+  });
+  event.sender.once("destroyed", () => {
+    removeListener();
+    agentGraphWatcher.unregisterListener(ownerWebContentsId);
+  });
+  return { ok: true };
+});
+
+ipcMain.handle("canvas-agent:unsubscribe", async (event, payload) => {
+  const ownerWebContentsId = event.sender.id;
+  const projectTag = typeof payload?.projectTag === "string" ? payload.projectTag : null;
+  if (projectTag !== null && projectTag.length > 0) {
+    agentGraphWatcher.unwatchProjectTag(projectTag);
+  }
+  agentGraphWatcher.unregisterListener(ownerWebContentsId);
+  return { ok: true };
 });
 
 // Read-only canvas snapshot for agents (roadmap M3). The renderer pushes the

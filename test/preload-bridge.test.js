@@ -145,12 +145,27 @@ test("preload exposes canvas agent sync and delete methods", () => {
   const { exposedApi, invokeCalls, preloadPath } = loadPreloadWithMocks();
 
   exposedApi.syncCanvasAgentProject({ canvasId: "canvas-1" });
+  exposedApi.subscribeCanvasAgentChanges({ projectTag: "project-a" });
+  exposedApi.unsubscribeCanvasAgentChanges({ projectTag: "project-a" });
   exposedApi.deleteCanvasAgent("worker-1");
 
   assert.deepEqual(invokeCalls, [
     ["canvas-agent:sync", { canvasId: "canvas-1" }],
+    ["canvas-agent:subscribe", { projectTag: "project-a" }],
+    ["canvas-agent:unsubscribe", { projectTag: "project-a" }],
     ["canvas-agent:delete", { agentName: "worker-1" }]
   ]);
+  delete require.cache[preloadPath];
+});
+
+test("preload exposes onCanvasAgentChanged listener", () => {
+  const { exposedApi, onCalls, preloadPath } = loadPreloadWithMocks();
+
+  assert.equal(typeof exposedApi.onCanvasAgentChanged, "function");
+  const removeListener = exposedApi.onCanvasAgentChanged(() => {});
+  assert.equal(typeof removeListener, "function");
+  assert.ok(onCalls.some(([channel]) => channel === "canvas-agent:changed"));
+  removeListener();
   delete require.cache[preloadPath];
 });
 
