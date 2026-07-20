@@ -25,18 +25,22 @@
     return target.closest(".terminal-node");
   }
 
-  function shouldHandleCanvasWheel({ target, board, nodesLayer }) {
+  function shouldHandleCanvasWheel({ target, board, nodesLayer, activeNodeElement }) {
     if (isNodeElement(target, board) || isNodeElement(target, nodesLayer)) {
       return true;
     }
 
     const terminalNode = findClosestTerminalNode(target);
 
-    return terminalNode !== null;
+    if (terminalNode === null) {
+      return false;
+    }
+
+    return terminalNode !== activeNodeElement;
   }
 
-  function shouldTerminalHandleWheel() {
-    return false;
+  function shouldTerminalHandleWheel({ terminalNodeElement, activeNodeElement }) {
+    return terminalNodeElement !== null && terminalNodeElement === activeNodeElement;
   }
 
   function shouldClearActiveTerminalSelection({ target, board, nodesLayer }) {

@@ -43,7 +43,7 @@ function createNode(className = "", parent = null) {
   return node;
 }
 
-test("shouldHandleCanvasWheel allows board targets and any terminal node", () => {
+test("shouldHandleCanvasWheel allows board targets and unselected terminals but blocks the active terminal", () => {
   const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
   const { shouldHandleCanvasWheel } = navigationWindow.noteCanvasRendererCanvasNavigation;
 
@@ -54,20 +54,20 @@ test("shouldHandleCanvasWheel allows board targets and any terminal node", () =>
   const inactiveTerminal = createNode("terminal-node", nodesLayer);
   const inactiveTerminalSurface = createNode("xterm", inactiveTerminal);
 
-  assert.equal(shouldHandleCanvasWheel({ target: board, board, nodesLayer }), true);
-  assert.equal(shouldHandleCanvasWheel({ target: nodesLayer, board, nodesLayer }), true);
-  assert.equal(shouldHandleCanvasWheel({ target: inactiveTerminalSurface, board, nodesLayer }), true);
-  assert.equal(shouldHandleCanvasWheel({ target: activeTerminalSurface, board, nodesLayer }), true);
+  assert.equal(shouldHandleCanvasWheel({ target: board, board, nodesLayer, activeNodeElement: activeTerminal }), true);
+  assert.equal(shouldHandleCanvasWheel({ target: nodesLayer, board, nodesLayer, activeNodeElement: activeTerminal }), true);
+  assert.equal(shouldHandleCanvasWheel({ target: inactiveTerminalSurface, board, nodesLayer, activeNodeElement: activeTerminal }), true);
+  assert.equal(shouldHandleCanvasWheel({ target: activeTerminalSurface, board, nodesLayer, activeNodeElement: activeTerminal }), false);
 });
 
-test("shouldTerminalHandleWheel never captures wheel events; canvas always pans", () => {
+test("shouldTerminalHandleWheel only keeps wheel events inside the active terminal", () => {
   const navigationWindow = runHelperInBrowserContext("renderer_canvas_navigation.js");
   const { shouldTerminalHandleWheel } = navigationWindow.noteCanvasRendererCanvasNavigation;
 
   const activeTerminal = createNode("terminal-node");
   const inactiveTerminal = createNode("terminal-node");
 
-  assert.equal(shouldTerminalHandleWheel({ terminalNodeElement: activeTerminal, activeNodeElement: activeTerminal }), false);
+  assert.equal(shouldTerminalHandleWheel({ terminalNodeElement: activeTerminal, activeNodeElement: activeTerminal }), true);
   assert.equal(shouldTerminalHandleWheel({ terminalNodeElement: inactiveTerminal, activeNodeElement: activeTerminal }), false);
   assert.equal(shouldTerminalHandleWheel({ terminalNodeElement: inactiveTerminal, activeNodeElement: null }), false);
 });
