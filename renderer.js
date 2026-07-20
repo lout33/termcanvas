@@ -220,6 +220,8 @@ let shouldEnsureActiveCanvasStripItemVisible = false;
 let shouldEnsureActiveTerminalStripItemVisible = false;
 const pendingTerminalSizeNodes = new Set();
 const pendingTerminalRefreshNodes = new Set();
+const pendingTailUpdateNodes = new Set();
+let tailUpdateFrame = 0;
 let pendingCanvasListFocus = null;
 let isCanvasActionsMenuOpen = false;
 let isCanvasSwitcherMenuOpen = false;
@@ -355,6 +357,7 @@ const removeTerminalDataListener = window.noteCanvas.onTerminalData(({ terminalI
   }
 
   nodeRecord.terminal?.write(data);
+  scheduleNodeTailUpdate(nodeRecord);
 });
 
 const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalId, exitCode, signal }) => {
@@ -965,7 +968,7 @@ function refreshAttentionState() {
 // Layer 1 glanceability: every card shows the terminal's last meaningful output
 // line, refreshed on a slow tick. Quiet time remains available in the fleet
 // snapshot without making visible card text change every few seconds.
-const NODE_TAIL_REFRESH_INTERVAL_MS = 4000;
+const NODE_TAIL_LIVENESS_INTERVAL_MS = 30000;
 const NODE_TAIL_SCAN_LINES = 20;
 
 function updateNodeTailLine(nodeRecord) {
@@ -1008,6 +1011,26 @@ function updateNodeTailLine(nodeRecord) {
   if (nodeRecord.tail.hidden) {
     nodeRecord.tail.hidden = false;
   }
+}
+
+function scheduleNodeTailUpdate(nodeRecord) {
+  if (nodeRecord == null || nodeRecord.tail == null) {
+    return;
+  }
+  pendingTailUpdateNodes.add(nodeRecord);
+  if (tailUpdateFrame !== 0) {
+    return;
+  }
+  tailUpdateFrame = requestAnimationFrame(() => {
+    tailUpdateFrame = 0;
+    const nodesToUpdate = [...pendingTailUpdateNodes];
+    pendingTailUpdateNodes.clear();
+    nodesToUpdate.forEach((node) => {
+      if (!node.isRemoved) {
+        updateNodeTailLine(node);
+      }
+    });
+  });
 }
 
 function refreshAllNodeTails() {
@@ -1135,10 +1158,14 @@ async function spawnFleetReportTerminal() {
   }, FLEET_REPORT_PROMPT_DELAY_MS);
 }
 
+// Tail lines update on data events (via scheduleNodeTailUpdate), so the
+// global interval only needs to refresh "quiet" durations and publish the
+// canvas snapshot for terminal agents. A 30s liveness cadence keeps idle
+// CPU low while still surfacing stale agents.
 window.setInterval(() => {
   refreshAllNodeTails();
   void publishCanvasSnapshot();
-}, NODE_TAIL_REFRESH_INTERVAL_MS);
+}, NODE_TAIL_LIVENESS_INTERVAL_MS);
 
 // ── Canvas sticky notes ────────────────────────────────────────────────
 // Plain text notes on the canvas: drag by the header, double-click the body
