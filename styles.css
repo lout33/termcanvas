@@ -3961,3 +3961,89 @@ button {
 .canvas-note-body::placeholder {
   color: rgba(217, 192, 138, 0.4);
 }
+
+/* ── Canvas select mode ─────────────────────────────────────────────── */
+/* Multi-select mode for closing many terminals at once. Toggle from the
+   canvas actions menu, click terminals to add/remove them from the
+   selection, then press Escape or click "Close selected" to remove them. */
+
+.canvas-select-mode,
+.canvas-select-mode .terminal-node {
+  cursor: pointer;
+}
+
+.canvas-select-mode .terminal-node.is-selected {
+  outline: 2px solid rgba(247, 130, 130, 0.85);
+  outline-offset: 3px;
+  box-shadow: 0 0 1.4rem rgba(247, 130, 130, 0.35);
+}
+
+.canvas-select-mode .terminal-node:hover {
+  outline: 2px dashed rgba(247, 204, 116, 0.65);
+  outline-offset: 3px;
+}
+
+.board-select-mode-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--measure-board-gap) + var(--space-3));
+  transform: translateX(-50%);
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid rgba(236, 220, 170, 0.18);
+  border-radius: var(--radius-full);
+  background: rgba(17, 19, 24, 0.94);
+  color: var(--color-terminal-ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  box-shadow: 0 0.6rem 1.4rem rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.board-select-mode-bar[hidden] {
+  display: none;
+}
+
+.board-select-mode-label {
+  font-weight: 600;
+}
+
+.board-select-mode-count {
+  color: rgba(247, 204, 116, 0.85);
+  font-weight: 600;
+  min-width: 6.5em;
+}
+
+.board-select-mode-action {
+  border: 1px solid rgba(236, 220, 170, 0.18);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-terminal-ink);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  padding: 0.25em 0.85em;
+  cursor: pointer;
+}
+
+.board-select-mode-action:hover {
+  background: rgba(236, 220, 170, 0.08);
+}
+
+.board-select-mode-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.board-select-mode-danger {
+  border-color: rgba(247, 130, 130, 0.5);
+  color: rgba(247, 130, 130, 0.95);
+}
+
+.board-select-mode-danger:hover:not(:disabled) {
+  background: rgba(247, 130, 130, 0.12);
+}

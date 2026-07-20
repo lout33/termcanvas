@@ -186,6 +186,16 @@
                   <span>Install agent skill</span>
                 </button>
 
+                <button class="canvas-panel-menu-item" id="select-terminals-button" type="button" role="menuitem" aria-label="Select terminals" title="Select terminals to close in bulk">
+                  <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3 3.5h4v4H3z"></path>
+                    <path d="M9 3.5h4v4H9z"></path>
+                    <path d="M3 9.5h4v4H3z"></path>
+                    <path d="M9 9.5h4v4H9z"></path>
+                  </svg>
+                  <span>Select terminals</span>
+                </button>
+
                 <button class="canvas-panel-menu-item canvas-panel-danger-action" id="close-active-canvas-button" type="button" role="menuitem" aria-label="Close current canvas" title="Close current canvas" disabled>
                   <svg class="canvas-panel-action-icon" viewBox="0 0 16 16" aria-hidden="true">
                     <path d="M3.75 4.5h8.5"></path>
@@ -270,6 +280,13 @@
           </div>
 
           <svg class="canvas-edge-layer" id="canvas-edge-layer" aria-hidden="true"></svg>
+
+          <div class="board-select-mode-bar" id="board-select-mode-bar" role="status" aria-live="polite" aria-atomic="true" hidden>
+            <span class="board-select-mode-label" id="board-select-mode-label">Select terminals to close</span>
+            <span class="board-select-mode-count" id="board-select-mode-count">0 selected</span>
+            <button class="board-select-mode-action board-select-mode-danger" id="board-select-close-button" type="button" disabled>Close selected</button>
+            <button class="board-select-mode-action" id="board-select-cancel-button" type="button">Cancel (Esc)</button>
+          </div>
 
           <section class="nodes-layer" id="nodes-layer" aria-label="Infinite terminal canvas"></section>
         </section>

@@ -120,6 +120,12 @@ const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
 const installAgentSkillButton = document.getElementById("install-agent-skill-button");
+const selectTerminalsButton = document.getElementById("select-terminals-button");
+const boardSelectModeBar = document.getElementById("board-select-mode-bar");
+const boardSelectModeLabel = document.getElementById("board-select-mode-label");
+const boardSelectModeCount = document.getElementById("board-select-mode-count");
+const boardSelectCloseButton = document.getElementById("board-select-close-button");
+const boardSelectCancelButton = document.getElementById("board-select-cancel-button");
 const focusWorkspaceSearchButton = document.getElementById("focus-workspace-search-button");
 const openWorkspaceButton = document.getElementById("open-workspace-button");
 const refreshWorkspaceButton = document.getElementById("refresh-workspace-button");
@@ -7015,6 +7021,10 @@ function setActiveCanvas(canvasId) {
   if (activeCanvasId !== canvasId) {
     const previousCanvas = getActiveCanvas();
 
+    if (isCanvasSelectModeActive) {
+      exitCanvasSelectMode();
+    }
+
     if (!isSessionHydrating && previousCanvas !== null) {
       previousCanvas.workspace = serializeCanvasWorkspaceSession();
     }
@@ -7743,12 +7753,24 @@ async function createTerminalNode(options) {
   });
 
   elements.node.addEventListener("pointerdown", (event) => {
+    if (isCanvasSelectModeActive && event.button === 0) {
+      event.stopPropagation();
+      toggleNodeSelection(nodeRecord);
+      return;
+    }
     if (event.button === 0 && shouldSelectTerminal({ reason: "pointer" })) {
       setActiveNode(nodeRecord);
     }
   });
 
   elements.interactionOverlay.addEventListener("pointerdown", (event) => {
+    if (isCanvasSelectModeActive && event.button === 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleNodeSelection(nodeRecord);
+      return;
+    }
+
     if (event.button !== 0) {
       return;
     }
@@ -7763,6 +7785,11 @@ async function createTerminalNode(options) {
   });
 
   elements.dragArea.addEventListener("pointerdown", (event) => {
+    if (isCanvasSelectModeActive && event.button === 0) {
+      event.stopPropagation();
+      toggleNodeSelection(nodeRecord);
+      return;
+    }
     closeTerminalNodeMenu();
     startNodeDrag(event, nodeRecord, elements.dragArea);
   });
@@ -7888,6 +7915,13 @@ function getManagedNodePlacement(canvasRecord, agentSnapshot) {
 
 let pendingConnectSourceNode = null;
 
+// ── Canvas select mode ────────────────────────────────────────────────
+// Multi-select for closing many terminals at once. Toggle from the canvas
+// actions menu; click terminals to add/remove them; press Escape or click
+// "Close selected" to destroy the selected nodes and their sessions.
+let isCanvasSelectModeActive = false;
+const selectedTerminalNodes = new Set();
+
 function enterCanvasConnectMode(nodeRecord) {
   pendingConnectSourceNode = nodeRecord;
   document.body.classList.add("canvas-connect-mode");
@@ -7901,6 +7935,72 @@ function cancelCanvasConnectMode() {
 
   pendingConnectSourceNode = null;
   document.body.classList.remove("canvas-connect-mode");
+}
+
+function enterCanvasSelectMode() {
+  if (isCanvasSelectModeActive) {
+    return;
+  }
+  isCanvasSelectModeActive = true;
+  selectedTerminalNodes.clear();
+  document.body.classList.add("canvas-select-mode");
+  document.body.classList.remove("canvas-connect-mode");
+  pendingConnectSourceNode = null;
+  updateSelectModeBar();
+}
+
+function exitCanvasSelectMode() {
+  if (!isCanvasSelectModeActive) {
+    return;
+  }
+  isCanvasSelectModeActive = false;
+  selectedTerminalNodes.clear();
+  document.body.classList.remove("canvas-select-mode");
+  getActiveCanvas()?.nodes.forEach((nodeRecord) => {
+    nodeRecord.element?.classList.remove("is-selected");
+  });
+  updateSelectModeBar();
+}
+
+function toggleNodeSelection(nodeRecord) {
+  if (!isCanvasSelectModeActive || nodeRecord?.isRemoved) {
+    return;
+  }
+  if (selectedTerminalNodes.has(nodeRecord)) {
+    selectedTerminalNodes.delete(nodeRecord);
+    nodeRecord.element?.classList.remove("is-selected");
+  } else {
+    selectedTerminalNodes.add(nodeRecord);
+    nodeRecord.element?.classList.add("is-selected");
+  }
+  updateSelectModeBar();
+}
+
+function updateSelectModeBar() {
+  if (!(boardSelectModeBar instanceof HTMLElement)) {
+    return;
+  }
+  if (!isCanvasSelectModeActive) {
+    boardSelectModeBar.hidden = true;
+    return;
+  }
+  boardSelectModeBar.hidden = false;
+  const count = selectedTerminalNodes.size;
+  if (boardSelectModeCount instanceof HTMLElement) {
+    boardSelectModeCount.textContent = `${count} selected`;
+  }
+  if (boardSelectCloseButton instanceof HTMLButtonElement) {
+    boardSelectCloseButton.disabled = count === 0;
+  }
+}
+
+async function closeSelectedTerminals() {
+  if (selectedTerminalNodes.size === 0) {
+    return;
+  }
+  const toClose = [...selectedTerminalNodes];
+  exitCanvasSelectMode();
+  await Promise.all(toClose.map((nodeRecord) => destroyTerminalNode(nodeRecord, { shouldDestroySession: true })));
 }
 
 async function ensureManagedAgentName(nodeRecord) {
@@ -8312,6 +8412,10 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     return;
   }
 
+  selectedTerminalNodes.delete(nodeRecord);
+  nodeRecord.element?.classList.remove("is-selected");
+  updateSelectModeBar();
+
   nodeRecord.isRemoved = true;
 
   if (dragState.nodeRecord === nodeRecord) {
@@ -8560,6 +8664,28 @@ function handleWindowClick(event) {
 function handleWindowKeyDown(event) {
   if (event.defaultPrevented || event.repeat) {
     return;
+  }
+
+  if (isCanvasSelectModeActive) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      exitCanvasSelectMode();
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      if (selectedTerminalNodes.size > 0) {
+        event.preventDefault();
+        void closeSelectedTerminals();
+      }
+      return;
+    }
+    if (event.key === "Enter") {
+      if (selectedTerminalNodes.size > 0) {
+        event.preventDefault();
+        void closeSelectedTerminals();
+      }
+      return;
+    }
   }
 
   if (workspaceActionDialogState.isOpen === true && event.key === "Escape") {
@@ -9369,6 +9495,23 @@ installAgentSkillButton?.addEventListener("click", () => {
 
 canvasActionsMenuButton?.addEventListener("click", () => {
   toggleCanvasActionsMenu();
+});
+
+selectTerminalsButton?.addEventListener("click", () => {
+  closeCanvasActionsMenu({ restoreFocus: true });
+  if (isCanvasSelectModeActive) {
+    exitCanvasSelectMode();
+  } else {
+    enterCanvasSelectMode();
+  }
+});
+
+boardSelectCloseButton?.addEventListener("click", () => {
+  void closeSelectedTerminals();
+});
+
+boardSelectCancelButton?.addEventListener("click", () => {
+  exitCanvasSelectMode();
 });
 
 closeActiveCanvasButton?.addEventListener("click", () => {
