@@ -8596,8 +8596,7 @@ function handleBoardWheel(event) {
     || !shouldHandleCanvasWheel({
       target: event.target,
       board,
-      nodesLayer,
-      activeNodeElement: activeNodeRecord?.element ?? null
+      nodesLayer
     })
   ) {
     return;
