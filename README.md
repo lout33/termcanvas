@@ -14,6 +14,12 @@ The current direction is an agent-orchestration canvas: a fast, simple workspace
 
 Demo video: https://www.youtube.com/watch?v=4XN5jvk9P1U
 
+## Latest UI
+
+![TermCanvas v0.2.9 — sidebar terminal navigator tree with the agent spawn graph folded into branches, Explorer/Terminals view tabs, and the attention chip in the top header](./assets/termcanvas-v2.png)
+
+v0.2.9 moves the terminal tabs out of the top strip into a vertical tree in the sidebar. The tree mirrors the agent spawn graph (roots = no parent agent, children nested under their parent), with disclosure chevrons to fold subtrees you're not steering. Explorer and Terminals share the sidebar via two tabs. The "X agents need you" attention chip now lives in the top header so it stays visible while panning the canvas.
+
 ## What It Is
 
 - a spatial terminal workspace
