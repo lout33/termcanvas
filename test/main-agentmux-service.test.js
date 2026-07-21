@@ -155,6 +155,89 @@ test("canvas sync accepts a persisted project tag without a workspace folder", a
   }
 });
 
+test("resumeAgent parses tmux session name from agentmux resume output", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-resume-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    [
+      "import sys",
+      "assert sys.argv[1] == 'resume'",
+      "assert sys.argv[2] == 'opencode-worker'",
+      "print('Resumed opencode-worker (abc123)')",
+      "print('tmux: agentmux-opencode-worker-abc123')",
+      "print('run:  opencode --model ollama-cloud/glm-5.2 -s abc123')"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+    const result = await service.resumeAgent({ agentName: "opencode-worker" });
+
+    assert.equal(result.agentName, "opencode-worker");
+    assert.equal(result.tmuxSessionName, "agentmux-opencode-worker-abc123");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("resumeAgent passes prompt and ready timeout flags through", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-resume-flags-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    [
+      "import sys, json",
+      "print(json.dumps(sys.argv))",
+      "print('Resumed x (y)')",
+      "print('tmux: agentmux-x-y')",
+      "print('run:  opencode')"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+    const result = await service.resumeAgent({
+      agentName: "x",
+      prompt: "Continue the task",
+      readyTimeout: 10
+    });
+
+    assert.equal(result.agentName, "x");
+    assert.equal(result.tmuxSessionName, "agentmux-x-y");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("resumeAgent rejects when agent name is missing", async () => {
+  const repoRoot = path.join(__dirname, "..");
+  const service = createAgentmuxService({ agentmuxHomePath: path.join(repoRoot, ".tmp-agentmux-home") });
+
+  await assert.rejects(
+    () => service.resumeAgent({ agentName: null }),
+    /Agent name is required/u
+  );
+  await assert.rejects(
+    () => service.resumeAgent({}),
+    /Agent name is required/u
+  );
+});
+
 test("vendored agentmux recovers app-scoped home from a repaired tmux session", () => {
   const repoRoot = path.join(__dirname, "..");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-wrapper-home-"));

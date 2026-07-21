@@ -10,6 +10,8 @@ test("normalizeAppSessionSnapshot returns a safe empty session for invalid input
   assert.equal(snapshot.ui.isRailCollapsed, false);
   assert.equal(snapshot.ui.isSidebarCollapsed, true);
   assert.equal(snapshot.ui.hasDismissedBoardIntro, false);
+  assert.equal(snapshot.ui.activeSidebarView, "explorer");
+  assert.deepEqual(snapshot.ui.collapsedAgentNamesByCanvasId, []);
   assert.deepEqual(snapshot.canvases, []);
   assert.equal(snapshot.activeCanvasId, null);
 });
@@ -85,6 +87,7 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     },
     agentProjectTag: null,
     activeSessionKey: null,
+    notes: [],
     terminalNodes: [{
       sessionKey: null,
       managedAgentName: null,
@@ -305,4 +308,106 @@ test("normalizeAppSessionSnapshot migrates legacy top-level workspace onto the a
   });
   assert.equal(snapshot.canvases[2].workspace, null);
   assert.equal(Object.hasOwn(snapshot, "workspace"), false);
+});
+
+test("normalizeAppSessionSnapshot preserves canvas notes across restart", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    canvases: [{
+      id: "canvas-notes",
+      name: "Notes canvas",
+      notes: [
+        { id: "note-1", x: 100, y: 200, width: 300, height: 240, text: "remember this" },
+        { id: "note-2", x: -50, y: 60, width: 260, height: 180, text: "second note" }
+      ]
+    }]
+  });
+
+  assert.equal(snapshot.canvases.length, 1);
+  assert.equal(snapshot.canvases[0].notes.length, 2);
+  assert.deepEqual(snapshot.canvases[0].notes, [
+    { id: "note-1", x: 100, y: 200, width: 300, height: 240, text: "remember this" },
+    { id: "note-2", x: -50, y: 60, width: 260, height: 180, text: "second note" }
+  ]);
+});
+
+test("normalizeAppSessionSnapshot normalizes note snapshots and drops invalid ones", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    canvases: [{
+      id: "canvas-mixed",
+      notes: [
+        { id: "good", x: 10, y: 20, width: 5, height: 5, text: "tiny" },
+        null,
+        { text: "no id" },
+        { id: "  ", text: "blank id" },
+        { id: "empty-text", x: 0, y: 0 }
+      ]
+    }]
+  });
+
+  assert.equal(snapshot.canvases[0].notes.length, 2);
+  assert.deepEqual(snapshot.canvases[0].notes[0], {
+    id: "good",
+    x: 10,
+    y: 20,
+    width: 140,
+    height: 100,
+    text: "tiny"
+  });
+  assert.deepEqual(snapshot.canvases[0].notes[1], {
+    id: "empty-text",
+    x: 0,
+    y: 0,
+    width: 260,
+    height: 180,
+    text: ""
+  });
+});
+
+test("normalizeAppSessionSnapshot defaults notes to empty array when missing", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    canvases: [{ id: "canvas-no-notes" }]
+  });
+
+  assert.deepEqual(snapshot.canvases[0].notes, []);
+});
+
+test("normalizeAppSessionSnapshot preserves sidebar view and per-canvas collapsed agent names", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    ui: {
+      activeSidebarView: "terminals",
+      collapsedAgentNamesByCanvasId: [
+        { canvasId: "canvas-1", agentNames: ["worker-1", "worker-2"] },
+        { canvasId: "canvas-2", agentNames: ["router"] }
+      ]
+    },
+    canvases: [{ id: "canvas-1" }, { id: "canvas-2" }]
+  });
+
+  assert.equal(snapshot.ui.activeSidebarView, "terminals");
+  assert.deepEqual(snapshot.ui.collapsedAgentNamesByCanvasId, [
+    { canvasId: "canvas-1", agentNames: ["worker-1", "worker-2"] },
+    { canvasId: "canvas-2", agentNames: ["router"] }
+  ]);
+});
+
+test("normalizeAppSessionSnapshot drops empty and invalid collapsed agent name entries", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    ui: {
+      activeSidebarView: "invalid-value",
+      collapsedAgentNamesByCanvasId: [
+        { canvasId: "canvas-1", agentNames: ["ok", "", 7, null] },
+        { canvasId: "", agentNames: ["x"] },
+        { agentNames: ["y"] },
+        { canvasId: "canvas-2", agentNames: [] },
+        { canvasId: "canvas-2", agentNames: ["valid"] }
+      ]
+    },
+    canvases: [{ id: "canvas-1" }, { id: "canvas-2" }]
+  });
+
+  assert.equal(snapshot.ui.activeSidebarView, "explorer");
+  assert.deepEqual(snapshot.ui.collapsedAgentNamesByCanvasId, [
+    { canvasId: "canvas-1", agentNames: ["ok"] },
+    { canvasId: "canvas-2", agentNames: ["valid"] }
+  ]);
 });

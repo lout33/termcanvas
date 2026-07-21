@@ -413,6 +413,195 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
   }
 });
 
+test("terminal:create auto-resumes a managed agent when its tmux session is gone", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-auto-resume-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+  const ptySpawnCalls = [];
+  const originalWarn = console.warn;
+  const warnMessages = [];
+
+  console.warn = (message) => {
+    warnMessages.push(String(message));
+  };
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.writeFileSync(path.join(agentmuxRoot, "agentmux.py"), "#!/usr/bin/env python3\n", "utf8");
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: (command, args) => {
+          // agentmux resume invocation: python3 agentmux.py resume <name>
+          if (Array.isArray(args) && args.includes("resume")) {
+            return {
+              status: 0,
+              stdout: "Resumed opencode-worker (abc123)\ntmux: agentmux-opencode-worker-abc123\nrun:  opencode\n",
+              stderr: ""
+            };
+          }
+          if (command === "tmux" && args[0] === "-V") {
+            return { status: 0, stdout: "tmux 3.4", stderr: "" };
+          }
+          if (args[0] === "has-session") {
+            const sessionName = args[2];
+            if (typeof sessionName === "string" && sessionName.startsWith("termcanvas-probe-")) {
+              return { status: 0, stdout: "", stderr: "" };
+            }
+            // First has-session for the old name fails (missing).
+            // After resume, has-session for the resumed name succeeds.
+            if (sessionName === "agentmux-opencode-worker-abc123") {
+              return { status: 0, stdout: "", stderr: "" };
+            }
+            return { status: 1, stdout: "", stderr: "can't find session" };
+          }
+          if (args[0] === "new-session" || args[0] === "display-message" || args[0] === "show-environment" || args[0] === "set-environment") {
+            return { status: 0, stdout: "", stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        }
+      },
+      nodePtyStub: {
+        spawn: (command, args) => {
+          ptySpawnCalls.push({ command, args });
+          return createMockPtyProcess();
+        }
+      }
+    });
+
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    assert.equal(typeof createTerminalHandler, "function");
+
+    const created = await createTerminalHandler(
+      { sender: { id: 41 } },
+      {
+        terminalId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        cwd: os.homedir(),
+        sessionKey: "opencode-worker",
+        tmuxSessionName: "termcanvas-opencode-worker",
+        agentProjectTag: "project-watch",
+        managedAgentName: "opencode-worker"
+      }
+    );
+
+    // The auto-resume should have re-spawned opencode inside a fresh tmux
+    // session, so the terminal should be tmux-backed, not a plain shell.
+    assert.equal(created.backend, "tmux");
+    assert.equal(created.tmuxSessionName, "agentmux-opencode-worker-abc123");
+    assert.ok(
+      ptySpawnCalls.some(({ command, args }) => (
+        command === "tmux"
+        && Array.isArray(args)
+        && args.includes("attach-session")
+        && args.includes("agentmux-opencode-worker-abc123")
+      )),
+      "expected PTY to attach to the resumed tmux session"
+    );
+    assert.ok(
+      !warnMessages.some((message) => /Falling back to a plain shell PTY/u.test(message)),
+      "should not fall back to plain shell when resume succeeds"
+    );
+
+    delete require.cache[mainPath];
+  } finally {
+    console.warn = originalWarn;
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("terminal:create falls back to plain shell when managed agent resume fails", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-resume-fails-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+  const ptySpawnCalls = [];
+  const originalWarn = console.warn;
+  const warnMessages = [];
+
+  console.warn = (message) => {
+    warnMessages.push(String(message));
+  };
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.writeFileSync(path.join(agentmuxRoot, "agentmux.py"), "#!/usr/bin/env python3\n", "utf8");
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: (command, args) => {
+          if (Array.isArray(args) && args.includes("resume")) {
+            return { status: 1, stdout: "", stderr: "No session found for 'opencode-worker'" };
+          }
+          if (command === "tmux" && args[0] === "-V") {
+            return { status: 0, stdout: "tmux 3.4", stderr: "" };
+          }
+          if (args[0] === "has-session") {
+            const sessionName = args[2];
+            if (typeof sessionName === "string" && sessionName.startsWith("termcanvas-probe-")) {
+              return { status: 0, stdout: "", stderr: "" };
+            }
+            return { status: 1, stdout: "", stderr: "can't find session" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        }
+      },
+      nodePtyStub: {
+        spawn: (command, args) => {
+          ptySpawnCalls.push({ command, args });
+          return createMockPtyProcess();
+        }
+      }
+    });
+
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    const created = await createTerminalHandler(
+      { sender: { id: 41 } },
+      {
+        terminalId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        cwd: os.homedir(),
+        sessionKey: "opencode-worker",
+        tmuxSessionName: "termcanvas-opencode-worker",
+        agentProjectTag: "project-watch",
+        managedAgentName: "opencode-worker"
+      }
+    );
+
+    // Resume failed, so it should fall back to a plain shell.
+    assert.equal(created.backend, "pty");
+    assert.equal(created.tmuxSessionName, null);
+    assert.ok(
+      warnMessages.some((message) => /Could not resume agent 'opencode-worker'/u.test(message)),
+      "expected a warn about resume failure"
+    );
+
+    delete require.cache[mainPath];
+  } finally {
+    console.warn = originalWarn;
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("terminal:create reserves stable identity before concurrent requests can spawn duplicates", async () => {
   const ptyProcesses = [];
   const { handlers, mainPath } = loadMainWithMocks({

@@ -101,19 +101,27 @@ test("maximized terminal headers expose a clear exit fullscreen action", () => {
   assert.match(renderer, /isMaximized \? `Exit fullscreen for \$\{nodeRecord\.titleText\}` : `Maximize \$\{nodeRecord\.titleText\}`/);
 });
 
-test("terminal strip items attach reorder handling for active canvas terminals", () => {
+test("terminal navigator renders depth-indented rows from the agent spawn graph", () => {
   const renderer = readRenderer();
 
-  assert.match(renderer, /attachReorderableListItem\(stripItem, stripItem, \{/);
-  assert.match(renderer, /onMove: async \(_nodeId, targetIndex\) => reorderTerminalNodeById\(itemView\.id, targetIndex\)/);
-  assert.match(renderer, /stripItem\.setAttribute\("role", "tab"\);/);
-  assert.match(renderer, /stripItem\.setAttribute\("aria-label", `Focus \$\{itemView\.fullLabel \?\? itemView\.label\}`\);/);
-  assert.match(renderer, /stripItem\.setAttribute\("aria-current", "true"\);/);
+  // The top horizontal strip is gone — its old attachReorderableListItem call
+  // for terminal-strip items must not exist anymore.
+  assert.doesNotMatch(renderer, /attachReorderableListItem\(stripItem, stripItem, \{[\s\S]*kind: "terminal-strip"/);
+  // The strip prev/next overflow buttons are no longer wired.
+  assert.doesNotMatch(renderer, /terminalStripPrevButton\?\.addEventListener/);
+  assert.doesNotMatch(renderer, /terminalStripNextButton\?\.addEventListener/);
+
+  // The sidebar navigator builds a tree from managedParentAgent.
+  assert.match(renderer, /function renderTerminalNavigator\(\) \{/);
+  assert.match(renderer, /deriveTerminalTreeRows\(\{/);
+  assert.match(renderer, /function createTerminalNavigatorEntry\(row\) \{/);
+  assert.match(renderer, /button\.style\.setProperty\("--workspace-entry-depth", String\(row\.depth\)\)/);
+  // Sidebar view tabs switch between explorer and terminals.
+  assert.match(renderer, /function setActiveSidebarView\(nextView\) \{/);
+  assert.match(renderer, /sidebarViewExplorerTab\?\.addEventListener\("click", \(\) => \{/);
+  assert.match(renderer, /sidebarViewTerminalsTab\?\.addEventListener\("click", \(\) => \{/);
+  // Activation plumbing from the old strip is reused by the navigator.
   assert.match(renderer, /function activateAdjacentTerminalFromStrip\(direction\) \{/);
-  assert.match(renderer, /terminalStripPrevButton\?\.addEventListener\("click", \(\) => \{[\s\S]*activateAdjacentTerminalFromStrip\("backward"\);/);
-  assert.match(renderer, /terminalStripNextButton\?\.addEventListener\("click", \(\) => \{[\s\S]*activateAdjacentTerminalFromStrip\("forward"\);/);
-  assert.doesNotMatch(renderer, /scrollTerminalStrip\("backward"\)/);
-  assert.doesNotMatch(renderer, /scrollTerminalStrip\("forward"\)/);
 });
 
 test("canvas close is guarded by the header menu instead of the vertical rail", () => {

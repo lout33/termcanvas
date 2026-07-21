@@ -5,6 +5,11 @@ const DEFAULT_NODE_WIDTH = 636;
 const DEFAULT_NODE_HEIGHT = 414;
 const PREVIOUS_DEFAULT_NODE_WIDTH = 848;
 const PREVIOUS_DEFAULT_NODE_HEIGHT = 552;
+const DEFAULT_NOTE_WIDTH = 260;
+const DEFAULT_NOTE_HEIGHT = 180;
+const MIN_NOTE_WIDTH = 140;
+const MIN_NOTE_HEIGHT = 100;
+const MAX_NOTE_TEXT_LENGTH = 20000;
 
 function normalizeBoolean(value) {
   return value === true;
@@ -182,6 +187,30 @@ function normalizeTerminalNodeSnapshot(nodeSnapshot, options = {}) {
   };
 }
 
+function normalizeCanvasNoteSnapshot(noteSnapshot) {
+  if (noteSnapshot == null || typeof noteSnapshot !== "object") {
+    return null;
+  }
+
+  const id = normalizeString(noteSnapshot?.id);
+
+  if (id === null) {
+    return null;
+  }
+
+  const rawText = typeof noteSnapshot?.text === "string" ? noteSnapshot.text : "";
+  const text = rawText.length > MAX_NOTE_TEXT_LENGTH ? rawText.slice(0, MAX_NOTE_TEXT_LENGTH) : rawText;
+
+  return {
+    id,
+    x: normalizeNumber(noteSnapshot?.x, 0),
+    y: normalizeNumber(noteSnapshot?.y, 0),
+    width: Math.max(MIN_NOTE_WIDTH, normalizeNumber(noteSnapshot?.width, DEFAULT_NOTE_WIDTH)),
+    height: Math.max(MIN_NOTE_HEIGHT, normalizeNumber(noteSnapshot?.height, DEFAULT_NOTE_HEIGHT)),
+    text
+  };
+}
+
 function getTerminalNodeIdentityKeys(canvasSnapshot, nodeSnapshot) {
   const identityKeys = [];
 
@@ -352,6 +381,11 @@ function normalizeCanvasSnapshots(canvases, options = {}) {
     const terminalNodes = Array.isArray(canvasSnapshot?.terminalNodes)
       ? canvasSnapshot.terminalNodes.map((nodeSnapshot) => normalizeTerminalNodeSnapshot(nodeSnapshot, options))
       : [];
+    const notes = Array.isArray(canvasSnapshot?.notes)
+      ? canvasSnapshot.notes
+        .map((noteSnapshot) => normalizeCanvasNoteSnapshot(noteSnapshot))
+        .filter((note) => note !== null)
+      : [];
     const terminalSessionKeys = new Set(
       terminalNodes
         .map((nodeSnapshot) => nodeSnapshot.sessionKey)
@@ -375,7 +409,8 @@ function normalizeCanvasSnapshots(canvases, options = {}) {
       workspace: normalizeCanvasWorkspaceSnapshot(canvasSnapshot?.workspace),
       agentProjectTag: normalizeString(canvasSnapshot?.agentProjectTag),
       activeSessionKey,
-      terminalNodes
+      terminalNodes,
+      notes
     });
   });
 
@@ -404,12 +439,36 @@ function normalizeAppSessionSnapshot(snapshot) {
     }
   }
 
+  const normalizedSidebarView = snapshot?.ui?.activeSidebarView === "terminals"
+    ? "terminals"
+    : "explorer";
+
+  const normalizedCollapsedAgentNames = (() => {
+    if (!Array.isArray(snapshot?.ui?.collapsedAgentNamesByCanvasId)) {
+      return [];
+    }
+    return snapshot.ui.collapsedAgentNamesByCanvasId.flatMap((entry) => {
+      if (typeof entry?.canvasId !== "string" || entry.canvasId.length === 0) {
+        return [];
+      }
+      const agentNames = Array.isArray(entry.agentNames)
+        ? entry.agentNames.filter((name) => typeof name === "string" && name.length > 0)
+        : [];
+      if (agentNames.length === 0) {
+        return [];
+      }
+      return [{ canvasId: entry.canvasId, agentNames }];
+    });
+  })();
+
   return {
     version: APP_SESSION_VERSION,
     ui: {
       isRailCollapsed: normalizeBoolean(snapshot?.ui?.isRailCollapsed),
       isSidebarCollapsed: snapshot?.ui?.isSidebarCollapsed !== false,
-      hasDismissedBoardIntro: normalizeBoolean(snapshot?.ui?.hasDismissedBoardIntro)
+      hasDismissedBoardIntro: normalizeBoolean(snapshot?.ui?.hasDismissedBoardIntro),
+      activeSidebarView: normalizedSidebarView,
+      collapsedAgentNamesByCanvasId: normalizedCollapsedAgentNames
     },
     canvases,
     activeCanvasId

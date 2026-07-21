@@ -325,6 +325,37 @@ function createAgentmuxService(options = {}) {
     return { agentName };
   }
 
+  async function resumeAgent(payload) {
+    const agentName = normalizeNonEmptyString(payload?.agentName);
+
+    if (agentName === null) {
+      throw new Error("Agent name is required to resume a runtime.");
+    }
+
+    const args = ["resume", agentName];
+    const prompt = normalizeNonEmptyString(payload?.prompt);
+
+    if (prompt !== null) {
+      args.push("--prompt", prompt);
+    }
+
+    if (Number.isFinite(payload?.readyTimeout) && payload.readyTimeout > 0) {
+      args.push("--ready-timeout", String(payload.readyTimeout));
+    }
+
+    const output = await runAgentmuxCommand(args, `resume agent ${agentName}`);
+    const tmuxSessionLine = output
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .find((line) => line.startsWith("tmux:"));
+
+    const resumedTmuxSession = tmuxSessionLine !== undefined
+      ? normalizeNonEmptyString(tmuxSessionLine.slice("tmux:".length))
+      : null;
+
+    return { agentName, tmuxSessionName: resumedTmuxSession };
+  }
+
   function getAgentmuxBinPath() {
     if (fs.existsSync(wrapperPath)) {
       return wrapperPath;
@@ -400,6 +431,7 @@ function createAgentmuxService(options = {}) {
     deleteAgent,
     sendAgentPrompt,
     adoptAgent,
+    resumeAgent,
     connectAgents,
     getAgentmuxBinPath,
     buildTerminalRuntimeEnv,

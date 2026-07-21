@@ -7,6 +7,16 @@ function serializeCanvasSessionRecord(canvasRecord, exportedCanvas) {
     workspace: canvasRecord.workspace ?? null,
     agentProjectTag: canvasRecord.agentProjectTag ?? null,
     activeSessionKey: canvasRecord.activeSessionKey ?? null,
+    notes: Array.isArray(canvasRecord.notes)
+      ? canvasRecord.notes.map((note) => ({
+        id: note.id,
+        x: note.x,
+        y: note.y,
+        width: note.width,
+        height: note.height,
+        text: typeof note.text === "string" ? note.text : ""
+      }))
+      : [],
     terminalNodes: canvasRecord.nodes.map((nodeRecord, index) => ({
       ...exportedCanvas.terminalNodes[index],
       sessionKey: nodeRecord.sessionKey,

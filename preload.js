@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld(
     sendCanvasAgentPrompt: (agentName, message) => ipcRenderer.invoke("canvas-agent:send", { agentName, message }),
     connectCanvasAgents: (agentA, agentB) => ipcRenderer.invoke("canvas-agent:connect", { agentA, agentB }),
     adoptCanvasAgent: (payload) => ipcRenderer.invoke("canvas-agent:adopt", payload),
+    resumeCanvasAgent: (payload) => ipcRenderer.invoke("canvas-agent:resume", payload),
     updateCanvasSnapshot: (payload) => ipcRenderer.invoke("canvas-snapshot:update", payload),
     getAgentSkillStatus: () => ipcRenderer.invoke("agent-skill:status"),
     installAgentSkill: () => ipcRenderer.invoke("agent-skill:install"),

@@ -19,7 +19,8 @@ const {
   deriveCanvasSwitcherViewModel,
   deriveCanvasStripOverflowState,
   deriveTerminalStripViewModel,
-  deriveTerminalStripDropTarget
+  deriveTerminalStripDropTarget,
+  deriveTerminalTreeRows
 } = window.noteCanvasRendererCanvasSwitcher;
 const {
   shouldHandleCanvasWheel,
@@ -112,10 +113,11 @@ const canvasSwitcherSection = document.getElementById("canvas-switcher-section")
 const canvasStripList = document.getElementById("canvas-strip-list");
 const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button");
 const canvasStripNextButton = document.getElementById("canvas-strip-next-button");
-const terminalStripSection = document.getElementById("terminal-strip-section");
-const terminalStripList = document.getElementById("terminal-strip-list");
-const terminalStripPrevButton = document.getElementById("terminal-strip-prev-button");
-const terminalStripNextButton = document.getElementById("terminal-strip-next-button");
+const terminalNavigatorSection = document.getElementById("terminal-navigator-section");
+const terminalNavigator = document.getElementById("terminal-navigator");
+const sidebarViewSwitcher = document.getElementById("sidebar-view-switcher");
+const sidebarViewExplorerTab = document.getElementById("sidebar-view-explorer");
+const sidebarViewTerminalsTab = document.getElementById("sidebar-view-terminals");
 const createCanvasButton = document.getElementById("create-canvas-button");
 const exportCanvasButton = document.getElementById("export-canvas-button");
 const importCanvasButton = document.getElementById("import-canvas-button");
@@ -207,6 +209,13 @@ let activeTerminalNodeMenuRecord = null;
 let activeCanvasRenameId = null;
 let isRailCollapsed = false;
 let isSidebarCollapsed = true;
+// Sidebar view: "explorer" (file tree) or "terminals" (agent spawn tree).
+// Defaults to "terminals" when the active canvas has nodes — that's the
+// view Luis reaches for most. Toggled from the sidebar header tabs.
+let activeSidebarView = "explorer";
+// Per-canvas set of collapsed agent names for the terminal tree. Keyed by
+// canvas id so switching canvases restores each tree's own fold state.
+const collapsedAgentNamesByCanvasId = new Map();
 let hasDismissedBoardIntro = false;
 let isWindowUnloading = false;
 let renderedCanvasId = null;
@@ -221,9 +230,7 @@ let viewportSettleTimer = 0;
 const VIEWPORT_SETTLE_DELAY_MS = 120;
 let zoomIndicatorTimeout = 0;
 let canvasStripOverflowSyncFrame = 0;
-let terminalStripOverflowSyncFrame = 0;
 let shouldEnsureActiveCanvasStripItemVisible = false;
-let shouldEnsureActiveTerminalStripItemVisible = false;
 const pendingTerminalSizeNodes = new Set();
 const pendingTerminalRefreshNodes = new Set();
 const pendingTailUpdateNodes = new Set();
@@ -1176,7 +1183,11 @@ window.setInterval(() => {
 // ── Canvas sticky notes ────────────────────────────────────────────────
 // Plain text notes on the canvas: drag by the header, double-click the body
 // to edit, click away to save. Persisted with the canvas session/export.
+// Resize from edges and corners, mirroring terminal node resize handles.
 const canvasNoteElements = new Map();
+const NOTE_RESIZE_DIRECTIONS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
+const MIN_NOTE_WIDTH = 140;
+const MIN_NOTE_HEIGHT = 100;
 
 function createCanvasNoteElement(note) {
   const element = document.createElement("article");
@@ -1205,7 +1216,15 @@ function createCanvasNoteElement(note) {
   body.spellcheck = false;
   body.placeholder = "Double-click to write…";
 
-  element.append(header, body);
+  const resizeHandles = NOTE_RESIZE_DIRECTIONS.map((direction) => {
+    const handle = document.createElement("div");
+    handle.className = `canvas-note-resize-handle ${direction.length === 1 ? `edge-${direction}` : `corner-${direction}`}`;
+    handle.dataset.direction = direction;
+    handle.setAttribute("aria-hidden", "true");
+    return handle;
+  });
+
+  element.append(header, body, ...resizeHandles);
 
   // Keep board pan / terminal-creation gestures out of the note.
   element.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -1252,6 +1271,86 @@ function createCanvasNoteElement(note) {
     header.addEventListener("pointerup", handleUp);
     header.addEventListener("pointercancel", handleUp);
   });
+
+  for (const handle of resizeHandles) {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const activeCanvas = getActiveCanvas();
+
+      if (activeCanvas === null) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const direction = handle.dataset.direction || "";
+      const startClientX = event.clientX;
+      const startClientY = event.clientY;
+      const originX = note.x;
+      const originY = note.y;
+      const originWidth = note.width;
+      const originHeight = note.height;
+      element.classList.add("is-resizing");
+      handle.setPointerCapture(event.pointerId);
+
+      const handleMove = (moveEvent) => {
+        const scale = Number.isFinite(activeCanvas.viewportScale) && activeCanvas.viewportScale > 0
+          ? activeCanvas.viewportScale
+          : 1;
+        const deltaX = (moveEvent.clientX - startClientX) / scale;
+        const deltaY = (moveEvent.clientY - startClientY) / scale;
+        const originWest = originX - (originWidth / 2);
+        const originEast = originX + (originWidth / 2);
+        const originNorth = originY - (originHeight / 2);
+        const originSouth = originY + (originHeight / 2);
+        let nextWest = originWest;
+        let nextEast = originEast;
+        let nextNorth = originNorth;
+        let nextSouth = originSouth;
+
+        if (direction.includes("e")) {
+          nextEast = Math.max(originEast + deltaX, originWest + MIN_NOTE_WIDTH);
+        }
+
+        if (direction.includes("w")) {
+          nextWest = Math.min(originWest + deltaX, originEast - MIN_NOTE_WIDTH);
+        }
+
+        if (direction.includes("s")) {
+          nextSouth = Math.max(originSouth + deltaY, originNorth + MIN_NOTE_HEIGHT);
+        }
+
+        if (direction.includes("n")) {
+          nextNorth = Math.min(originNorth + deltaY, originSouth - MIN_NOTE_HEIGHT);
+        }
+
+        note.x = (nextWest + nextEast) / 2;
+        note.y = (nextNorth + nextSouth) / 2;
+        note.width = nextEast - nextWest;
+        note.height = nextSouth - nextNorth;
+        element.style.left = `${note.x}px`;
+        element.style.top = `${note.y}px`;
+        element.style.width = `${note.width}px`;
+        element.style.height = `${note.height}px`;
+      };
+
+      const handleUp = () => {
+        handle.removeEventListener("pointermove", handleMove);
+        handle.removeEventListener("pointerup", handleUp);
+        handle.removeEventListener("pointercancel", handleUp);
+        element.classList.remove("is-resizing");
+        scheduleAppSessionSave();
+      };
+
+      handle.addEventListener("pointermove", handleMove);
+      handle.addEventListener("pointerup", handleUp);
+      handle.addEventListener("pointercancel", handleUp);
+    });
+  }
 
   deleteButton.addEventListener("click", () => {
     const activeCanvas = getActiveCanvas();
@@ -1626,7 +1725,8 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       cwd: nodeRecord.cwd,
       sessionKey: nodeRecord.sessionKey,
       tmuxSessionName: nodeRecord.tmuxSessionName,
-      agentProjectTag: nodeRecord.canvas?.agentProjectTag ?? null
+      agentProjectTag: nodeRecord.canvas?.agentProjectTag ?? null,
+      managedAgentName: nodeRecord.managedAgentName
     });
 
     if (nodeRecord.isRemoved) {
@@ -2346,6 +2446,77 @@ function toggleSidebar() {
   setSidebarCollapsed(!isSidebarCollapsed);
 }
 
+function getCollapsedAgentNamesForCanvas(canvasId) {
+  if (typeof canvasId !== "string" || canvasId.length === 0) {
+    return new Set();
+  }
+  const stored = collapsedAgentNamesByCanvasId.get(canvasId);
+  if (stored instanceof Set) {
+    return stored;
+  }
+  const fresh = new Set();
+  collapsedAgentNamesByCanvasId.set(canvasId, fresh);
+  return fresh;
+}
+
+function isTerminalBranchCollapsed(canvasId, agentName) {
+  if (typeof agentName !== "string" || agentName.length === 0) {
+    return false;
+  }
+  return getCollapsedAgentNamesForCanvas(canvasId).has(agentName);
+}
+
+function toggleTerminalBranchCollapsed(canvasId, agentName) {
+  if (typeof agentName !== "string" || agentName.length === 0) {
+    return;
+  }
+  const set = getCollapsedAgentNamesForCanvas(canvasId);
+  if (set.has(agentName)) {
+    set.delete(agentName);
+  } else {
+    set.add(agentName);
+  }
+  scheduleAppSessionSave();
+}
+
+function setActiveSidebarView(nextView) {
+  const allowed = nextView === "terminals" ? "terminals" : "explorer";
+  if (activeSidebarView === allowed) {
+    return;
+  }
+  activeSidebarView = allowed;
+  updateSidebarViewTabs();
+  updateSidebarViewPanels();
+  scheduleAppSessionSave();
+}
+
+function updateSidebarViewTabs() {
+  const isExplorer = activeSidebarView === "explorer";
+  sidebarViewExplorerTab?.setAttribute("aria-selected", String(isExplorer));
+  sidebarViewTerminalsTab?.setAttribute("aria-selected", String(!isExplorer));
+}
+
+function updateSidebarViewPanels() {
+  const isExplorer = activeSidebarView === "explorer";
+  const explorerSection = document.getElementById("workspace-browser-section");
+  if (explorerSection instanceof HTMLElement) {
+    explorerSection.hidden = !isExplorer;
+  }
+  if (terminalNavigatorSection instanceof HTMLElement) {
+    terminalNavigatorSection.hidden = isExplorer;
+  }
+}
+
+function pickDefaultSidebarViewForCanvas(canvasRecord) {
+  // Terminals is the landing view — this is a terminal-first app and the
+  // navigator tree is the primary way to move around a fleet. Explorer is
+  // one click away via the sidebar tab.
+  if (canvasRecord && Array.isArray(canvasRecord.nodes) && canvasRecord.nodes.length > 0) {
+    return "terminals";
+  }
+  return "explorer";
+}
+
 function setRailCollapsed(nextValue) {
   isRailCollapsed = nextValue === true;
   appShell?.classList.toggle("is-rail-collapsed", isRailCollapsed);
@@ -2558,59 +2729,6 @@ function getActiveCanvasNodeById(nodeId) {
   return activeCanvas.nodes.find((candidate) => String(candidate.id) === nodeId) ?? null;
 }
 
-function syncTerminalStripOverflowControls() {
-  terminalStripOverflowSyncFrame = 0;
-
-  if (
-    !(terminalStripList instanceof HTMLElement)
-    || !(terminalStripPrevButton instanceof HTMLButtonElement)
-    || !(terminalStripNextButton instanceof HTMLButtonElement)
-  ) {
-    shouldEnsureActiveTerminalStripItemVisible = false;
-    return;
-  }
-
-  if (shouldEnsureActiveTerminalStripItemVisible) {
-    const activeStripItem = terminalStripList.querySelector(`[data-node-id="${activeNodeRecord?.id ?? ""}"]`);
-
-    if (activeStripItem instanceof HTMLElement) {
-      activeStripItem.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-  }
-
-  shouldEnsureActiveTerminalStripItemVisible = false;
-
-  const overflowState = deriveCanvasStripOverflowState({
-    scrollLeft: terminalStripList.scrollLeft,
-    clientWidth: terminalStripList.clientWidth,
-    scrollWidth: terminalStripList.scrollWidth
-  });
-  const activeCanvas = getActiveCanvas();
-  const terminalNodes = getVisibleCanvasNodes(activeCanvas);
-  const activeIndex = activeNodeRecord?.canvas === activeCanvas
-    ? terminalNodes.findIndex((nodeRecord) => nodeRecord === activeNodeRecord)
-    : -1;
-
-  terminalStripPrevButton.hidden = !overflowState.hasOverflow || terminalNodes.length <= 1;
-  terminalStripNextButton.hidden = !overflowState.hasOverflow || terminalNodes.length <= 1;
-  terminalStripPrevButton.disabled = activeIndex <= 0;
-  terminalStripNextButton.disabled = activeIndex >= terminalNodes.length - 1 && activeIndex >= 0;
-}
-
-function scheduleTerminalStripOverflowControlsSync(options = {}) {
-  if (options.ensureActiveVisible === true) {
-    shouldEnsureActiveTerminalStripItemVisible = true;
-  }
-
-  if (terminalStripOverflowSyncFrame !== 0) {
-    return;
-  }
-
-  terminalStripOverflowSyncFrame = requestAnimationFrame(() => {
-    syncTerminalStripOverflowControls();
-  });
-}
-
 function activateTerminalStripNode(nodeRecord, options = {}) {
   if (nodeRecord === null) {
     return;
@@ -2652,93 +2770,209 @@ function activateAdjacentTerminalFromStrip(direction) {
     : Math.min(terminalNodes.length - 1, activeIndex < 0 ? 0 : activeIndex + 1);
 
   if (activeIndex === nextIndex && activeIndex >= 0) {
-    scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
+    scheduleTerminalNavigatorScrollSync({ ensureActiveVisible: true });
     return;
   }
 
   activateTerminalStripNode(terminalNodes[nextIndex], { clickCount: 1 });
-  scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
+  scheduleTerminalNavigatorScrollSync({ ensureActiveVisible: true });
 }
 
-function createTerminalStripItem(itemView) {
-  const stripItem = document.createElement("button");
-  stripItem.type = "button";
-  stripItem.className = "terminal-strip-item";
-  stripItem.textContent = itemView.label;
-  stripItem.dataset.nodeId = itemView.id;
-  stripItem.setAttribute("role", "tab");
-  stripItem.setAttribute("aria-label", `Focus ${itemView.fullLabel ?? itemView.label}`);
-  stripItem.title = itemView.fullLabel ?? itemView.label;
+let terminalNavigatorScrollSyncFrame = 0;
+let shouldEnsureActiveTerminalNavigatorRowVisible = false;
 
-  if (itemView.isActive) {
-    stripItem.classList.add("is-active");
-    stripItem.setAttribute("aria-current", "true");
-    stripItem.setAttribute("aria-selected", "true");
-  } else {
-    stripItem.setAttribute("aria-selected", "false");
+function scheduleTerminalNavigatorScrollSync(options = {}) {
+  if (options.ensureActiveVisible === true) {
+    shouldEnsureActiveTerminalNavigatorRowVisible = true;
   }
-
-  if (itemView.isEmptyState) {
-    stripItem.disabled = true;
-    stripItem.classList.add("is-empty-state");
-    return stripItem;
+  if (terminalNavigatorScrollSyncFrame !== 0) {
+    return;
   }
-
-  const activateNodeFromStrip = (clickCount) => {
-    const nodeRecord = getActiveCanvasNodeById(itemView.id);
-
-    if (nodeRecord === null) {
+  terminalNavigatorScrollSyncFrame = requestAnimationFrame(() => {
+    terminalNavigatorScrollSyncFrame = 0;
+    if (!shouldEnsureActiveTerminalNavigatorRowVisible) {
       return;
     }
-
-    activateTerminalStripNode(nodeRecord, { clickCount });
-  };
-
-  stripItem.addEventListener("click", (event) => {
-    activateNodeFromStrip(event.detail);
+    shouldEnsureActiveTerminalNavigatorRowVisible = false;
+    const activeRow = terminalNavigator?.querySelector(`[data-node-id="${activeNodeRecord?.id ?? ""}"]`);
+    if (activeRow instanceof HTMLElement) {
+      activeRow.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   });
-
-  stripItem.addEventListener("dblclick", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    activateNodeFromStrip(2);
-  });
-
-  const itemIndex = getActiveCanvas()?.nodes.findIndex((nodeRecord) => String(nodeRecord.id) === itemView.id) ?? -1;
-
-  if (itemIndex >= 0) {
-    attachReorderableListItem(stripItem, stripItem, {
-      kind: "terminal-strip",
-      itemId: itemView.id,
-      index: itemIndex,
-      onMove: async (_nodeId, targetIndex) => reorderTerminalNodeById(itemView.id, targetIndex),
-      getDropTarget: ({ event, item, index, sourceIndex }) => {
-        const itemRect = item.getBoundingClientRect();
-
-        return deriveTerminalStripDropTarget({
-          itemOffset: itemRect.left,
-          itemSize: itemRect.width,
-          pointerOffset: event.clientX,
-          itemIndex: index,
-          sourceIndex
-        });
-      }
-    });
-  }
-
-  return stripItem;
 }
 
-function renderTerminalStrip() {
-  if (!(terminalStripList instanceof HTMLElement)) {
+function createTerminalNavigatorEntry(row) {
+  const item = document.createElement("li");
+  item.className = "terminal-navigator-row";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "terminal-navigator-entry";
+  button.dataset.nodeId = row.id;
+  button.style.setProperty("--workspace-entry-depth", String(row.depth));
+  button.title = row.label;
+  button.setAttribute("aria-label", row.hasChildren
+    ? `${row.isCollapsed ? "Expand" : "Collapse"} ${row.label}`
+    : `Focus ${row.label}`);
+
+  if (row.isActive) {
+    button.classList.add("is-active");
+    button.setAttribute("aria-current", "true");
+  }
+
+  if (row.hasChildren) {
+    button.dataset.hasChildren = "true";
+    button.setAttribute("aria-expanded", row.isCollapsed ? "false" : "true");
+  }
+
+  if (typeof row.runtimeState === "string" && row.runtimeState.length > 0) {
+    button.dataset.runtimeState = row.runtimeState;
+  }
+
+  if (typeof row.attention === "string" && row.attention.length > 0) {
+    button.dataset.attention = row.attention;
+  }
+
+  // Decoration: disclosure chevron (only when the row has children) + a
+  // terminal icon. Reuses the workspace-browser entry pattern.
+  const decoration = document.createElement("span");
+  decoration.className = "terminal-navigator-entry-decoration";
+
+  const disclosure = document.createElement("span");
+  disclosure.className = "terminal-navigator-disclosure";
+  if (row.hasChildren) {
+    disclosure.classList.toggle("is-expanded", !row.isCollapsed);
+    disclosure.innerHTML = '<svg class="terminal-navigator-disclosure-icon" viewBox="0 0 16 16"><path d="M6 3.75 10.75 8 6 12.25"></path></svg>';
+  } else {
+    disclosure.classList.add("is-placeholder");
+  }
+
+  const icon = document.createElement("span");
+  icon.className = "terminal-navigator-icon";
+  icon.innerHTML = '<svg class="terminal-navigator-icon-svg" viewBox="0 0 16 16"><path d="M3 4h10v6H3z"></path><path d="M5.5 12.5h5"></path><path d="M8 10v2.5"></path></svg>';
+
+  decoration.append(disclosure, icon);
+
+  const label = document.createElement("span");
+  label.className = "terminal-navigator-label";
+  label.textContent = row.label;
+
+  const status = document.createElement("span");
+  status.className = "terminal-navigator-status";
+  status.setAttribute("aria-hidden", "true");
+
+  button.append(decoration, label, status);
+
+  // Click behavior: if the row has children, the disclosure area toggles
+  // the branch fold. The rest of the row activates the terminal. Single
+  // click selects + centers; double-click also maximizes (matches the old
+  // top strip's behavior).
+  const activeCanvas = getActiveCanvas();
+  const canvasId = activeCanvas?.id ?? null;
+
+  button.addEventListener("click", (event) => {
+    if (row.hasChildren && event.target instanceof Element) {
+      const targetIsDisclosure = event.target.closest(".terminal-navigator-disclosure") !== null;
+      if (targetIsDisclosure) {
+        if (canvasId !== null && row.agentName !== null) {
+          toggleTerminalBranchCollapsed(canvasId, row.agentName);
+          renderTerminalNavigator();
+        }
+        return;
+      }
+    }
+    const nodeRecord = getActiveCanvasNodeById(row.id);
+    if (nodeRecord !== null) {
+      activateTerminalStripNode(nodeRecord, { clickCount: event.detail });
+    }
+  });
+
+  button.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nodeRecord = getActiveCanvasNodeById(row.id);
+    if (nodeRecord !== null) {
+      activateTerminalStripNode(nodeRecord, { clickCount: 2 });
+    }
+  });
+
+  item.append(button);
+  return item;
+}
+
+function renderTerminalNavigator() {
+  if (!(terminalNavigator instanceof HTMLElement)) {
     return;
   }
 
-  const viewModel = getTerminalStripViewModel();
-  terminalStripList.setAttribute("aria-label", viewModel.label);
-  terminalStripList.replaceChildren(...viewModel.items.map((itemView) => createTerminalStripItem(itemView)));
-  terminalStripSection?.classList.toggle("is-empty", viewModel.isEmpty);
-  scheduleTerminalStripOverflowControlsSync({ ensureActiveVisible: true });
+  const activeCanvas = getActiveCanvas();
+  const canvasId = activeCanvas?.id ?? null;
+  const collapsedAgentNames = canvasId !== null ? getCollapsedAgentNamesForCanvas(canvasId) : new Set();
+  const { isEmpty, rows } = deriveTerminalTreeRows({
+    activeCanvas,
+    activeNodeId: activeNodeRecord?.id ?? null,
+    collapsedAgentNames
+  });
+
+  // Preserve scroll across re-renders (same pattern as the file explorer).
+  const existingList = terminalNavigator.querySelector(".terminal-navigator-list");
+  const preservedScrollTop = existingList instanceof HTMLElement ? existingList.scrollTop : 0;
+  const fragment = document.createDocumentFragment();
+
+  // Summary header — canvas name + count, matches the explorer's summary.
+  const summary = document.createElement("div");
+  summary.className = "terminal-navigator-summary";
+
+  const summaryHeader = document.createElement("div");
+  summaryHeader.className = "terminal-navigator-summary-header";
+
+  const name = document.createElement("div");
+  name.className = "terminal-navigator-name";
+  name.textContent = (typeof activeCanvas?.name === "string" && activeCanvas.name.length > 0)
+    ? activeCanvas.name
+    : "No canvas";
+
+  summaryHeader.append(name);
+  summary.append(summaryHeader);
+
+  const meta = document.createElement("div");
+  meta.className = "terminal-navigator-meta";
+  meta.textContent = isEmpty
+    ? "0 terminals"
+    : `${rows.length} ${rows.length === 1 ? "terminal" : "terminals"}`;
+
+  summary.append(meta);
+  fragment.append(summary);
+
+  if (isEmpty) {
+    const empty = document.createElement("div");
+    empty.className = "terminal-navigator-empty";
+    empty.textContent = "No terminals in this canvas. Double-click the board to open one.";
+    fragment.append(empty);
+  } else {
+    const entryList = document.createElement("ul");
+    entryList.className = "terminal-navigator-list";
+    rows.forEach((row) => {
+      entryList.append(createTerminalNavigatorEntry(row));
+    });
+    fragment.append(entryList);
+  }
+
+  terminalNavigator.replaceChildren(fragment);
+
+  const nextList = terminalNavigator.querySelector(".terminal-navigator-list");
+  if (nextList instanceof HTMLElement && preservedScrollTop > 0) {
+    nextList.scrollTop = preservedScrollTop;
+  }
+
+  scheduleTerminalNavigatorScrollSync({ ensureActiveVisible: true });
+}
+
+function renderTerminalStrip() {
+  // The horizontal top strip was replaced by the sidebar terminal navigator
+  // tree. Kept as a thin shim so existing call sites stay wired until they
+  // are migrated.
+  renderTerminalNavigator();
 }
 
 function getActiveProjectDisplayName() {
@@ -6343,7 +6577,12 @@ function serializeAppSession() {
     ui: {
       isRailCollapsed,
       isSidebarCollapsed,
-      hasDismissedBoardIntro
+      hasDismissedBoardIntro,
+      activeSidebarView,
+      collapsedAgentNamesByCanvasId: [...collapsedAgentNamesByCanvasId.entries()].map(([canvasId, set]) => ({
+        canvasId,
+        agentNames: [...set]
+      }))
     },
     canvases: canvases.map(serializeCanvasSessionRecord),
     activeCanvasId
@@ -6566,6 +6805,8 @@ async function initializeApp() {
     setRailCollapsed(false);
     setSidebarCollapsed(true);
     setBoardIntroDismissed(false);
+    updateSidebarViewTabs();
+    updateSidebarViewPanels();
     renderCanvasSwitcher();
     renderWorkspaceBrowser();
     renderFileInspector();
@@ -6576,6 +6817,26 @@ async function initializeApp() {
       setRailCollapsed(sessionSnapshot.ui.isRailCollapsed);
       setSidebarCollapsed(sessionSnapshot.ui.isSidebarCollapsed);
       setBoardIntroDismissed(sessionSnapshot.ui.hasDismissedBoardIntro);
+
+      // Restore sidebar view preference and per-canvas terminal tree folds.
+      const persistedSidebarView = sessionSnapshot.ui?.activeSidebarView === "terminals"
+        ? "terminals"
+        : "explorer";
+      activeSidebarView = persistedSidebarView;
+      const persistedCollapsed = Array.isArray(sessionSnapshot.ui?.collapsedAgentNamesByCanvasId)
+        ? sessionSnapshot.ui.collapsedAgentNamesByCanvasId
+        : [];
+      collapsedAgentNamesByCanvasId.clear();
+      persistedCollapsed.forEach((entry) => {
+        if (typeof entry?.canvasId !== "string" || !Array.isArray(entry.agentNames)) {
+          return;
+        }
+        collapsedAgentNamesByCanvasId.set(
+          entry.canvasId,
+          new Set(entry.agentNames.filter((name) => typeof name === "string" && name.length > 0))
+        );
+      });
+
       await restoreCanvasSession(sessionSnapshot);
     }
 
@@ -6584,6 +6845,14 @@ async function initializeApp() {
     const activeCanvas = getActiveCanvas();
 
     if (activeCanvas !== null) {
+      // If the persisted sidebar view no longer fits the canvas (e.g. terminals
+      // view but the canvas has no nodes), fall back to the sensible default.
+      const defaultView = pickDefaultSidebarViewForCanvas(activeCanvas);
+      if (activeSidebarView === "terminals" && defaultView !== "terminals") {
+        activeSidebarView = defaultView;
+      }
+      updateSidebarViewTabs();
+      updateSidebarViewPanels();
       await restoreCanvasWorkspace(activeCanvas);
     } else {
       applyWorkspaceState(await window.noteCanvas.getWorkspaceDirectoryState());
@@ -7075,9 +7344,22 @@ function setActiveCanvas(canvasId) {
     scheduleCanvasAgentSync();
     scheduleAttentionRefresh();
 
+    // When switching canvases, default the sidebar to the view the user is
+    // most likely to need: terminals if the canvas has any, else explorer.
+    // Only auto-switch on real changes, not on session hydration (which
+    // restores the persisted view).
+    if (!isSessionHydrating) {
+      const nextDefaultView = pickDefaultSidebarViewForCanvas(nextCanvas);
+      if (nextDefaultView !== activeSidebarView) {
+        activeSidebarView = nextDefaultView;
+      }
+    }
+
     scheduleAppSessionSave();
   }
 
+  updateSidebarViewTabs();
+  updateSidebarViewPanels();
   renderCanvasSwitcher();
   renderCanvas({ syncTerminalSizes: true });
 }
@@ -8139,6 +8421,17 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
   }
 
   const previousTmuxSessionName = nodeRecord.tmuxSessionName;
+  const agentRuntimeState = typeof agentSnapshot?.runtime_state === "string"
+    ? agentSnapshot.runtime_state
+    : null;
+
+  // The agent's tmux session is gone (e.g. tmux server restarted). Try to
+  // resume the runtime via `agentmux resume` before rebinding, so the user
+  // sees a live opencode/claude session instead of a dead shell.
+  if (agentRuntimeState === "stopped" && !nodeRecord.isRemoved) {
+    await resumeManagedAgentRuntime(nodeRecord, agentSnapshot);
+    return;
+  }
 
   if (previousTmuxSessionName === nextTmuxSessionName) {
     return;
@@ -8155,6 +8448,52 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
     setNodeExitedState(nodeRecord, null, null);
     setTerminalNodeStatus(nodeRecord, "Attach failed");
     nodeRecord.meta.textContent = `Could not attach to ${nextTmuxSessionName}`;
+  }
+}
+
+async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
+  if (nodeRecord.isRemoved || nodeRecord.managedAgentName === null) {
+    return;
+  }
+
+  const projectTag = typeof agentSnapshot?.project === "string" && agentSnapshot.project.length > 0
+    ? agentSnapshot.project
+    : nodeRecord.managedProjectTag;
+
+  setTerminalNodeStatus(nodeRecord, "Resuming");
+  nodeRecord.meta.textContent = "Restarting agent runtime";
+
+  try {
+    const result = await window.noteCanvas.resumeCanvasAgent({
+      agentName: nodeRecord.managedAgentName,
+      projectTag
+    });
+
+    if (result?.error) {
+      throw new Error(result.error);
+    }
+
+    const resumedTmuxSessionName = typeof result?.tmuxSessionName === "string" && result.tmuxSessionName.length > 0
+      ? result.tmuxSessionName
+      : null;
+
+    if (resumedTmuxSessionName === null) {
+      throw new Error("Resume did not return a tmux session name.");
+    }
+
+    nodeRecord.tmuxSessionName = resumedTmuxSessionName;
+    nodeRecord.backend = "tmux";
+    nodeRecord.isExited = false;
+    nodeRecord.exitCode = null;
+    nodeRecord.exitSignal = null;
+
+    await releaseTerminalSession(nodeRecord);
+    await bindTerminalSession(nodeRecord, { shouldFocus: false });
+  } catch (error) {
+    console.error(error);
+    setNodeExitedState(nodeRecord, null, null);
+    setTerminalNodeStatus(nodeRecord, "Resume failed");
+    nodeRecord.meta.textContent = error instanceof Error ? error.message : "Could not resume agent";
   }
 }
 
@@ -8271,6 +8610,12 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
   if (didChangeNodeSet || didChangeCanvasGraph || didChangeManagedState) {
     scheduleAttentionRefresh();
     scheduleAppSessionSave();
+    // The terminal navigator tree shows runtime state (running/stopped/
+    // attention) as colored status dots. Re-render it whenever managed
+    // state changes so the dots stay in sync.
+    if (didChangeManagedState && !didChangeNodeSet) {
+      renderTerminalNavigator();
+    }
   }
 }
 
@@ -9545,24 +9890,12 @@ canvasStripList?.addEventListener("scroll", () => {
   scheduleCanvasStripOverflowControlsSync();
 });
 
-terminalStripList?.addEventListener("scroll", () => {
-  scheduleTerminalStripOverflowControlsSync();
-});
-
 canvasStripPrevButton?.addEventListener("click", () => {
   scrollCanvasStrip("backward");
 });
 
 canvasStripNextButton?.addEventListener("click", () => {
   scrollCanvasStrip("forward");
-});
-
-terminalStripPrevButton?.addEventListener("click", () => {
-  activateAdjacentTerminalFromStrip("backward");
-});
-
-terminalStripNextButton?.addEventListener("click", () => {
-  activateAdjacentTerminalFromStrip("forward");
 });
 
 window.addEventListener("resize", () => {
@@ -9612,6 +9945,14 @@ deleteWorkspaceEntryButton?.addEventListener("click", () => {
 
 sidebarToggleButton?.addEventListener("click", () => {
   toggleSidebar();
+});
+
+sidebarViewExplorerTab?.addEventListener("click", () => {
+  setActiveSidebarView("explorer");
+});
+
+sidebarViewTerminalsTab?.addEventListener("click", () => {
+  setActiveSidebarView("terminals");
 });
 
 railToggleButton?.addEventListener("click", () => {

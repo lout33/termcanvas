@@ -811,11 +811,11 @@ button {
 .canvas-strip-main:focus-visible,
 .canvas-panel-icon-button:focus-visible,
 .canvas-strip-input:focus,
-.terminal-strip-overflow-button:focus-visible,
-.terminal-strip-item:focus-visible,
 .canvas-list-button:focus-visible,
 .canvas-list-action:focus-visible,
-.canvas-panel-menu-item:focus-visible {
+.canvas-panel-menu-item:focus-visible,
+.sidebar-view-tab:focus-visible,
+.terminal-navigator-entry:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
 }
@@ -1105,6 +1105,302 @@ button {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* --- Sidebar view switcher (Explorer / Terminals) -------------------- */
+/*
+ * Two small tabs at the top of the sidebar. Only one view is visible at a
+ * time so neither clutters the other. Mirrors the VS Code Activity Bar →
+ * Sidebar pattern but condensed into the sidebar header because the app
+ * rail is already taken by the canvas switcher.
+ */
+.sidebar-view-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.18rem;
+  border: 1px solid var(--color-sidebar-rule);
+  border-radius: var(--radius-md);
+  background: rgba(10, 12, 16, 0.62);
+}
+
+.sidebar-view-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.32rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-md) - 0.18rem);
+  background: transparent;
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base);
+}
+
+.sidebar-view-tab:hover {
+  color: var(--color-ink);
+  background: rgba(37, 40, 48, 0.55);
+}
+
+.sidebar-view-tab[aria-selected="true"] {
+  background: rgba(230, 165, 39, 0.18);
+  border-color: rgba(247, 204, 116, 0.34);
+  color: rgba(255, 232, 166, 0.94);
+  box-shadow: inset 0 0 0 1px rgba(247, 204, 116, 0.12);
+}
+
+.sidebar-view-panel[hidden] {
+  display: none;
+}
+
+/* --- Terminal navigator (sidebar tree) ------------------------------- */
+/*
+ * Reuses the workspace-browser-entry pattern: depth-indented rows via the
+ * same `--workspace-entry-depth` CSS var, disclosure chevron for branches,
+ * amber selection. The tree mirrors the agent spawn graph (roots = no
+ * parent agent; children = nodes whose managedParentAgent matches a root).
+ */
+#terminal-navigator-section {
+  min-height: 0;
+}
+
+.terminal-navigator {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: min(20rem, 60vh);
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.terminal-navigator-summary,
+.terminal-navigator-empty {
+  padding: var(--space-3);
+}
+
+.terminal-navigator-summary {
+  display: grid;
+  gap: 0.25rem;
+  margin-bottom: var(--space-2);
+  padding: var(--space-3) 0 var(--space-2);
+  border-bottom: 1px dashed rgba(236, 220, 170, 0.16);
+  background: transparent;
+}
+
+.terminal-navigator-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.terminal-navigator-name {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-navigator-meta {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sidebar-meta);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.terminal-navigator-empty {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.terminal-navigator-list {
+  display: grid;
+  align-content: start;
+  gap: 0.0625rem;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-3);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  list-style: none;
+}
+
+.terminal-navigator-row {
+  min-width: 0;
+}
+
+.terminal-navigator-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 1.95rem;
+  padding: 0.12rem 0.55rem;
+  padding-left: calc(0.55rem + (var(--workspace-entry-depth, 0) * 1rem));
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  /* contain: layout paint — keep each row in its own cheap paint layer so a
+     20+ row tree doesn't push the sidebar's composited layer over Chromium's
+     tile memory budget (the "tile memory limits exceeded" warning). */
+  contain: layout paint;
+  transition:
+    background var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base);
+}
+
+.terminal-navigator-entry:hover {
+  background: rgba(37, 40, 48, 0.68);
+  border-color: rgba(236, 220, 170, 0.08);
+}
+
+.terminal-navigator-entry.is-active {
+  background: rgba(230, 165, 39, 0.22);
+  border-color: rgba(247, 204, 116, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(247, 204, 116, 0.12);
+}
+
+.terminal-navigator-entry-decoration {
+  display: inline-grid;
+  grid-template-columns: 0.875rem 1rem;
+  align-items: center;
+  gap: 0.125rem;
+  color: var(--color-muted);
+}
+
+.terminal-navigator-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-left: -0.18rem;
+  border-radius: 0.35rem;
+  color: rgba(178, 166, 145, 0.72);
+  cursor: pointer;
+  transition:
+    background var(--transition-base),
+    color var(--transition-base),
+    transform var(--transition-base);
+}
+
+.terminal-navigator-disclosure:hover {
+  background: rgba(37, 40, 48, 0.85);
+  color: var(--color-ink);
+}
+
+.terminal-navigator-entry[data-has-children="true"] .terminal-navigator-disclosure {
+  cursor: pointer;
+}
+
+.terminal-navigator-disclosure.is-expanded {
+  transform: rotate(90deg);
+}
+
+.terminal-navigator-disclosure.is-placeholder {
+  opacity: 0;
+}
+
+.terminal-navigator-disclosure-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.terminal-navigator-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  color: rgba(178, 166, 145, 0.72);
+}
+
+.terminal-navigator-icon-svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.terminal-navigator-entry[data-runtime-state="running"] .terminal-navigator-icon,
+.terminal-navigator-entry[data-runtime-state="ready"] .terminal-navigator-icon {
+  color: rgba(143, 220, 255, 0.78);
+}
+
+.terminal-navigator-entry[data-runtime-state="stopped"] .terminal-navigator-icon,
+.terminal-navigator-entry[data-runtime-state="exited"] .terminal-navigator-icon {
+  color: rgba(143, 130, 110, 0.6);
+}
+
+.terminal-navigator-entry[data-attention="waiting"] .terminal-navigator-icon {
+  color: rgba(247, 204, 116, 0.94);
+}
+
+.terminal-navigator-label {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-navigator-entry.is-active .terminal-navigator-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.terminal-navigator-status {
+  display: inline-flex;
+  align-items: center;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: rgba(178, 166, 145, 0.42);
+}
+
+.terminal-navigator-entry[data-runtime-state="ready"] .terminal-navigator-status,
+.terminal-navigator-entry[data-runtime-state="running"] .terminal-navigator-status {
+  background: rgba(143, 220, 255, 0.85);
+}
+
+.terminal-navigator-entry[data-runtime-state="stopped"] .terminal-navigator-status,
+.terminal-navigator-entry[data-runtime-state="exited"] .terminal-navigator-status {
+  background: rgba(143, 130, 110, 0.55);
+}
+
+.terminal-navigator-entry[data-attention="waiting"] .terminal-navigator-status {
+  background: rgba(247, 204, 116, 0.94);
+  box-shadow: 0 0 0.5rem rgba(247, 204, 116, 0.55);
 }
 
 .file-inspector {
@@ -2243,8 +2539,7 @@ button {
 }
 
 .app-rail-action,
-.canvas-strip-overflow-button,
-.terminal-strip-overflow-button {
+.canvas-strip-overflow-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2264,16 +2559,13 @@ button {
 
 .app-rail-action:hover,
 .canvas-strip-overflow-button:hover,
-.canvas-strip-overflow-button:not(:disabled):hover,
-.terminal-strip-overflow-button:hover,
-.terminal-strip-overflow-button:not(:disabled):hover {
+.canvas-strip-overflow-button:not(:disabled):hover {
   background: rgba(230, 165, 39, 0.22);
   border-color: var(--color-phosphor-accent-strong);
   color: var(--color-ink);
 }
 
-.canvas-strip-overflow-button:disabled,
-.terminal-strip-overflow-button:disabled {
+.canvas-strip-overflow-button:disabled {
   opacity: 0.42;
   cursor: default;
 }
@@ -2298,72 +2590,7 @@ button {
 }
 
 .terminal-strip-topbar-section {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  flex: 1 1 18rem;
-  min-height: 2.05rem;
-  padding-left: 0;
-  margin-left: 0;
-  border: 0;
-  background: transparent;
-}
-
-.terminal-strip-topbar-section.is-empty {
   display: none;
-}
-
-.terminal-strip-shell {
-  display: flex;
-  align-items: center;
-  gap: 0.28rem;
-  width: 100%;
-  min-width: 0;
-  padding: 0.08rem;
-  border-radius: 0.62rem;
-  background: rgba(10, 12, 16, 0.46);
-}
-
-.terminal-strip-list {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
-  align-items: center;
-  gap: 0.28rem;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  flex: 1 1 auto;
-  padding: 0.05rem;
-}
-
-.terminal-strip-list::-webkit-scrollbar {
-  display: none;
-}
-
-.terminal-strip-item {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 1.72rem;
-  max-width: 14rem;
-  padding: 0.24rem 0.64rem;
-  border: 1px solid transparent;
-  border-radius: 0.8rem;
-  background: rgba(24, 27, 34, 0.72);
-  color: var(--color-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  letter-spacing: 0.015em;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
 }
 
 .canvas-strip-item {
@@ -2421,36 +2648,11 @@ button {
   outline: none;
 }
 
-.terminal-strip-item {
-  min-height: 1.58rem;
-  max-width: 6.8rem;
-  min-width: 3.15rem;
-  padding: 0.16rem 0.44rem;
-  color: var(--color-terminal-muted);
-  font-size: 0.74rem;
-  border-radius: 0.62rem;
-  background: rgba(24, 27, 34, 0.78);
-}
-
-.terminal-strip-item:hover {
-  background: rgba(230, 165, 39, 0.18);
-  border-color: rgba(247, 204, 116, 0.3);
-  color: var(--color-ink);
-  transform: translateY(-1px);
-}
-
 .canvas-strip-item:hover {
   background: rgba(230, 165, 39, 0.18);
   border-color: rgba(247, 204, 116, 0.3);
   color: var(--color-ink);
   transform: translateY(-1px);
-}
-
-.terminal-strip-item.is-active {
-  background: rgba(230, 165, 39, 0.22);
-  border-color: rgba(247, 204, 116, 0.46);
-  color: rgba(255, 232, 166, 0.94);
-  box-shadow: inset 0 0 0 1px rgba(247, 204, 116, 0.16);
 }
 
 .canvas-strip-item.is-active {
@@ -2460,37 +2662,12 @@ button {
   box-shadow: inset 0 0 0 1px rgba(247, 204, 116, 0.16);
 }
 
-.terminal-strip-item.is-active {
-  background: rgba(230, 165, 39, 0.22);
-  border-color: rgba(247, 204, 116, 0.46);
-  color: rgba(255, 232, 166, 0.94);
-}
-
-.terminal-strip-item.is-empty-state {
-  justify-content: flex-start;
-  max-width: none;
-  min-width: 0;
-  color: var(--color-terminal-muted);
-  cursor: default;
-  transform: none;
-}
-
-.terminal-strip-topbar-section .terminal-strip-overflow-button {
-  min-width: 1.48rem;
-  min-height: 1.48rem;
-  border-radius: 0.52rem;
-  font-size: 0.72rem;
-}
-
-.canvas-strip-item.is-dragging,
-.terminal-strip-item.is-dragging {
+.canvas-strip-item.is-dragging {
   opacity: 0.58;
 }
 
 .canvas-strip-item.is-drop-before::before,
-.canvas-strip-item.is-drop-after::after,
-.terminal-strip-item.is-drop-before::before,
-.terminal-strip-item.is-drop-after::after {
+.canvas-strip-item.is-drop-after::after {
   content: "";
   position: absolute;
   top: 0.1rem;
@@ -2501,21 +2678,17 @@ button {
   box-shadow: 0 0 0.75rem rgba(125, 168, 255, 0.34);
 }
 
-.canvas-strip-item.is-drop-before::before,
-.terminal-strip-item.is-drop-before::before {
+.canvas-strip-item.is-drop-before::before {
   left: -0.32rem;
 }
 
-.canvas-strip-item.is-drop-after::after,
-.terminal-strip-item.is-drop-after::after {
+.canvas-strip-item.is-drop-after::after {
   right: -0.32rem;
 }
 
 .app-rail-action:active,
 .canvas-strip-overflow-button:active,
-.terminal-strip-overflow-button:active,
-.canvas-strip-main:active,
-.terminal-strip-item:active {
+.canvas-strip-main:active {
   transform: translateY(0);
 }
 
@@ -2546,7 +2719,6 @@ button {
 .nodes-layer {
   transform: translate(var(--grid-offset-x), var(--grid-offset-y)) scale(var(--viewport-scale));
   transform-origin: top left;
-  will-change: transform;
 }
 
 /* Delegation edges (commander -> worker), drawn behind the node cards and
@@ -2560,7 +2732,6 @@ button {
   pointer-events: none;
   transform: translate(var(--grid-offset-x), var(--grid-offset-y)) scale(var(--viewport-scale));
   transform-origin: top left;
-  will-change: transform;
 }
 
 .canvas-edge-path {
@@ -2975,7 +3146,6 @@ button {
   box-shadow: var(--shadow-terminal-card);
   transform: translate(-50%, -50%);
   transition: none;
-  will-change: left, top;
 }
 
 .terminal-node[hidden] {
@@ -3654,8 +3824,7 @@ button {
     max-width: 22vw;
   }
 
-  .canvas-strip-item,
-  .terminal-strip-item {
+  .canvas-strip-item {
     max-width: 11rem;
   }
 
@@ -3746,14 +3915,13 @@ button {
 }
 
 .board-attention-chip {
-  position: absolute;
-  top: calc(var(--measure-board-gap) + var(--space-2));
-  left: 50%;
-  z-index: 6;
+  flex: 1 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
-  min-height: 2rem;
+  min-height: 1.7rem;
   padding: 0 var(--space-3);
   border: 1px solid rgba(251, 191, 36, 0.42);
   border-radius: var(--radius-full);
@@ -3768,11 +3936,18 @@ button {
     0 0 0.9rem rgba(251, 191, 36, 0.14),
     0 0.55rem 1.2rem rgba(0, 0, 0, 0.36);
   cursor: pointer;
-  transform: translateX(-50%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The chip hosts an infinite `::before` animation. Containing it keeps
+     that animation in its own paint layer instead of invalidating the whole
+     header (which would otherwise push Chromium's tile memory budget). */
+  contain: layout paint;
 }
 
 .board-attention-chip::before {
   content: "";
+  flex: 0 0 auto;
   width: 0.44rem;
   height: 0.44rem;
   border-radius: 999px;
@@ -3784,6 +3959,11 @@ button {
 .board-attention-chip:hover {
   border-color: rgba(251, 191, 36, 0.65);
   background: rgba(30, 25, 14, 0.95);
+}
+
+.board-attention-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--measure-focus-ring) var(--color-note-focus);
 }
 
 .board-attention-chip[hidden] {
@@ -3847,11 +4027,6 @@ button {
   align-items: center;
   gap: 0.4rem;
   transform: translateX(-50%);
-}
-
-.board-hud-center .board-attention-chip {
-  position: static;
-  transform: none;
 }
 
 .board-fleet-chip {
@@ -3971,6 +4146,131 @@ button {
 
 .canvas-note-body::placeholder {
   color: rgba(217, 192, 138, 0.4);
+}
+
+.canvas-note-resize-handle {
+  position: absolute;
+  z-index: 2;
+}
+
+.canvas-note-resize-handle.edge-n,
+.canvas-note-resize-handle.edge-s {
+  left: 0.5rem;
+  right: 0.5rem;
+  height: var(--measure-node-resize-hit);
+  cursor: ns-resize;
+}
+
+.canvas-note-resize-handle.edge-e,
+.canvas-note-resize-handle.edge-w {
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: var(--measure-node-resize-hit);
+  cursor: ew-resize;
+}
+
+.canvas-note-resize-handle.edge-n {
+  top: calc(var(--measure-node-resize-hit) * -0.5);
+}
+
+.canvas-note-resize-handle.edge-s {
+  bottom: calc(var(--measure-node-resize-hit) * -0.5);
+}
+
+.canvas-note-resize-handle.edge-e {
+  right: calc(var(--measure-node-resize-hit) * -0.5);
+}
+
+.canvas-note-resize-handle.edge-w {
+  left: calc(var(--measure-node-resize-hit) * -0.5);
+}
+
+.canvas-note-resize-handle.corner-nw,
+.canvas-note-resize-handle.corner-ne,
+.canvas-note-resize-handle.corner-sw,
+.canvas-note-resize-handle.corner-se {
+  width: var(--measure-node-resize-corner);
+  height: var(--measure-node-resize-corner);
+}
+
+.canvas-note-resize-handle.corner-nw {
+  top: calc(var(--measure-node-resize-hit) * -0.5);
+  left: calc(var(--measure-node-resize-hit) * -0.5);
+  cursor: nwse-resize;
+}
+
+.canvas-note-resize-handle.corner-ne {
+  top: calc(var(--measure-node-resize-hit) * -0.5);
+  right: calc(var(--measure-node-resize-hit) * -0.5);
+  cursor: nesw-resize;
+}
+
+.canvas-note-resize-handle.corner-sw {
+  bottom: calc(var(--measure-node-resize-hit) * -0.5);
+  left: calc(var(--measure-node-resize-hit) * -0.5);
+  cursor: nesw-resize;
+}
+
+.canvas-note-resize-handle.corner-se {
+  right: calc(var(--measure-node-resize-hit) * -0.5);
+  bottom: calc(var(--measure-node-resize-hit) * -0.5);
+  cursor: nwse-resize;
+}
+
+.canvas-note-resize-handle.corner-se::after,
+.canvas-note-resize-handle.corner-sw::after,
+.canvas-note-resize-handle.corner-ne::after,
+.canvas-note-resize-handle.corner-nw::after {
+  content: "";
+  position: absolute;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-color: rgba(236, 220, 170, 0.18);
+  border-style: solid;
+  opacity: 0;
+  transition: opacity var(--transition-base), border-color var(--transition-base);
+}
+
+.canvas-note-resize-handle.corner-se::after {
+  right: 0.125rem;
+  bottom: 0.125rem;
+  border-width: 0 1px 1px 0;
+}
+
+.canvas-note-resize-handle.corner-sw::after {
+  left: 0.125rem;
+  bottom: 0.125rem;
+  border-width: 0 0 1px 1px;
+}
+
+.canvas-note-resize-handle.corner-ne::after {
+  right: 0.125rem;
+  top: 0.125rem;
+  border-width: 1px 1px 0 0;
+}
+
+.canvas-note-resize-handle.corner-nw::after {
+  left: 0.125rem;
+  top: 0.125rem;
+  border-width: 1px 0 0 1px;
+}
+
+.canvas-note:hover .canvas-note-resize-handle.corner-se::after,
+.canvas-note:hover .canvas-note-resize-handle.corner-sw::after,
+.canvas-note:hover .canvas-note-resize-handle.corner-ne::after,
+.canvas-note:hover .canvas-note-resize-handle.corner-nw::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-se::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-sw::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-ne::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-nw::after {
+  opacity: 1;
+}
+
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-se::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-sw::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-ne::after,
+.canvas-note.is-resizing .canvas-note-resize-handle.corner-nw::after {
+  border-color: rgba(247, 204, 116, 0.4);
 }
 
 /* ── Canvas select mode ─────────────────────────────────────────────── */

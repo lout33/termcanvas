@@ -1810,6 +1810,9 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   const agentProjectTag = typeof payload?.agentProjectTag === "string" && payload.agentProjectTag.trim().length > 0
     ? payload.agentProjectTag.trim()
     : null;
+  const payloadManagedAgentName = typeof payload?.managedAgentName === "string" && payload.managedAgentName.trim().length > 0
+    ? payload.managedAgentName.trim()
+    : null;
   // Fresh canvas terminals are born as managed root agents so every process
   // inside them (claude, codex, ...) inherits AGENTMUX_* context. Restored
   // terminals reattach to existing tmux sessions and keep their agent record.
@@ -1853,9 +1856,37 @@ ipcMain.handle("terminal:create", async (event, payload) => {
       });
     } catch (error) {
       if (requestedTmuxSessionName !== null && isMissingTmuxSessionError(error)) {
-        console.warn(
-          `tmux session '${requestedTmuxSessionName}' is not running; restoring terminal as a plain shell PTY.`
-        );
+        if (payloadManagedAgentName !== null) {
+          // The tmux session backing this managed agent is gone. Try to
+          // resume the agent runtime (re-spawn opencode/claude/...) via
+          // `agentmux resume` before falling back to a dead plain shell.
+          try {
+            const resumed = await agentmuxService.resumeAgent({ agentName: payloadManagedAgentName });
+            const resumedTmuxSessionName = typeof resumed.tmuxSessionName === "string" && resumed.tmuxSessionName.length > 0
+              ? resumed.tmuxSessionName
+              : requestedTmuxSessionName;
+            tmuxSession = await createTmuxClientSession({
+              ownerWebContentsId: event.sender.id,
+              cols: safeCols,
+              rows: safeRows,
+              cwd: terminalCwd,
+              shellName,
+              sessionKey,
+              tmuxSessionName: resumedTmuxSessionName,
+              createIfMissing: false,
+              sessionEnv
+            });
+            agentGraphWatcher.notifyProjectTagChanged(agentProjectTag);
+          } catch (resumeError) {
+            console.warn(
+              `Could not resume agent '${payloadManagedAgentName}': ${resumeError instanceof Error ? resumeError.message : resumeError}. Falling back to a plain shell PTY.`
+            );
+          }
+        } else {
+          console.warn(
+            `tmux session '${requestedTmuxSessionName}' is not running; restoring terminal as a plain shell PTY.`
+          );
+        }
       } else {
         throw error;
       }
@@ -2108,6 +2139,22 @@ ipcMain.handle("canvas-agent:adopt", async (_event, payload) => {
   });
   agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
   return result;
+});
+
+ipcMain.handle("canvas-agent:resume", async (_event, payload) => {
+  try {
+    const result = await agentmuxService.resumeAgent({
+      agentName: payload?.agentName,
+      prompt: payload?.prompt,
+      readyTimeout: payload?.readyTimeout
+    });
+    agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
+    return result;
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error ?? "")
+    };
+  }
 });
 
 ipcMain.handle("canvas-agent:subscribe", async (event, payload) => {

@@ -124,10 +124,93 @@
     };
   }
 
+  // --- Terminal tree (sidebar navigator) -------------------------------
+  //
+  // The sidebar tree mirrors the agent spawn graph: roots are nodes with no
+  // `managedParentAgent`, children are nodes whose parent matches a root's
+  // `managedAgentName`. We return a flat list of rows with `depth` so the
+  // renderer can indent them with the same CSS variable the file explorer
+  // uses (`--workspace-entry-depth`). Collapsed branches are pruned here so
+  // the renderer just paints rows.
+
+  function normalizeAgentName(value) {
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }
+
+  function getTerminalNodeLabel(nodeRecord) {
+    if (typeof nodeRecord?.titleText === "string" && nodeRecord.titleText.trim().length > 0) {
+      return nodeRecord.titleText.trim();
+    }
+    return "Terminal";
+  }
+
+  function deriveTerminalTreeRows({ activeCanvas, activeNodeId, collapsedAgentNames }) {
+    const nodes = Array.isArray(activeCanvas?.nodes) ? activeCanvas.nodes : [];
+
+    if (nodes.length === 0) {
+      return { isEmpty: true, rows: [] };
+    }
+
+    const collapsedSet = collapsedAgentNames instanceof Set ? collapsedAgentNames : new Set(collapsedAgentNames ?? []);
+
+    // Group children by parent agent name. Roots (parent == null) go under
+    // the sentinel key `null`.
+    const childrenByParent = new Map();
+    const nodeByAgentName = new Map();
+
+    nodes.forEach((nodeRecord) => {
+      const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
+      if (agentName !== null) {
+        nodeByAgentName.set(agentName, nodeRecord);
+      }
+      const parentKey = normalizeAgentName(nodeRecord?.managedParentAgent);
+      const bucket = childrenByParent.get(parentKey) ?? [];
+      bucket.push(nodeRecord);
+      childrenByParent.set(parentKey, bucket);
+    });
+
+    const rows = [];
+
+    // Stable iteration: keep canvas order within each parent bucket so the
+    // tree matches the top strip's order users already know.
+    const appendChildren = (parentKey, depth) => {
+      const bucket = childrenByParent.get(parentKey) ?? [];
+      bucket.forEach((nodeRecord) => {
+        const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
+        const hasChildren = agentName !== null && childrenByParent.has(agentName) && (childrenByParent.get(agentName) ?? []).length > 0;
+        const isCollapsed = agentName !== null && collapsedSet.has(agentName);
+        const nodeId = typeof nodeRecord?.id === "string" || typeof nodeRecord?.id === "number"
+          ? String(nodeRecord.id)
+          : "";
+
+        rows.push({
+          id: nodeId,
+          label: getTerminalNodeLabel(nodeRecord),
+          agentName,
+          depth,
+          hasChildren,
+          isCollapsed,
+          isActive: nodeId.length > 0 && nodeId === String(activeNodeId),
+          runtimeState: typeof nodeRecord?.managedRuntimeState === "string" ? nodeRecord.managedRuntimeState : null,
+          attention: typeof nodeRecord?.managedAttention === "string" ? nodeRecord.managedAttention : null
+        });
+
+        if (hasChildren && !isCollapsed) {
+          appendChildren(agentName, depth + 1);
+        }
+      });
+    };
+
+    appendChildren(null, 0);
+
+    return { isEmpty: false, rows };
+  }
+
   return {
     deriveCanvasSwitcherViewModel,
     deriveCanvasStripOverflowState,
     deriveTerminalStripViewModel,
-    deriveTerminalStripDropTarget
+    deriveTerminalStripDropTarget,
+    deriveTerminalTreeRows
   };
 });

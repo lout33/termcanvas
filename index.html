@@ -33,6 +33,11 @@
 
         <div class="canvas-sidebar-panel">
           <div class="canvas-sidebar-content">
+            <div class="sidebar-view-switcher" id="sidebar-view-switcher" role="tablist" aria-label="Sidebar view">
+              <button class="sidebar-view-tab" id="sidebar-view-explorer" type="button" role="tab" aria-selected="true" aria-controls="workspace-browser-section" data-sidebar-view="explorer">Explorer</button>
+              <button class="sidebar-view-tab" id="sidebar-view-terminals" type="button" role="tab" aria-selected="false" aria-controls="terminal-navigator-section" data-sidebar-view="terminals">Terminals</button>
+            </div>
+
             <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
               <div class="sidebar-section-header-row">
                 <div class="sidebar-section-header">Explorer</div>
@@ -100,6 +105,13 @@
 
               <div class="workspace-browser" id="workspace-browser" aria-live="polite"></div>
             </section>
+
+            <section class="sidebar-section sidebar-primary-section sidebar-view-panel" id="terminal-navigator-section" aria-label="Terminal navigator section" hidden>
+              <div class="sidebar-section-header-row">
+                <div class="sidebar-section-header">Terminals</div>
+              </div>
+              <div class="terminal-navigator" id="terminal-navigator" aria-live="polite"></div>
+            </section>
           </div>
         </div>
       </aside>
@@ -132,15 +144,7 @@
             <div class="canvas-panel-pills" id="canvas-panel-pills" aria-label="Canvas status"></div>
           </div>
 
-          <section class="terminal-strip-topbar-section" id="terminal-strip-section" aria-label="Terminal tabs">
-            <div class="terminal-strip-shell">
-              <button class="terminal-strip-overflow-button" id="terminal-strip-prev-button" type="button" aria-label="Focus previous terminal" title="Previous terminal" hidden>&lt;</button>
-
-              <div class="terminal-strip-list" id="terminal-strip-list" role="tablist" aria-label="Terminal navigator"></div>
-
-              <button class="terminal-strip-overflow-button" id="terminal-strip-next-button" type="button" aria-label="Focus next terminal" title="Next terminal" hidden>&gt;</button>
-            </div>
-          </section>
+          <button class="board-attention-chip" id="board-attention-chip" type="button" hidden aria-live="polite" title="Jump to the next agent that needs you"></button>
 
           <div class="canvas-panel-actions" aria-label="Canvas actions">
             <button class="canvas-panel-icon-button" id="create-note-button" type="button" aria-label="Add a note to the canvas" title="Add a note to the canvas" disabled>
@@ -249,7 +253,6 @@
           </button>
 
           <div class="board-hud-center" id="board-hud-center">
-            <button class="board-attention-chip" id="board-attention-chip" type="button" hidden aria-live="polite" title="Jump to the next agent that needs you"></button>
             <button class="board-fleet-chip" id="board-fleet-chip" type="button" hidden title="Spawn a temporary Claude Code terminal with a fleet report">ask fleet</button>
           </div>
 

@@ -5,7 +5,8 @@ const {
   deriveCanvasSwitcherViewModel,
   deriveCanvasStripOverflowState,
   deriveTerminalStripViewModel,
-  deriveTerminalStripDropTarget
+  deriveTerminalStripDropTarget,
+  deriveTerminalTreeRows
 } = require("../renderer_canvas_switcher.js");
 
 test("deriveCanvasSwitcherViewModel preserves canvas order for the strip model", () => {
@@ -247,4 +248,98 @@ test("deriveTerminalStripDropTarget returns an after-target insertion for pointe
     targetIndex: 2,
     isAfterTarget: true
   });
+});
+
+test("deriveTerminalTreeRows returns an empty view when the canvas has no nodes", () => {
+  assert.deepEqual(deriveTerminalTreeRows({ activeCanvas: { nodes: [] }, activeNodeId: null }), {
+    isEmpty: true,
+    rows: []
+  });
+  assert.deepEqual(deriveTerminalTreeRows({ activeCanvas: null, activeNodeId: null }), {
+    isEmpty: true,
+    rows: []
+  });
+});
+
+test("deriveTerminalTreeRows lays out flat roots when no parent agents are set", () => {
+  const { isEmpty, rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "t-1", titleText: "server" },
+        { id: "t-2", titleText: "database" }
+      ]
+    },
+    activeNodeId: "t-2"
+  });
+
+  assert.equal(isEmpty, false);
+  assert.deepEqual(rows, [
+    { id: "t-1", label: "server", agentName: null, depth: 0, hasChildren: false, isCollapsed: false, isActive: false, runtimeState: null, attention: null },
+    { id: "t-2", label: "database", agentName: null, depth: 0, hasChildren: false, isCollapsed: false, isActive: true, runtimeState: null, attention: null }
+  ]);
+});
+
+test("deriveTerminalTreeRows nests children under their managed parent agent", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "root", titleText: "router", managedAgentName: "router", managedParentAgent: null },
+        { id: "child-1", titleText: "worker", managedAgentName: "worker-1", managedParentAgent: "router", managedRuntimeState: "running" },
+        { id: "child-2", titleText: "tail", managedAgentName: "worker-2", managedParentAgent: "router", managedAttention: "waiting" }
+      ]
+    },
+    activeNodeId: "child-1"
+  });
+
+  assert.deepEqual(rows, [
+    {
+      id: "root", label: "router", agentName: "router", depth: 0,
+      hasChildren: true, isCollapsed: false, isActive: false,
+      runtimeState: null, attention: null
+    },
+    {
+      id: "child-1", label: "worker", agentName: "worker-1", depth: 1,
+      hasChildren: false, isCollapsed: false, isActive: true,
+      runtimeState: "running", attention: null
+    },
+    {
+      id: "child-2", label: "tail", agentName: "worker-2", depth: 1,
+      hasChildren: false, isCollapsed: false, isActive: false,
+      runtimeState: null, attention: "waiting"
+    }
+  ]);
+});
+
+test("deriveTerminalTreeRows prunes children of collapsed branches", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "root", titleText: "router", managedAgentName: "router", managedParentAgent: null },
+        { id: "child-1", titleText: "worker", managedAgentName: "worker-1", managedParentAgent: "router" },
+        { id: "grandchild-1", titleText: "leaf", managedAgentName: "leaf-1", managedParentAgent: "worker-1" }
+      ]
+    },
+    activeNodeId: null,
+    collapsedAgentNames: new Set(["router"])
+  });
+
+  // The router row is marked collapsed; its descendants are not present.
+  assert.deepEqual(rows.map((row) => row.id), ["root"]);
+  assert.equal(rows[0].isCollapsed, true);
+});
+
+test("deriveTerminalTreeRows keeps canvas order within each parent bucket", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "root", managedAgentName: "router", managedParentAgent: null },
+        { id: "c2", managedAgentName: "c2", managedParentAgent: "router" },
+        { id: "c1", managedAgentName: "c1", managedParentAgent: "router" },
+        { id: "c3", managedAgentName: "c3", managedParentAgent: "router" }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(rows.map((row) => row.id), ["root", "c2", "c1", "c3"]);
 });
