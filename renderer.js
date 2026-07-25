@@ -46,6 +46,11 @@ const {
   findHorizontalCanvasNodePlacement
 } = window.noteCanvasRendererCanvasDelegation;
 const { mapWithConcurrency } = window.noteCanvasRendererAsyncPool;
+const {
+  shouldShowNodeInFocusedMode,
+  pickInitialSidebarViewForFocusedMode,
+  pickFocusedNode
+} = window.noteCanvasRendererFocusedMode;
 // The CodeMirror bundle is ~770KB, so it loads on demand the first time a
 // file preview needs an editor instead of blocking startup.
 let workspaceMarkdownBundlePromise = null;
@@ -115,6 +120,7 @@ const canvasStripPrevButton = document.getElementById("canvas-strip-prev-button"
 const canvasStripNextButton = document.getElementById("canvas-strip-next-button");
 const terminalNavigatorSection = document.getElementById("terminal-navigator-section");
 const terminalNavigator = document.getElementById("terminal-navigator");
+const createTerminalButton = document.getElementById("create-terminal-button");
 const sidebarViewSwitcher = document.getElementById("sidebar-view-switcher");
 const sidebarViewExplorerTab = document.getElementById("sidebar-view-explorer");
 const sidebarViewTerminalsTab = document.getElementById("sidebar-view-terminals");
@@ -190,12 +196,14 @@ const TERMINAL_FALLBACK_ROWS = 24;
 const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 240];
 const TERMINAL_RESTORE_CONCURRENCY = 4;
 const MANAGED_AGENT_NODE_GAP = 72;
+const MANAGED_AGENT_RESUME_RETRY_DELAY_MS = 30000;
 // Leave headroom below Chromium's per-page WebGL context limit. Terminals
 // beyond this budget keep xterm's stable DOM renderer instead of causing the
 // browser to evict contexts and repeatedly rebuild glyph atlases.
 const MAX_TERMINAL_WEBGL_RENDERERS = 8;
 const OSC52_CLIPBOARD_MAX_BYTES = 1024 * 1024;
 const AGENT_SKILL_INSTALL_PROMPT_DISMISSED_KEY = "termcanvas.agentSkillInstallPromptDismissed";
+const FOCUSED_TERMINAL_MODE = true;
 
 let terminalCount = 0;
 let canvasCount = 0;
@@ -216,6 +224,7 @@ let activeSidebarView = "explorer";
 // Per-canvas set of collapsed agent names for the terminal tree. Keyed by
 // canvas id so switching canvases restores each tree's own fold state.
 const collapsedAgentNamesByCanvasId = new Map();
+const focusedSessionKeyByCanvasId = new Map();
 let hasDismissedBoardIntro = false;
 let isWindowUnloading = false;
 let renderedCanvasId = null;
@@ -362,8 +371,7 @@ const removeTerminalDataListener = window.noteCanvas.onTerminalData(({ terminalI
   // real screen state and repaints the pane when the node is revealed.
   if (
     nodeRecord.backend === "tmux"
-    && nodeRecord.element instanceof HTMLElement
-    && nodeRecord.element.hidden
+    && !isTerminalNodeRendererVisible(nodeRecord)
   ) {
     nodeRecord.needsTerminalRepaint = true;
     return;
@@ -659,7 +667,7 @@ function getVisibleMaximizedNode() {
 }
 
 function applyCanvasFocusMode() {
-  const visibleMaximizedNode = getVisibleMaximizedNode();
+  const visibleMaximizedNode = FOCUSED_TERMINAL_MODE ? null : getVisibleMaximizedNode();
 
   appShell?.classList.toggle("has-maximized-node", visibleMaximizedNode !== null);
   board.classList.toggle("has-maximized-node", visibleMaximizedNode !== null);
@@ -762,6 +770,14 @@ function syncMaximizeButton(nodeRecord) {
 }
 
 function setNodeMaximized(nodeRecord, shouldMaximize, options = {}) {
+  if (FOCUSED_TERMINAL_MODE) {
+    if (shouldMaximize && options.shouldSelect !== false && !nodeRecord.isRemoved) {
+      activateFocusedTerminalNode(nodeRecord);
+    }
+    applyCanvasFocusMode();
+    return;
+  }
+
   const shouldSelect = options.shouldSelect !== false;
   resetPointerInteractions();
 
@@ -913,6 +929,12 @@ function focusNextAttentionNode() {
   attentionCycleIndex = attentionCycleIndex % queueNodes.length;
   const nodeRecord = queueNodes[attentionCycleIndex];
   attentionCycleIndex += 1;
+
+  if (FOCUSED_TERMINAL_MODE) {
+    activateFocusedTerminalNode(nodeRecord);
+    return;
+  }
+
   centerViewportOnNode(nodeRecord);
   nodeRecord.terminal?.focus?.();
 }
@@ -1703,7 +1725,7 @@ async function bindTerminalSession(nodeRecord, options = {}) {
   nodeRecord.isWebglRendererDisabled = false;
   terminalNodeMap.set(terminalId, nodeRecord);
 
-  if (nodeRecord.element instanceof HTMLElement && !nodeRecord.element.hidden) {
+  if (isTerminalNodeRendererVisible(nodeRecord)) {
     attachTerminalWebglRenderer(nodeRecord);
   }
 
@@ -2508,6 +2530,10 @@ function updateSidebarViewPanels() {
 }
 
 function pickDefaultSidebarViewForCanvas(canvasRecord) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return pickInitialSidebarViewForFocusedMode(canvasRecord);
+  }
+
   // Terminals is the landing view — this is a terminal-first app and the
   // navigator tree is the primary way to move around a fleet. Explorer is
   // one click away via the sidebar tab.
@@ -2734,6 +2760,11 @@ function activateTerminalStripNode(nodeRecord, options = {}) {
     return;
   }
 
+  if (FOCUSED_TERMINAL_MODE) {
+    activateFocusedTerminalNode(nodeRecord);
+    return;
+  }
+
   const activation = deriveTerminalStripActivation({
     isFullscreenMode: getVisibleMaximizedNode() !== null,
     clickCount: options.clickCount
@@ -2906,6 +2937,9 @@ function renderTerminalNavigator() {
   }
 
   const activeCanvas = getActiveCanvas();
+  if (createTerminalButton instanceof HTMLButtonElement) {
+    createTerminalButton.disabled = activeCanvas === null;
+  }
   const canvasId = activeCanvas?.id ?? null;
   const collapsedAgentNames = canvasId !== null ? getCollapsedAgentNamesForCanvas(canvasId) : new Set();
   const { isEmpty, rows } = deriveTerminalTreeRows({
@@ -2947,7 +2981,9 @@ function renderTerminalNavigator() {
   if (isEmpty) {
     const empty = document.createElement("div");
     empty.className = "terminal-navigator-empty";
-    empty.textContent = "No terminals in this canvas. Double-click the board to open one.";
+    empty.textContent = FOCUSED_TERMINAL_MODE
+      ? "No terminals yet. Use New terminal above to start one."
+      : "No terminals in this canvas. Double-click the board to open one.";
     fragment.append(empty);
   } else {
     const entryList = document.createElement("ul");
@@ -3251,6 +3287,7 @@ function setActiveNode(nodeRecord) {
   if (nodeRecord === null) {
     activeNodeRecord?.element.classList.remove("is-active");
     activeNodeRecord = null;
+    syncFocusedTerminalVisibility();
     renderTerminalStrip();
     window.noteCanvas.setActiveTerminalShortcutState(false);
     syncAllTerminalInteractionOverlays();
@@ -3259,6 +3296,7 @@ function setActiveNode(nodeRecord) {
 
   if (activeNodeRecord === nodeRecord) {
     bringNodeToFront(nodeRecord);
+    syncFocusedTerminalVisibility();
     renderTerminalStrip();
     window.noteCanvas.setActiveTerminalShortcutState(true);
     syncAllTerminalInteractionOverlays();
@@ -3267,11 +3305,65 @@ function setActiveNode(nodeRecord) {
 
   activeNodeRecord?.element.classList.remove("is-active");
   activeNodeRecord = nodeRecord;
+  focusedSessionKeyByCanvasId.set(nodeRecord.canvas.id, nodeRecord.sessionKey);
   activeNodeRecord.element.classList.add("is-active");
   bringNodeToFront(activeNodeRecord);
+  syncFocusedTerminalVisibility();
   renderTerminalStrip();
   window.noteCanvas.setActiveTerminalShortcutState(true);
   syncAllTerminalInteractionOverlays();
+}
+
+function activateFocusedTerminalNode(nodeRecord, options = {}) {
+  if (nodeRecord === null || nodeRecord?.isRemoved === true) {
+    return;
+  }
+
+  setActiveNode(nodeRecord);
+  scheduleTerminalSizeSync([nodeRecord], { settle: true });
+
+  if (options.shouldFocus !== false) {
+    requestAnimationFrame(() => nodeRecord.terminal?.focus());
+  }
+}
+
+function isTerminalNodeRendererVisible(nodeRecord) {
+  if (
+    !(nodeRecord?.element instanceof HTMLElement)
+    || nodeRecord.element.hidden
+    || !nodeRecord.element.isConnected
+  ) {
+    return false;
+  }
+
+  return !FOCUSED_TERMINAL_MODE || nodeRecord.element.classList.contains("is-focused-terminal-visible");
+}
+
+function syncFocusedTerminalVisibility() {
+  if (!FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
+  const activeCanvas = getActiveCanvas();
+
+  canvases.forEach((canvasRecord) => {
+    canvasRecord.nodes.forEach((nodeRecord) => {
+      nodeRecord.element?.classList.toggle(
+        "is-focused-terminal-visible",
+        canvasRecord === activeCanvas && shouldShowNodeInFocusedMode({ nodeRecord, activeNodeRecord })
+      );
+
+      if (isTerminalNodeRendererVisible(nodeRecord)) {
+        attachTerminalWebglRenderer(nodeRecord);
+        if (nodeRecord.needsTerminalRepaint) {
+          nodeRecord.needsTerminalRepaint = false;
+          requestTerminalRepaint(nodeRecord);
+        }
+      } else {
+        detachTerminalWebglRenderer(nodeRecord);
+      }
+    });
+  });
 }
 
 function syncTerminalInteractionOverlay(nodeRecord) {
@@ -3344,7 +3436,7 @@ function scheduleTerminalSizeSync(nodeRecords, options = {}) {
     pendingTerminalSizeNodes.clear();
 
     nodesToSync.forEach((nodeRecord) => {
-      if (activeCanvas !== null && nodeRecord.canvas.id === activeCanvas.id && !nodeRecord.element.hidden) {
+      if (activeCanvas !== null && nodeRecord.canvas.id === activeCanvas.id && isTerminalNodeRendererVisible(nodeRecord)) {
         nodeRecord.syncSize();
       }
     });
@@ -3384,9 +3476,7 @@ function attachTerminalWebglRenderer(nodeRecord) {
     || nodeRecord.terminal === null
     || nodeRecord.webglAddon !== null
     || nodeRecord.isWebglRendererDisabled
-    || !(nodeRecord.element instanceof HTMLElement)
-    || nodeRecord.element.hidden
-    || !nodeRecord.element.isConnected
+    || !isTerminalNodeRendererVisible(nodeRecord)
     || nodeRecord.canvas.id !== activeCanvasId
     || getAttachedTerminalWebglRendererCount() >= MAX_TERMINAL_WEBGL_RENDERERS
   ) {
@@ -3439,9 +3529,7 @@ function requestTerminalRepaint(nodeRecord) {
 function getTerminalMountRect(nodeRecord) {
   if (
     !(nodeRecord?.terminalMount instanceof HTMLElement)
-    || !(nodeRecord?.element instanceof HTMLElement)
-    || nodeRecord.element.hidden
-    || !nodeRecord.element.isConnected
+    || !isTerminalNodeRendererVisible(nodeRecord)
   ) {
     return null;
   }
@@ -3496,8 +3584,7 @@ function scheduleTerminalRefresh(nodeRecords) {
       if (
         activeCanvas !== null
         && nodeRecord.canvas.id === activeCanvas.id
-        && nodeRecord.element instanceof HTMLElement
-        && !nodeRecord.element.hidden
+        && isTerminalNodeRendererVisible(nodeRecord)
         && nodeRecord.terminal !== null
         && nodeRecord.terminal.rows > 0
       ) {
@@ -3920,6 +4007,7 @@ function renderCanvas(options = {}) {
   setBoardZoomIndicatorText(activeCanvas.viewportScale);
 
   const didChangeMountedNodes = syncMountedCanvasNodes(activeCanvas);
+  syncFocusedTerminalVisibility();
   renderCanvasNotes();
 
   if (syncNodePositions || didChangeMountedNodes) {
@@ -3930,7 +4018,10 @@ function renderCanvas(options = {}) {
   updateEmptyState();
 
   if (syncTerminalSizes || didChangeMountedNodes) {
-    scheduleTerminalSizeSync(activeCanvas.nodes, { settle: didChangeMountedNodes || syncTerminalSizes });
+    const nodesToSize = FOCUSED_TERMINAL_MODE && activeNodeRecord?.canvas === activeCanvas
+      ? [activeNodeRecord]
+      : activeCanvas.nodes;
+    scheduleTerminalSizeSync(nodesToSize, { settle: didChangeMountedNodes || syncTerminalSizes });
   }
 
   scheduleMinimapRender();
@@ -4760,7 +4851,7 @@ async function switchWorkspacePreviewTab(tab) {
     await activateWorkspaceFolderById(tab.folderId);
   }
 
-  return loadWorkspaceFilePreview(tab.relativePath, { preserveViewMode: true });
+  return loadWorkspaceFilePreview(tab.relativePath);
 }
 
 async function closeWorkspacePreviewTab(tab) {
@@ -5129,7 +5220,7 @@ function renderFileInspectorActions(previewViewModel) {
 
     modeGroup.append(
       createFileInspectorModeButton({
-        label: "Preview",
+        label: "View",
         viewMode: "render",
         isActive: previewViewModel.viewMode === "render" && !workspacePreviewState.isEditing,
         disabled: workspacePreviewState.isDirty || workspacePreviewState.isSaving,
@@ -5138,7 +5229,7 @@ function renderFileInspectorActions(previewViewModel) {
         }
       }),
       createFileInspectorModeButton({
-        label: "Source",
+        label: "Edit",
         viewMode: "source",
         isActive: previewViewModel.viewMode === "source" || workspacePreviewState.isEditing,
         disabled: workspacePreviewState.isSaving,
@@ -5177,13 +5268,12 @@ function renderFileInspectorActions(previewViewModel) {
         }
       })
     );
-  } else if (previewViewModel.canEdit) {
-    editGroup.append(createFileInspectorIconButton({
-      className: "is-edit",
-      label: "Edit source",
-      title: "Edit source",
+  } else if (previewViewModel.canEdit && !previewViewModel.canRender) {
+    editGroup.append(createFileInspectorModeButton({
+      label: "Edit",
+      viewMode: "source",
+      isActive: false,
       disabled: workspacePreviewState.isSaving,
-      iconMarkup: '<path d="M3.25 12.75h2.5l6-6-2.5-2.5-6 6v2.5Z"></path><path d="M8.75 4.25 11.25 6.75"></path>',
       onClick: () => {
         startWorkspacePreviewEdit();
       }
@@ -5332,7 +5422,11 @@ function renderFileInspector() {
       return "Unsaved";
     }
 
-    return previewViewModel.mode === "fallback" ? "Limited preview" : "Ready";
+    if (workspacePreviewState.isEditing) {
+      return "Editing";
+    }
+
+    return previewViewModel.mode === "fallback" ? "Limited preview" : "Viewing";
   })();
 
   const fragment = document.createDocumentFragment();
@@ -5394,6 +5488,7 @@ function renderFileInspector() {
 
   const body = document.createElement("div");
   body.className = "file-inspector-body";
+  const isPlainTextFile = workspacePreviewState.data?.language === "text";
   let markdownEditorMount = null;
   let codeEditorMount = null;
   let codeEditorReadOnly = false;
@@ -5420,7 +5515,9 @@ function renderFileInspector() {
       body.append(markdownEditorMount);
     } else if (typeof createCodeEditor === "function") {
       codeEditorMount = document.createElement("div");
-      codeEditorMount.className = "file-inspector-code-editor";
+      codeEditorMount.className = isPlainTextFile
+        ? "file-inspector-code-editor is-prose"
+        : "file-inspector-code-editor";
       codeEditorReadOnly = false;
       codeEditorInitialText = workspacePreviewState.draftText;
       body.append(codeEditorMount);
@@ -5565,7 +5662,9 @@ function renderFileInspector() {
     body.append(frame);
   } else if (typeof createCodeEditor === "function") {
     codeEditorMount = document.createElement("div");
-    codeEditorMount.className = "file-inspector-code-editor is-readonly";
+    codeEditorMount.className = isPlainTextFile
+      ? "file-inspector-code-editor is-readonly is-prose"
+      : "file-inspector-code-editor is-readonly";
     codeEditorReadOnly = true;
     codeEditorInitialText = previewViewModel.textContents;
     body.append(codeEditorMount);
@@ -5606,6 +5705,7 @@ function renderFileInspector() {
       fileName: previewViewModel.fileName,
       initialText: codeEditorInitialText,
       readOnly: codeEditorReadOnly || workspacePreviewState.isSaving,
+      wrapLines: isPlainTextFile,
       onBlur: () => {
         if (!codeEditorReadOnly && workspacePreviewState.isDirty && workspacePreviewState.isSaving !== true) {
           void saveWorkspacePreviewText();
@@ -5643,6 +5743,7 @@ async function loadWorkspaceFilePreview(relativePath, options = {}) {
   const previewFolderId = activeFolder.id;
   const previewRootPath = activeFolder.rootPath;
   const nextViewMode = options.preserveViewMode === true ? workspacePreviewState.viewMode : "auto";
+  const shouldResumeEditing = options.preserveEditing === true && workspacePreviewState.isEditing;
   rememberWorkspacePreviewTab(activeFolder, relativePath);
   destroyWorkspaceMarkdownEditor();
   clearWorkspacePreviewObjectUrl();
@@ -5685,7 +5786,7 @@ async function loadWorkspaceFilePreview(relativePath, options = {}) {
     workspacePreviewState.isDirty = false;
     workspacePreviewState.isSaving = false;
 
-    if (isEditableWorkspacePreviewData(preview)) {
+    if (shouldResumeEditing && isEditableWorkspacePreviewData(preview)) {
       workspacePreviewState.viewMode = "source";
       workspacePreviewState.isEditing = true;
     }
@@ -5750,7 +5851,10 @@ async function refreshSelectedWorkspaceFilePreview() {
     }
   }
 
-  return loadWorkspaceFilePreview(workspacePreviewState.relativePath, { preserveViewMode: true });
+  return loadWorkspaceFilePreview(workspacePreviewState.relativePath, {
+    preserveViewMode: true,
+    preserveEditing: true
+  });
 }
 
 async function createWorkspaceFileAtSelection() {
@@ -6359,7 +6463,10 @@ function applyWorkspaceState(nextState, options = {}) {
         && workspacePreviewState.isDirty !== true
         && workspacePreviewState.isSaving !== true
       ) {
-        void loadWorkspaceFilePreview(autoRefreshRelativePath, { preserveViewMode: true });
+        void loadWorkspaceFilePreview(autoRefreshRelativePath, {
+          preserveViewMode: true,
+          preserveEditing: true
+        });
       }
     }, 0);
   }
@@ -6462,7 +6569,7 @@ function sanitizeCanvasExportName(canvasName) {
 function getCanvasActiveSessionKey(canvasRecord) {
   return activeNodeRecord?.canvas?.id === canvasRecord.id
     ? activeNodeRecord.sessionKey
-    : null;
+    : (focusedSessionKeyByCanvasId.get(canvasRecord.id) ?? null);
 }
 
 function serializeTerminalNodeRecord(nodeRecord) {
@@ -6720,6 +6827,9 @@ async function restoreCanvasSession(sessionSnapshot) {
 
       notes: canvasSnapshot.notes ?? []
     });
+    if (typeof canvasSnapshot.activeSessionKey === "string") {
+      focusedSessionKeyByCanvasId.set(canvasSnapshot.id, canvasSnapshot.activeSessionKey);
+    }
   });
 
   const terminalRestoreJobs = persistedCanvases.flatMap((canvasSnapshot) => {
@@ -6780,9 +6890,12 @@ async function restoreCanvasSession(sessionSnapshot) {
       }
 
       if (typeof restoredActiveCanvasSnapshot.activeSessionKey === "string") {
-        return restoredActiveCanvas.nodes.find(
+        const restoredActiveNode = restoredActiveCanvas.nodes.find(
           (nodeRecord) => nodeRecord.sessionKey === restoredActiveCanvasSnapshot.activeSessionKey
         ) ?? null;
+        if (restoredActiveNode !== null) {
+          return restoredActiveNode;
+        }
       }
 
       return restoredActiveCanvas.nodes.find((nodeRecord) => nodeRecord.isMaximized)
@@ -6792,7 +6905,7 @@ async function restoreCanvasSession(sessionSnapshot) {
     })();
 
     if (restoredActiveNode !== null) {
-      setActiveNode(restoredActiveNode);
+      activateFocusedTerminalNode(restoredActiveNode);
     }
   }
 }
@@ -6803,7 +6916,7 @@ async function initializeApp() {
 
   try {
     setRailCollapsed(false);
-    setSidebarCollapsed(true);
+    setSidebarCollapsed(!FOCUSED_TERMINAL_MODE);
     setBoardIntroDismissed(false);
     updateSidebarViewTabs();
     updateSidebarViewPanels();
@@ -7072,7 +7185,7 @@ async function importCanvasFromData(importedCanvas) {
       ?? null;
 
     if (fallbackImportedNode !== null) {
-      setActiveNode(fallbackImportedNode);
+      activateFocusedTerminalNode(fallbackImportedNode);
     }
 
     scheduleCanvasAgentSync();
@@ -7094,11 +7207,16 @@ async function importCanvasFromData(importedCanvas) {
     }
 
     canvasMap.delete(importedCanvasRecord.id);
+    focusedSessionKeyByCanvasId.delete(importedCanvasRecord.id);
 
     const fallbackCanvas = getCanvasById(previousActiveCanvasId) ?? canvases[0] ?? null;
-    activeCanvasId = fallbackCanvas?.id ?? null;
-    renderCanvasSwitcher();
-    renderCanvas({ syncTerminalSizes: true });
+    if (fallbackCanvas !== null) {
+      setActiveCanvas(fallbackCanvas.id);
+    } else {
+      activeCanvasId = null;
+      renderCanvasSwitcher();
+      renderCanvas({ syncTerminalSizes: true });
+    }
     throw error;
   }
 }
@@ -7301,6 +7419,7 @@ function setActiveCanvas(canvasId) {
   }
 
   if (activeCanvasId !== canvasId) {
+    const hadActiveCanvas = activeCanvasId !== null;
     const previousCanvas = getActiveCanvas();
 
     if (isCanvasSelectModeActive) {
@@ -7327,6 +7446,14 @@ function setActiveCanvas(canvasId) {
     setActiveNode(null);
     activeCanvasId = canvasId;
 
+    if (FOCUSED_TERMINAL_MODE && !isSessionHydrating) {
+      const preferredSessionKey = focusedSessionKeyByCanvasId.get(nextCanvas.id);
+      const nextNode = pickFocusedNode(nextCanvas.nodes, preferredSessionKey);
+      if (nextNode !== null) {
+        activateFocusedTerminalNode(nextNode);
+      }
+    }
+
     if (!isSessionHydrating) {
       if (nextCanvas.workspace === null) {
         applyWorkspaceState({ importedFolders: [], activeFolderId: null }, { skipCanvasWorkspaceSync: true });
@@ -7348,7 +7475,7 @@ function setActiveCanvas(canvasId) {
     // most likely to need: terminals if the canvas has any, else explorer.
     // Only auto-switch on real changes, not on session hydration (which
     // restores the persisted view).
-    if (!isSessionHydrating) {
+    if (!isSessionHydrating && (!FOCUSED_TERMINAL_MODE || !hadActiveCanvas)) {
       const nextDefaultView = pickDefaultSidebarViewForCanvas(nextCanvas);
       if (nextDefaultView !== activeSidebarView) {
         activeSidebarView = nextDefaultView;
@@ -7452,6 +7579,7 @@ async function deleteCanvas(canvasId) {
 
   canvases.splice(canvasIndex, 1);
   canvasMap.delete(canvasId);
+  focusedSessionKeyByCanvasId.delete(canvasId);
 
   if (activeCanvasId === canvasId) {
     const fallbackCanvas = canvases[Math.max(0, canvasIndex - 1)] ?? canvases[0] ?? null;
@@ -7499,6 +7627,10 @@ async function closeActiveCanvasWithConfirmation() {
 }
 
 function startNodeDrag(event, nodeRecord, handleElement) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
   if (event.button !== 0 || panState.pointerId !== null || nodeRecord.isMaximized || getVisibleMaximizedNode() !== null) {
     return;
   }
@@ -7519,6 +7651,10 @@ function startNodeDrag(event, nodeRecord, handleElement) {
 }
 
 function startNodeResize(event, nodeRecord, handleElement, direction) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
   if (
     event.button !== 0
     || panState.pointerId !== null
@@ -7852,6 +7988,8 @@ async function createTerminalNode(options) {
     webglAddon: null,
     isWebglRendererDisabled: false,
     needsTerminalRepaint: false,
+    isAgentResumeInFlight: false,
+    agentResumeRetryAfter: 0,
     resizeObserver: null,
     syncSize: () => {},
     disposeInput: () => {},
@@ -8425,6 +8563,10 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
     ? agentSnapshot.runtime_state
     : null;
 
+  if (agentRuntimeState !== "stopped") {
+    nodeRecord.agentResumeRetryAfter = 0;
+  }
+
   // The agent's tmux session is gone (e.g. tmux server restarted). Try to
   // resume the runtime via `agentmux resume` before rebinding, so the user
   // sees a live opencode/claude session instead of a dead shell.
@@ -8452,10 +8594,16 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
 }
 
 async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
-  if (nodeRecord.isRemoved || nodeRecord.managedAgentName === null) {
+  if (
+    nodeRecord.isRemoved
+    || nodeRecord.managedAgentName === null
+    || nodeRecord.isAgentResumeInFlight
+    || nodeRecord.agentResumeRetryAfter > Date.now()
+  ) {
     return;
   }
 
+  nodeRecord.isAgentResumeInFlight = true;
   const projectTag = typeof agentSnapshot?.project === "string" && agentSnapshot.project.length > 0
     ? agentSnapshot.project
     : nodeRecord.managedProjectTag;
@@ -8468,6 +8616,10 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
       agentName: nodeRecord.managedAgentName,
       projectTag
     });
+
+    if (nodeRecord.isRemoved) {
+      return;
+    }
 
     if (result?.error) {
       throw new Error(result.error);
@@ -8486,14 +8638,18 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
     nodeRecord.isExited = false;
     nodeRecord.exitCode = null;
     nodeRecord.exitSignal = null;
+    nodeRecord.agentResumeRetryAfter = 0;
 
     await releaseTerminalSession(nodeRecord);
     await bindTerminalSession(nodeRecord, { shouldFocus: false });
   } catch (error) {
+    nodeRecord.agentResumeRetryAfter = Date.now() + MANAGED_AGENT_RESUME_RETRY_DELAY_MS;
     console.error(error);
     setNodeExitedState(nodeRecord, null, null);
     setTerminalNodeStatus(nodeRecord, "Resume failed");
     nodeRecord.meta.textContent = error instanceof Error ? error.message : "Could not resume agent";
+  } finally {
+    nodeRecord.isAgentResumeInFlight = false;
   }
 }
 
@@ -8598,6 +8754,12 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
   }
 
   if (didChangeNodeSet) {
+    if (FOCUSED_TERMINAL_MODE && activeNodeRecord === null) {
+      const nextNode = pickFocusedNode(canvasRecord.nodes, focusedSessionKeyByCanvasId.get(canvasRecord.id));
+      if (nextNode !== null) {
+        activateFocusedTerminalNode(nextNode);
+      }
+    }
     renderCanvasSwitcher();
     updateEmptyState();
     applyCanvasFocusMode();
@@ -8805,6 +8967,15 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
     nodeRecord.canvas.nodes.splice(nodeIndex, 1);
   }
 
+  if (FOCUSED_TERMINAL_MODE && nodeRecord.canvas.id === activeCanvasId && activeNodeRecord === null) {
+    const nextNode = pickFocusedNode(nodeRecord.canvas.nodes, focusedSessionKeyByCanvasId.get(nodeRecord.canvas.id));
+    if (nextNode !== null) {
+      activateFocusedTerminalNode(nextNode);
+    } else {
+      focusedSessionKeyByCanvasId.delete(nodeRecord.canvas.id);
+    }
+  }
+
   if (nodeRecord.canvas.id === activeCanvasId) {
     updateEmptyState();
     applyCanvasFocusMode();
@@ -8818,6 +8989,10 @@ async function destroyTerminalNode(nodeRecord, options = {}) {
 }
 
 async function handleBoardDoubleClick(event) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
   if (!isElement(event.target)) {
     return;
   }
@@ -8843,6 +9018,10 @@ async function handleBoardDoubleClick(event) {
 }
 
 function startPan(event) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
   const activeCanvas = getActiveCanvas();
 
   if (activeCanvas === null || getVisibleMaximizedNode() !== null) {
@@ -8863,6 +9042,10 @@ function startPan(event) {
 }
 
 function handleBoardPointerDown(event) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
   if (event.button !== 0) {
     return;
   }
@@ -8950,6 +9133,10 @@ function handleBoardPointerCancel(event) {
 }
 
 function handleBoardWheel(event) {
+  if (FOCUSED_TERMINAL_MODE) {
+    return;
+  }
+
   if (
     getVisibleMaximizedNode() !== null
     || !shouldHandleCanvasWheel({
@@ -9249,6 +9436,7 @@ if (window.noteCanvas.isSmokeTest) {
       });
 
       return {
+        focusedTerminalMode: FOCUSED_TERMINAL_MODE,
         canvasCount: canvases.length,
         canvasNames: canvases.map((canvasRecord) => canvasRecord.name),
         canvasNodeCounts: canvases.map((canvasRecord) => canvasRecord.nodes.length),
@@ -9454,6 +9642,7 @@ if (window.noteCanvas.isSmokeTest) {
       const snapshot = getCanvasSnapshot();
 
       return {
+        focusedTerminalMode: snapshot.focusedTerminalMode,
         hasNodes: snapshot.activeNodeCount > 0,
         canvasCount: snapshot.canvasCount,
         canvasNames: snapshot.canvasNames,
@@ -9900,7 +10089,6 @@ canvasStripNextButton?.addEventListener("click", () => {
 
 window.addEventListener("resize", () => {
   scheduleCanvasStripOverflowControlsSync();
-  scheduleTerminalStripOverflowControlsSync();
 });
 
 openWorkspaceButton?.addEventListener("click", () => {
@@ -9953,6 +10141,22 @@ sidebarViewExplorerTab?.addEventListener("click", () => {
 
 sidebarViewTerminalsTab?.addEventListener("click", () => {
   setActiveSidebarView("terminals");
+});
+
+createTerminalButton?.addEventListener("click", async () => {
+  const activeCanvas = getActiveCanvas();
+  if (activeCanvas === null) {
+    return;
+  }
+
+  try {
+    const nodeRecord = await createTerminalNode(toWorldPoint(getBoardViewportCenterPoint()));
+    if (nodeRecord !== undefined) {
+      activateFocusedTerminalNode(nodeRecord);
+    }
+  } catch (error) {
+    console.error(error);
+  }
 });
 
 railToggleButton?.addEventListener("click", () => {

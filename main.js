@@ -54,7 +54,10 @@ function ensureNodePtyHelperPermissions() {
   helperPaths.forEach((helperPath) => {
     if (fs.existsSync(helperPath)) {
       const currentMode = fs.statSync(helperPath).mode;
-      fs.chmodSync(helperPath, currentMode | 0o111);
+
+      if ((currentMode & 0o111) === 0) {
+        fs.chmodSync(helperPath, currentMode | 0o111);
+      }
     }
   });
 }
@@ -787,6 +790,56 @@ async function runSmokeTest(window) {
 
     if (!snapshot.firstTerminalText.includes("smoke-check")) {
       throw new Error(`Smoke test failed: terminal output did not include expected text. Snapshot: ${JSON.stringify(snapshot)}`);
+    }
+
+    if (snapshot.focusedTerminalMode === true) {
+      logStep("verify focused terminal layout and resize");
+      const focusedResizeResult = await window.webContents.executeJavaScript(`new Promise((resolve) => {
+        const errors = [];
+        const handleError = (event) => {
+          errors.push(event.message);
+        };
+
+        window.addEventListener("error", handleError);
+        window.dispatchEvent(new Event("resize"));
+        window.requestAnimationFrame(() => {
+          const nextSnapshot = window.__canvasLearningDebug.getSnapshot();
+          window.removeEventListener("error", handleError);
+          resolve({
+            errors,
+            bootError: window.__canvasLearningBootError,
+            snapshot: nextSnapshot
+          });
+        });
+      })`);
+      const focusedSnapshot = focusedResizeResult?.snapshot;
+
+      if (
+        focusedResizeResult?.errors?.length > 0
+        || focusedResizeResult?.bootError !== null
+        || focusedSnapshot?.activeNodeCount !== 1
+        || focusedSnapshot?.visibleNodeCount !== 1
+        || focusedSnapshot?.sidebarCollapsed !== false
+        || focusedSnapshot?.maximizedNodeTitle !== null
+      ) {
+        throw new Error(`Smoke test failed: focused terminal layout or resize was unstable. Result: ${JSON.stringify(focusedResizeResult)}`);
+      }
+
+      logStep("verify terminal input after resize");
+      await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('echo focused-resize-check\\r')");
+      const resizedTerminalSnapshot = await waitForSnapshot(
+        "window.__canvasLearningDebug.getSnapshot()",
+        (nextSnapshot) => nextSnapshot.firstTerminalText.includes("focused-resize-check"),
+        5000
+      );
+
+      if (!resizedTerminalSnapshot.firstTerminalText.includes("focused-resize-check")) {
+        throw new Error(`Smoke test failed: focused terminal stopped responding after resize. Snapshot: ${JSON.stringify(resizedTerminalSnapshot)}`);
+      }
+
+      console.log("Smoke test passed.");
+      app.quit();
+      return;
     }
 
     logStep("toggle selected terminal maximize with Command+M");

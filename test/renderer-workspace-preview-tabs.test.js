@@ -8,6 +8,11 @@ function readRenderer() {
   return fs.readFileSync(rendererPath, "utf8");
 }
 
+function readMarkdownEditor() {
+  const editorPath = path.join(__dirname, "..", "renderer_workspace_markdown.mjs");
+  return fs.readFileSync(editorPath, "utf8");
+}
+
 test("workspace preview tabs keep a small renderer-side working set", () => {
   const renderer = readRenderer();
 
@@ -38,7 +43,7 @@ test("workspace preview tab switching reuses the existing preview loader", () =>
 
   assert.match(renderer, /async function switchWorkspacePreviewTab\(tab\) \{/);
   assert.match(renderer, /await activateWorkspaceFolderById\(tab\.folderId\);/);
-  assert.match(renderer, /return loadWorkspaceFilePreview\(tab\.relativePath, \{ preserveViewMode: true \}\);/);
+  assert.match(renderer, /return loadWorkspaceFilePreview\(tab\.relativePath\);/);
   assert.match(renderer, /async function closeWorkspacePreviewTab\(tab\) \{/);
   assert.match(renderer, /closeWorkspacePreview\(\);/);
 });
@@ -65,4 +70,24 @@ test("renderable preview source editing returns to preview mode on cancel", () =
   assert.match(renderer, /return isMarkdownWorkspacePreview\(\) \|\| workspacePreviewState\.data\?\.kind === "svg";/);
   assert.match(renderer, /workspacePreviewState\.viewMode = isRenderableWorkspacePreview\(\) \? "render" : workspacePreviewState\.viewMode;/);
   assert.match(renderer, /workspacePreviewState\.viewMode = viewMode === "source" \? "source" : "render";/);
+});
+
+test("workspace files open in view mode until editing is explicitly requested", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const shouldResumeEditing = options\.preserveEditing === true && workspacePreviewState\.isEditing;/);
+  assert.match(renderer, /if \(shouldResumeEditing && isEditableWorkspacePreviewData\(preview\)\) \{/);
+  assert.doesNotMatch(renderer, /if \(isEditableWorkspacePreviewData\(preview\)\) \{\s*workspacePreviewState\.viewMode = "source";/);
+  assert.match(renderer, /label: "View",[\s\S]*?label: "Edit",/);
+  assert.match(renderer, /return "Editing";[\s\S]*?return previewViewModel\.mode === "fallback" \? "Limited preview" : "Viewing";/);
+});
+
+test("plain-text readers and editors wrap long lines", () => {
+  const renderer = readRenderer();
+  const editor = readMarkdownEditor();
+
+  assert.match(renderer, /const isPlainTextFile = workspacePreviewState\.data\?\.language === "text";/);
+  assert.match(renderer, /wrapLines: isPlainTextFile,/);
+  assert.match(editor, /function createCodeEditor\(\{[^}]*wrapLines = false,/);
+  assert.match(editor, /if \(wrapLines\) \{\s*extensions\.push\(EditorView\.lineWrapping\);/);
 });
