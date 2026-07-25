@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="./node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body class="is-focused-terminal-mode">
     <div class="app-shell">
       <aside class="app-rail" aria-label="Project rail">
         <div class="canvas-brand app-rail-brand" aria-label="TermCanvas brand mark">
@@ -38,7 +38,7 @@
               <button class="sidebar-view-tab" id="sidebar-view-terminals" type="button" role="tab" aria-selected="false" aria-controls="terminal-navigator-section" data-sidebar-view="terminals">Terminals</button>
             </div>
 
-            <section class="sidebar-section sidebar-primary-section" id="workspace-browser-section" aria-label="Workspace browser section">
+            <section class="sidebar-section sidebar-primary-section sidebar-view-panel" id="workspace-browser-section" aria-label="Workspace browser section">
               <div class="sidebar-section-header-row">
                 <div class="sidebar-section-header">Explorer</div>
 
@@ -109,6 +109,14 @@
             <section class="sidebar-section sidebar-primary-section sidebar-view-panel" id="terminal-navigator-section" aria-label="Terminal navigator section" hidden>
               <div class="sidebar-section-header-row">
                 <div class="sidebar-section-header">Terminals</div>
+                <div class="sidebar-section-header-controls">
+                  <button class="canvas-list-action sidebar-section-action terminal-navigator-create" id="create-terminal-button" type="button" aria-label="New terminal" title="New terminal">
+                    <svg class="sidebar-section-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M8 3v10"></path>
+                      <path d="M3 8h10"></path>
+                    </svg>
+                  </button>
+                </div>
               </div>
               <div class="terminal-navigator" id="terminal-navigator" aria-live="polite"></div>
             </section>
@@ -272,8 +280,8 @@
           </div>
 
           <div class="empty-state" id="empty-state">
-            <strong class="empty-state-title">Double-click to open a terminal</strong>
-            <span class="empty-state-copy">Drag to move the canvas. Cmd/Ctrl + wheel to zoom.</span>
+            <strong class="empty-state-title">No terminals yet</strong>
+            <span class="empty-state-copy">Use New terminal in the sidebar to start one.</span>
           </div>
 
           <div class="board-welcome" id="board-welcome" hidden>
@@ -326,6 +334,7 @@
     <script src="./renderer_canvas_notes.js"></script>
     <script src="./renderer_workspace_preview.js"></script>
     <script src="./renderer_async_pool.js"></script>
+    <script src="./renderer_focused_mode.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

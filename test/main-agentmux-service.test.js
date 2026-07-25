@@ -60,6 +60,7 @@ test("packaged runtime path includes common mac cli install locations first", ()
   assert.equal(
     buildPackagedRuntimePath("/custom/bin:/opt/homebrew/bin:/usr/bin"),
     [
+      path.join(homeDirectory, ".opencode/bin"),
       path.join(homeDirectory, ".local/bin"),
       path.join(homeDirectory, ".bun/bin"),
       path.join(homeDirectory, ".npm-global/bin"),

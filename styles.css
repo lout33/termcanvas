@@ -3193,6 +3193,230 @@ button {
   transform: none;
 }
 
+/* Product experiment: the sidebar tree is the fleet map and one selected
+   terminal owns the workspace. Spatial state remains persisted so this branch
+   can be discarded without a migration. */
+body.is-focused-terminal-mode .board {
+  cursor: default;
+  touch-action: auto;
+  user-select: auto;
+}
+
+body.is-focused-terminal-mode .board-grid,
+body.is-focused-terminal-mode .board-navigation,
+body.is-focused-terminal-mode .board-fullscreen-exit,
+body.is-focused-terminal-mode .board-hints,
+body.is-focused-terminal-mode .board-minimap,
+body.is-focused-terminal-mode .canvas-edge-layer,
+body.is-focused-terminal-mode .canvas-note,
+body.is-focused-terminal-mode .board-select-mode-bar,
+body.is-focused-terminal-mode #create-note-button,
+body.is-focused-terminal-mode #select-terminals-button,
+body.is-focused-terminal-mode .terminal-node-maximize,
+body.is-focused-terminal-mode .terminal-node-connect,
+body.is-focused-terminal-mode .terminal-node-resize-handle {
+  display: none;
+}
+
+body.is-focused-terminal-mode .nodes-layer,
+body.is-focused-terminal-mode .board.has-maximized-node .nodes-layer {
+  transform: none;
+}
+
+body.is-focused-terminal-mode .terminal-node {
+  display: none;
+}
+
+body.is-focused-terminal-mode .terminal-node.is-focused-terminal-visible {
+  top: var(--measure-board-gap) !important;
+  left: var(--measure-board-gap) !important;
+  right: var(--measure-board-gap);
+  bottom: var(--measure-board-gap);
+  display: flex;
+  width: auto !important;
+  height: auto !important;
+  border-radius: calc(var(--radius-md) + 0.125rem);
+  transform: none !important;
+}
+
+body.is-focused-terminal-mode .terminal-node-drag,
+body.is-focused-terminal-mode .terminal-node-drag:active {
+  cursor: default;
+}
+
+body.is-focused-terminal-mode .empty-state {
+  top: 50%;
+  bottom: auto;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+body.is-focused-terminal-mode .terminal-navigator-create:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+body.is-focused-terminal-mode .app-shell.has-file-inspector {
+  --inspector-track-width: 0rem;
+}
+
+body.is-focused-terminal-mode .app-shell.has-file-inspector .workspace-shell {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+body.is-focused-terminal-mode .file-inspector {
+  grid-column: 3;
+  z-index: 14;
+  border-left: 0;
+  background: #111318;
+}
+
+body.is-focused-terminal-mode .inspector-resize-handle {
+  display: none;
+}
+
+body.is-focused-terminal-mode .file-inspector-tab {
+  flex-basis: 14rem;
+  max-width: 18rem;
+}
+
+body.is-focused-terminal-mode .file-inspector-path-crumb {
+  max-width: 20rem;
+}
+
+body.is-focused-terminal-mode .file-inspector-body {
+  padding: clamp(1rem, 2.4vw, 2.5rem);
+  background: #111318;
+}
+
+body.is-focused-terminal-mode .file-inspector-content {
+  max-width: min(100%, 100ch);
+  margin-inline: auto;
+  padding: clamp(1.25rem, 2.5vw, 2.5rem);
+  font-size: 0.95rem;
+  line-height: 1.75;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown {
+  max-width: 72ch;
+  padding: clamp(1.5rem, 3.5vw, 3.5rem) clamp(0.25rem, 1.5vw, 1.25rem) 20vh;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: clamp(1rem, 0.3vw + 0.95rem, 1.1rem);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor,
+body.is-focused-terminal-mode .file-inspector-code-editor,
+body.is-focused-terminal-mode .file-inspector-code {
+  height: 100%;
+  min-height: 100%;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose {
+  width: min(100%, 78ch);
+  margin-inline: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor .cm-editor,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-editor {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor .cm-editor,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-editor {
+  font-size: 1.05rem !important;
+}
+
+body.is-focused-terminal-mode .file-inspector-code-editor .cm-editor,
+body.is-focused-terminal-mode .file-inspector-code .cm-editor {
+  font-size: 0.95rem !important;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor .cm-scroller,
+body.is-focused-terminal-mode .file-inspector-code-editor .cm-scroller,
+body.is-focused-terminal-mode .file-inspector-code .cm-scroller {
+  line-height: 1.7;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor .cm-content,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-content {
+  padding: clamp(1rem, 2vw, 2rem) 0 20vh;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor .cm-line,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-line {
+  padding-inline: 0;
+  overflow-wrap: anywhere;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown-editor .cm-gutters,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-gutters {
+  display: none;
+}
+
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-editor,
+body.is-focused-terminal-mode .file-inspector-code-editor.is-prose .cm-scroller {
+  font-family: var(--font-body) !important;
+  line-height: 1.8;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown pre {
+  max-width: 100%;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown blockquote {
+  margin: 1.25rem 0;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left: 2px solid rgba(247, 204, 116, 0.4);
+  color: rgba(230, 220, 198, 0.78);
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown ol {
+  padding-left: 1.35rem;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown li + li {
+  margin-top: 0.3rem;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown table {
+  display: block;
+  max-width: 100%;
+  border-collapse: collapse;
+  overflow-x: auto;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown th,
+body.is-focused-terminal-mode .file-inspector-markdown td {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid rgba(236, 220, 170, 0.14);
+  text-align: left;
+}
+
+body.is-focused-terminal-mode .file-inspector-markdown hr {
+  margin: 2rem 0;
+  border: 0;
+  border-top: 1px solid rgba(236, 220, 170, 0.14);
+}
+
 .terminal-node-header {
   display: flex;
   align-items: center;

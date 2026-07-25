@@ -353,7 +353,7 @@ function getCodeLanguageExtension(fileName) {
   }
 }
 
-function createCodeEditor({ parentElement, fileName = "", initialText = "", readOnly = false, onChange, onBlur, onSaveShortcut }) {
+function createCodeEditor({ parentElement, fileName = "", initialText = "", readOnly = false, wrapLines = false, onChange, onBlur, onSaveShortcut }) {
   if (!(parentElement instanceof HTMLElement)) {
     throw new Error("A parent element is required to create the code editor.");
   }
@@ -402,6 +402,10 @@ function createCodeEditor({ parentElement, fileName = "", initialText = "", read
 
   if (languageExtension !== null) {
     extensions.splice(1, 0, languageExtension);
+  }
+
+  if (wrapLines) {
+    extensions.push(EditorView.lineWrapping);
   }
 
   const view = new EditorView({

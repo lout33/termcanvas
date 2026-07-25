@@ -10,6 +10,7 @@ function getPackagedRuntimePaths() {
   const homeDirectory = os.homedir();
 
   return [
+    homeDirectory ? path.join(homeDirectory, ".opencode/bin") : null,
     homeDirectory ? path.join(homeDirectory, ".local/bin") : null,
     homeDirectory ? path.join(homeDirectory, ".bun/bin") : null,
     homeDirectory ? path.join(homeDirectory, ".npm-global/bin") : null,

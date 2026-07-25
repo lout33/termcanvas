@@ -110,6 +110,7 @@ test("terminal navigator renders depth-indented rows from the agent spawn graph"
   // The strip prev/next overflow buttons are no longer wired.
   assert.doesNotMatch(renderer, /terminalStripPrevButton\?\.addEventListener/);
   assert.doesNotMatch(renderer, /terminalStripNextButton\?\.addEventListener/);
+  assert.doesNotMatch(renderer, /scheduleTerminalStripOverflowControlsSync/);
 
   // The sidebar navigator builds a tree from managedParentAgent.
   assert.match(renderer, /function renderTerminalNavigator\(\) \{/);

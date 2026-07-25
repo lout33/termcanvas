@@ -343,3 +343,30 @@ test("deriveTerminalTreeRows keeps canvas order within each parent bucket", () =
 
   assert.deepEqual(rows.map((row) => row.id), ["root", "c2", "c1", "c3"]);
 });
+
+test("deriveTerminalTreeRows keeps a child reachable when its parent is missing", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "orphan", titleText: "Orphan", managedAgentName: "orphan", managedParentAgent: "deleted-parent" }
+      ]
+    },
+    activeNodeId: "orphan"
+  });
+
+  assert.deepEqual(rows.map(({ id, depth }) => ({ id, depth })), [{ id: "orphan", depth: 0 }]);
+});
+
+test("deriveTerminalTreeRows emits every node once when parent metadata contains a cycle", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "a", titleText: "A", managedAgentName: "a", managedParentAgent: "b" },
+        { id: "b", titleText: "B", managedAgentName: "b", managedParentAgent: "a" }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(rows.map((row) => row.id).sort(), ["a", "b"]);
+});

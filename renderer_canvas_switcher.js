@@ -145,7 +145,9 @@
   }
 
   function deriveTerminalTreeRows({ activeCanvas, activeNodeId, collapsedAgentNames }) {
-    const nodes = Array.isArray(activeCanvas?.nodes) ? activeCanvas.nodes : [];
+    const nodes = Array.isArray(activeCanvas?.nodes)
+      ? activeCanvas.nodes.filter((nodeRecord) => nodeRecord?.isRemoved !== true)
+      : [];
 
     if (nodes.length === 0) {
       return { isEmpty: true, rows: [] };
@@ -156,28 +158,55 @@
     // Group children by parent agent name. Roots (parent == null) go under
     // the sentinel key `null`.
     const childrenByParent = new Map();
-    const nodeByAgentName = new Map();
+    const knownAgentNames = new Set(
+      nodes
+        .map((nodeRecord) => normalizeAgentName(nodeRecord?.managedAgentName))
+        .filter((agentName) => agentName !== null)
+    );
 
     nodes.forEach((nodeRecord) => {
       const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
-      if (agentName !== null) {
-        nodeByAgentName.set(agentName, nodeRecord);
-      }
-      const parentKey = normalizeAgentName(nodeRecord?.managedParentAgent);
+      const requestedParentKey = normalizeAgentName(nodeRecord?.managedParentAgent);
+      const parentKey = requestedParentKey !== agentName && knownAgentNames.has(requestedParentKey)
+        ? requestedParentKey
+        : null;
       const bucket = childrenByParent.get(parentKey) ?? [];
       bucket.push(nodeRecord);
       childrenByParent.set(parentKey, bucket);
     });
 
     const rows = [];
+    const visitedNodes = new Set();
+    const coveredNodes = new Set();
+
+    const markDescendantsCovered = (parentKey) => {
+      const bucket = childrenByParent.get(parentKey) ?? [];
+      bucket.forEach((nodeRecord) => {
+        if (coveredNodes.has(nodeRecord)) {
+          return;
+        }
+        coveredNodes.add(nodeRecord);
+        const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
+        if (agentName !== null) {
+          markDescendantsCovered(agentName);
+        }
+      });
+    };
 
     // Stable iteration: keep canvas order within each parent bucket so the
     // tree matches the top strip's order users already know.
     const appendChildren = (parentKey, depth) => {
       const bucket = childrenByParent.get(parentKey) ?? [];
       bucket.forEach((nodeRecord) => {
+        if (visitedNodes.has(nodeRecord)) {
+          return;
+        }
+
+        visitedNodes.add(nodeRecord);
+        coveredNodes.add(nodeRecord);
         const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
-        const hasChildren = agentName !== null && childrenByParent.has(agentName) && (childrenByParent.get(agentName) ?? []).length > 0;
+        const hasChildren = agentName !== null
+          && (childrenByParent.get(agentName) ?? []).some((childRecord) => !visitedNodes.has(childRecord));
         const isCollapsed = agentName !== null && collapsedSet.has(agentName);
         const nodeId = typeof nodeRecord?.id === "string" || typeof nodeRecord?.id === "number"
           ? String(nodeRecord.id)
@@ -197,11 +226,21 @@
 
         if (hasChildren && !isCollapsed) {
           appendChildren(agentName, depth + 1);
+        } else if (hasChildren) {
+          markDescendantsCovered(agentName);
         }
       });
     };
 
     appendChildren(null, 0);
+    nodes.forEach((nodeRecord) => {
+      if (!coveredNodes.has(nodeRecord)) {
+        const fallbackBucket = childrenByParent.get(null) ?? [];
+        fallbackBucket.push(nodeRecord);
+        childrenByParent.set(null, fallbackBucket);
+        appendChildren(null, 0);
+      }
+    });
 
     return { isEmpty: false, rows };
   }

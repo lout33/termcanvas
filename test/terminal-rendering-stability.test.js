@@ -75,3 +75,30 @@ test("Electron smoke checks read xterm buffers instead of renderer DOM", () => {
   assert.match(renderer, /firstTerminalText: getTerminalBufferText\(activeNodes\[0\]\),/);
   assert.doesNotMatch(renderer, /firstTerminalText: activeNodes\[0\]\?\.terminalMount\?\.textContent/);
 });
+
+test("Electron smoke uses focused-mode layout and resize checks before legacy canvas assertions", () => {
+  const main = readSource("main.js");
+  const renderer = readSource("renderer.js");
+  const focusedCheckIndex = main.indexOf("if (snapshot.focusedTerminalMode === true)");
+  const legacyMaximizeIndex = main.indexOf('logStep("toggle selected terminal maximize with Command+M")');
+
+  assert.match(renderer, /focusedTerminalMode: FOCUSED_TERMINAL_MODE,/);
+  assert.notEqual(focusedCheckIndex, -1);
+  assert.ok(focusedCheckIndex < legacyMaximizeIndex);
+  assert.match(main, /window\.dispatchEvent\(new Event\("resize"\)\);/);
+  assert.match(main, /focusedSnapshot\?\.visibleNodeCount !== 1/);
+});
+
+test("failed managed-agent resumes are guarded and rate limited", () => {
+  const renderer = readSource("renderer.js");
+
+  assert.match(renderer, /const MANAGED_AGENT_RESUME_RETRY_DELAY_MS = 30000;/);
+  assert.match(renderer, /isAgentResumeInFlight: false,/);
+  assert.match(renderer, /agentResumeRetryAfter: 0,/);
+  assert.match(
+    renderer,
+    /nodeRecord\.isAgentResumeInFlight[\s\S]*nodeRecord\.agentResumeRetryAfter > Date\.now\(\)/
+  );
+  assert.match(renderer, /nodeRecord\.agentResumeRetryAfter = Date\.now\(\) \+ MANAGED_AGENT_RESUME_RETRY_DELAY_MS;/);
+  assert.match(renderer, /finally \{[\s\S]*nodeRecord\.isAgentResumeInFlight = false;/);
+});
