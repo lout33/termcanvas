@@ -69,7 +69,10 @@ contextBridge.exposeInMainWorld(
     redrawTerminal: (terminalId) => ipcRenderer.invoke("terminal:redraw", { terminalId }),
     destroyTerminal: (terminalId, options = {}) => ipcRenderer.invoke("terminal:destroy", {
       terminalId,
-      preserveSession: options?.preserveSession === true
+      sessionKey: typeof options?.sessionKey === "string" ? options.sessionKey : null,
+      tmuxSessionName: typeof options?.tmuxSessionName === "string" ? options.tmuxSessionName : null,
+      preserveSession: options?.preserveSession === true,
+      retainDetachedIdentity: options?.retainDetachedIdentity === true
     }),
     syncCanvasAgentProject: (payload) => ipcRenderer.invoke("canvas-agent:sync", payload),
     subscribeCanvasAgentChanges: (payload) => ipcRenderer.invoke("canvas-agent:subscribe", payload),

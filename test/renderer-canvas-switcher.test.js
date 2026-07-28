@@ -6,7 +6,8 @@ const {
   deriveCanvasStripOverflowState,
   deriveTerminalStripViewModel,
   deriveTerminalStripDropTarget,
-  deriveTerminalTreeRows
+  deriveTerminalTreeRows,
+  deriveTerminalTreeDropAction
 } = require("../renderer_canvas_switcher.js");
 
 test("deriveCanvasSwitcherViewModel preserves canvas order for the strip model", () => {
@@ -274,8 +275,16 @@ test("deriveTerminalTreeRows lays out flat roots when no parent agents are set",
 
   assert.equal(isEmpty, false);
   assert.deepEqual(rows, [
-    { id: "t-1", label: "server", agentName: null, depth: 0, hasChildren: false, isCollapsed: false, isActive: false, runtimeState: null, attention: null },
-    { id: "t-2", label: "database", agentName: null, depth: 0, hasChildren: false, isCollapsed: false, isActive: true, runtimeState: null, attention: null }
+    {
+      id: "t-1", label: "server", agentName: null, branchKey: null, depth: 0,
+      hasChildren: false, isCollapsed: false, isActive: false, isUserArranged: false,
+      sessionKey: null, parentSessionKey: null, runtimeState: null, agentState: null, attention: null
+    },
+    {
+      id: "t-2", label: "database", agentName: null, branchKey: null, depth: 0,
+      hasChildren: false, isCollapsed: false, isActive: true, isUserArranged: false,
+      sessionKey: null, parentSessionKey: null, runtimeState: null, agentState: null, attention: null
+    }
   ]);
 });
 
@@ -283,8 +292,8 @@ test("deriveTerminalTreeRows nests children under their managed parent agent", (
   const { rows } = deriveTerminalTreeRows({
     activeCanvas: {
       nodes: [
-        { id: "root", titleText: "router", managedAgentName: "router", managedParentAgent: null },
-        { id: "child-1", titleText: "worker", managedAgentName: "worker-1", managedParentAgent: "router", managedRuntimeState: "running" },
+        { id: "root", titleText: "router", managedAgentName: "router", managedParentAgent: null, managedAgentState: "idle" },
+        { id: "child-1", titleText: "worker", managedAgentName: "worker-1", managedParentAgent: "router", managedRuntimeState: "running", managedAgentState: "active" },
         { id: "child-2", titleText: "tail", managedAgentName: "worker-2", managedParentAgent: "router", managedAttention: "waiting" }
       ]
     },
@@ -293,19 +302,19 @@ test("deriveTerminalTreeRows nests children under their managed parent agent", (
 
   assert.deepEqual(rows, [
     {
-      id: "root", label: "router", agentName: "router", depth: 0,
-      hasChildren: true, isCollapsed: false, isActive: false,
-      runtimeState: null, attention: null
+      id: "root", label: "router", agentName: "router", branchKey: "router", depth: 0,
+      hasChildren: true, isCollapsed: false, isActive: false, isUserArranged: false,
+      sessionKey: null, parentSessionKey: null, runtimeState: null, agentState: "idle", attention: null
     },
     {
-      id: "child-1", label: "worker", agentName: "worker-1", depth: 1,
-      hasChildren: false, isCollapsed: false, isActive: true,
-      runtimeState: "running", attention: null
+      id: "child-1", label: "worker", agentName: "worker-1", branchKey: "worker-1", depth: 1,
+      hasChildren: false, isCollapsed: false, isActive: true, isUserArranged: false,
+      sessionKey: null, parentSessionKey: null, runtimeState: "running", agentState: "active", attention: null
     },
     {
-      id: "child-2", label: "tail", agentName: "worker-2", depth: 1,
-      hasChildren: false, isCollapsed: false, isActive: false,
-      runtimeState: null, attention: "waiting"
+      id: "child-2", label: "tail", agentName: "worker-2", branchKey: "worker-2", depth: 1,
+      hasChildren: false, isCollapsed: false, isActive: false, isUserArranged: false,
+      sessionKey: null, parentSessionKey: null, runtimeState: null, agentState: null, attention: "waiting"
     }
   ]);
 });
@@ -369,4 +378,163 @@ test("deriveTerminalTreeRows emits every node once when parent metadata contains
   });
 
   assert.deepEqual(rows.map((row) => row.id).sort(), ["a", "b"]);
+});
+
+test("deriveTerminalTreeRows parents plain terminals through user arrangement overrides", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "parent", titleText: "main", sessionKey: "sk-parent" },
+        { id: "child", titleText: "logs", sessionKey: "sk-child", userParentSessionKey: "sk-parent" },
+        { id: "grandchild", titleText: "grep", sessionKey: "sk-grand", userParentSessionKey: "sk-child" }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(
+    rows.map(({ id, depth, parentSessionKey, isUserArranged }) => ({ id, depth, parentSessionKey, isUserArranged })),
+    [
+      { id: "parent", depth: 0, parentSessionKey: null, isUserArranged: false },
+      { id: "child", depth: 1, parentSessionKey: "sk-parent", isUserArranged: true },
+      { id: "grandchild", depth: 2, parentSessionKey: "sk-child", isUserArranged: true }
+    ]
+  );
+});
+
+test("deriveTerminalTreeRows lets an override beat the managed parent and force a root", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "root", titleText: "router", sessionKey: "sk-root", managedAgentName: "router" },
+        // Agentmux says this worker belongs to router, but the user dragged it out.
+        { id: "worker", titleText: "worker", sessionKey: "sk-worker", managedAgentName: "worker", managedParentAgent: "router", userParentSessionKey: null }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(
+    rows.map(({ id, depth }) => ({ id, depth })),
+    [
+      { id: "root", depth: 0 },
+      { id: "worker", depth: 0 }
+    ]
+  );
+});
+
+test("deriveTerminalTreeRows cuts override cycles back to roots", () => {
+  const { rows } = deriveTerminalTreeRows({
+    activeCanvas: {
+      nodes: [
+        { id: "a", titleText: "A", sessionKey: "sk-a", userParentSessionKey: "sk-b" },
+        { id: "b", titleText: "B", sessionKey: "sk-b", userParentSessionKey: "sk-a" }
+      ]
+    },
+    activeNodeId: null
+  });
+
+  assert.deepEqual(rows.map((row) => row.id).sort(), ["a", "b"]);
+  rows.forEach((row) => {
+    assert.equal(row.depth, 0);
+  });
+});
+
+test("deriveTerminalTreeDropAction re-parents when dropping onto a row", () => {
+  const action = deriveTerminalTreeDropAction({
+    nodes: [
+      { id: "parent", sessionKey: "sk-parent" },
+      { id: "dragged", sessionKey: "sk-dragged" }
+    ],
+    sourceNodeId: "dragged",
+    targetNodeId: "parent",
+    zone: "onto"
+  });
+
+  assert.deepEqual(action, {
+    type: "reparent",
+    parentSessionKey: "sk-parent",
+    targetSessionKey: "sk-parent"
+  });
+});
+
+test("deriveTerminalTreeDropAction reorders into the target's parent bucket", () => {
+  const action = deriveTerminalTreeDropAction({
+    nodes: [
+      { id: "root", sessionKey: "sk-root", managedAgentName: "root" },
+      { id: "sibling", sessionKey: "sk-sibling", managedAgentName: "sibling", managedParentAgent: "root" },
+      { id: "dragged", sessionKey: "sk-dragged" }
+    ],
+    sourceNodeId: "dragged",
+    targetNodeId: "sibling",
+    zone: "after"
+  });
+
+  assert.deepEqual(action, {
+    type: "reorder",
+    position: "after",
+    parentSessionKey: "sk-root",
+    targetSessionKey: "sk-sibling"
+  });
+});
+
+test("deriveTerminalTreeDropAction reorders to root when the target is a root", () => {
+  const action = deriveTerminalTreeDropAction({
+    nodes: [
+      { id: "root-a", sessionKey: "sk-a" },
+      { id: "dragged", sessionKey: "sk-dragged", userParentSessionKey: "sk-a" }
+    ],
+    sourceNodeId: "dragged",
+    targetNodeId: "root-a",
+    zone: "before"
+  });
+
+  assert.deepEqual(action, {
+    type: "reorder",
+    position: "before",
+    parentSessionKey: null,
+    targetSessionKey: "sk-a"
+  });
+});
+
+test("deriveTerminalTreeDropAction refuses to drop a node onto its own descendant", () => {
+  const nodes = [
+    { id: "grandparent", sessionKey: "sk-gp" },
+    { id: "parent", sessionKey: "sk-p", userParentSessionKey: "sk-gp" },
+    { id: "child", sessionKey: "sk-c", userParentSessionKey: "sk-p" }
+  ];
+
+  assert.deepEqual(deriveTerminalTreeDropAction({
+    nodes,
+    sourceNodeId: "grandparent",
+    targetNodeId: "child",
+    zone: "onto"
+  }), { type: "noop", reason: "cycle" });
+
+  assert.deepEqual(deriveTerminalTreeDropAction({
+    nodes,
+    sourceNodeId: "grandparent",
+    targetNodeId: "child",
+    zone: "before"
+  }), { type: "noop", reason: "cycle" });
+});
+
+test("deriveTerminalTreeDropAction rejects self-drops, bad zones, and keyless parents", () => {
+  const nodes = [
+    { id: "a", sessionKey: "sk-a" },
+    { id: "no-key" }
+  ];
+
+  assert.deepEqual(
+    deriveTerminalTreeDropAction({ nodes, sourceNodeId: "a", targetNodeId: "a", zone: "onto" }),
+    { type: "noop", reason: "invalid-target" }
+  );
+  assert.deepEqual(
+    deriveTerminalTreeDropAction({ nodes, sourceNodeId: "a", targetNodeId: "no-key", zone: "sideways" }),
+    { type: "noop", reason: "invalid-zone" }
+  );
+  assert.deepEqual(
+    deriveTerminalTreeDropAction({ nodes, sourceNodeId: "a", targetNodeId: "no-key", zone: "onto" }),
+    { type: "noop", reason: "target-missing-key" }
+  );
 });

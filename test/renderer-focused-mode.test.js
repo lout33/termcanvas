@@ -4,10 +4,95 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  createFocusedTerminalLifecycle,
   shouldShowNodeInFocusedMode,
   pickInitialSidebarViewForFocusedMode,
   pickFocusedNode
 } = require("../renderer_focused_mode");
+
+test("focused terminal lifecycle releases the old view before mounting the next", async () => {
+  const first = { id: "first", mounted: true, isExited: false, isRemoved: false };
+  const second = { id: "second", mounted: false, isExited: false, isRemoved: false };
+  const events = [];
+  const mountedNodes = () => [first, second].filter((nodeRecord) => nodeRecord.mounted);
+  let maximumMountedCount = mountedNodes().length;
+  const lifecycle = createFocusedTerminalLifecycle({
+    getNodes: () => [first, second],
+    isMounted: (nodeRecord) => nodeRecord.mounted,
+    canAttach: (nodeRecord) => !nodeRecord.isExited && !nodeRecord.isRemoved,
+    detach: async (nodeRecord) => {
+      events.push(`detach:${nodeRecord.id}`);
+      nodeRecord.mounted = false;
+    },
+    attach: async (nodeRecord) => {
+      events.push(`attach:${nodeRecord.id}`);
+      nodeRecord.mounted = true;
+      maximumMountedCount = Math.max(maximumMountedCount, mountedNodes().length);
+    },
+    focus: (nodeRecord) => {
+      events.push(`focus:${nodeRecord.id}`);
+    }
+  });
+
+  await lifecycle.request(second);
+
+  assert.deepEqual(events, ["detach:first", "attach:second", "focus:second"]);
+  assert.equal(maximumMountedCount, 1);
+  assert.deepEqual(mountedNodes(), [second]);
+});
+
+test("focused terminal lifecycle coalesces rapid focus changes to the latest node", async () => {
+  const first = { id: "first", mounted: true, isExited: false, isRemoved: false };
+  const second = { id: "second", mounted: false, isExited: false, isRemoved: false };
+  const third = { id: "third", mounted: false, isExited: false, isRemoved: false };
+  const events = [];
+  const lifecycle = createFocusedTerminalLifecycle({
+    getNodes: () => [first, second, third],
+    isMounted: (nodeRecord) => nodeRecord.mounted,
+    canAttach: (nodeRecord) => !nodeRecord.isExited && !nodeRecord.isRemoved,
+    detach: async (nodeRecord) => {
+      events.push(`detach:${nodeRecord.id}`);
+      nodeRecord.mounted = false;
+    },
+    attach: async (nodeRecord) => {
+      events.push(`attach:${nodeRecord.id}`);
+      nodeRecord.mounted = true;
+    },
+    focus: (nodeRecord) => {
+      events.push(`focus:${nodeRecord.id}`);
+    }
+  });
+
+  const secondRequest = lifecycle.request(second);
+  const thirdRequest = lifecycle.request(third);
+  await Promise.all([secondRequest, thirdRequest]);
+
+  assert.deepEqual(events, ["detach:first", "attach:third", "focus:third", "focus:third"]);
+  assert.equal(second.mounted, false);
+  assert.equal(third.mounted, true);
+});
+
+test("focused terminal lifecycle leaves exited nodes detached", async () => {
+  const live = { id: "live", mounted: true, isExited: false, isRemoved: false };
+  const exited = { id: "exited", mounted: false, isExited: true, isRemoved: false };
+  let attachCount = 0;
+  const lifecycle = createFocusedTerminalLifecycle({
+    getNodes: () => [live, exited],
+    isMounted: (nodeRecord) => nodeRecord.mounted,
+    canAttach: (nodeRecord) => !nodeRecord.isExited && !nodeRecord.isRemoved,
+    detach: async (nodeRecord) => {
+      nodeRecord.mounted = false;
+    },
+    attach: async () => {
+      attachCount += 1;
+    }
+  });
+
+  await lifecycle.request(exited);
+
+  assert.equal(live.mounted, false);
+  assert.equal(attachCount, 0);
+});
 
 test("focused mode shows only the selected live node", () => {
   const selected = { id: "selected", isRemoved: false };
@@ -22,6 +107,14 @@ test("focused mode never reveals a removed node", () => {
   const removed = { id: "removed", isRemoved: true };
 
   assert.equal(shouldShowNodeInFocusedMode({ nodeRecord: removed, activeNodeRecord: removed }), false);
+});
+
+test("focused mode hides archived agents and never restores focus to them", () => {
+  const archived = { sessionKey: "archived", isRemoved: false, isExited: false, managedAgentState: "archived" };
+  const active = { sessionKey: "active", isRemoved: false, isExited: false, managedAgentState: "active" };
+
+  assert.equal(shouldShowNodeInFocusedMode({ nodeRecord: archived, activeNodeRecord: archived }), false);
+  assert.equal(pickFocusedNode([archived, active], "archived"), active);
 });
 
 test("focused mode uses the terminal tree whenever a canvas exists", () => {

@@ -95,7 +95,9 @@ function createTmuxBackend(options) {
     resolveExistingDirectory,
     logger = console,
     sessionPrefix = "termcanvas",
-    probeTimeoutMs = 500
+    probeTimeoutMs = 500,
+    killProcess = (pid, signal) => process.kill(pid, signal),
+    orphanReapGraceMs = 300
   } = options;
   const runProcess = createTmuxCommandRunner({ spawnProcess, getEnvironment });
   const configuredSessions = new Set();
@@ -228,9 +230,111 @@ function createTmuxBackend(options) {
     configuredSessions.add(sessionName);
   };
 
+  const collectSessionProcessTree = async (tmuxBinary, sessionName) => {
+    const panesResult = await runKnownTmuxCommand(
+      tmuxBinary,
+      ["list-panes", "-t", sessionName, "-F", "#{pane_pid}"]
+    );
+
+    if (panesResult.status !== 0) {
+      return [];
+    }
+
+    const rootPids = panesResult.stdout
+      .split("\n")
+      .map((line) => Number(line.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 1);
+
+    if (rootPids.length === 0) {
+      return [];
+    }
+
+    const psResult = await runProcess("ps", ["-eo", "pid=,ppid="]);
+
+    if (psResult.status !== 0) {
+      return rootPids;
+    }
+
+    const childrenByParent = new Map();
+
+    psResult.stdout.split("\n").forEach((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s*$/u.exec(line);
+
+      if (match === null) {
+        return;
+      }
+
+      const pid = Number(match[1]);
+      const ppid = Number(match[2]);
+
+      if (!childrenByParent.has(ppid)) {
+        childrenByParent.set(ppid, []);
+      }
+
+      childrenByParent.get(ppid).push(pid);
+    });
+
+    const collected = new Set();
+    const queue = [...rootPids];
+
+    while (queue.length > 0) {
+      const pid = queue.shift();
+
+      if (collected.has(pid)) {
+        continue;
+      }
+
+      collected.add(pid);
+
+      for (const childPid of childrenByParent.get(pid) ?? []) {
+        queue.push(childPid);
+      }
+    }
+
+    collected.delete(process.pid);
+
+    return [...collected].filter((pid) => pid > 1);
+  };
+
+  const reapProcessTree = async (pids) => {
+    if (pids.length === 0) {
+      return;
+    }
+
+    for (const pid of pids) {
+      try {
+        killProcess(pid, "SIGTERM");
+      } catch {
+        // Already exited.
+      }
+    }
+
+    if (orphanReapGraceMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, orphanReapGraceMs);
+      });
+    }
+
+    for (const pid of pids) {
+      try {
+        killProcess(pid, "SIGKILL");
+      } catch {
+        // Already exited.
+      }
+    }
+  };
+
   const destroySessionWithBinary = async (tmuxBinary, sessionName) => {
+    // tmux kill-session closes the pane PTY but does not reliably kill
+    // detached children (agents like opencode double-fork and survive as
+    // orphans spinning at full CPU for days). Capture the pane's process
+    // tree before killing the session, then reap whatever survives.
+    const processTree = await collectSessionProcessTree(tmuxBinary, sessionName);
+
     const result = await runKnownTmuxCommand(tmuxBinary, ["kill-session", "-t", sessionName]);
     configuredSessions.delete(sessionName);
+
+    await reapProcessTree(processTree);
 
     if (result.status !== 0 && !isTmuxSessionMissingResult(result)) {
       ensureCommandSucceeded(result, `close tmux session ${sessionName}`);

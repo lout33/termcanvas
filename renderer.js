@@ -20,7 +20,8 @@ const {
   deriveCanvasStripOverflowState,
   deriveTerminalStripViewModel,
   deriveTerminalStripDropTarget,
-  deriveTerminalTreeRows
+  deriveTerminalTreeRows,
+  deriveTerminalTreeDropAction
 } = window.noteCanvasRendererCanvasSwitcher;
 const {
   shouldHandleCanvasWheel,
@@ -47,6 +48,7 @@ const {
 } = window.noteCanvasRendererCanvasDelegation;
 const { mapWithConcurrency } = window.noteCanvasRendererAsyncPool;
 const {
+  createFocusedTerminalLifecycle,
   shouldShowNodeInFocusedMode,
   pickInitialSidebarViewForFocusedMode,
   pickFocusedNode
@@ -196,7 +198,6 @@ const TERMINAL_FALLBACK_ROWS = 24;
 const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 240];
 const TERMINAL_RESTORE_CONCURRENCY = 4;
 const MANAGED_AGENT_NODE_GAP = 72;
-const MANAGED_AGENT_RESUME_RETRY_DELAY_MS = 30000;
 // Leave headroom below Chromium's per-page WebGL context limit. Terminals
 // beyond this budget keep xterm's stable DOM renderer instead of causing the
 // browser to evict contexts and repeatedly rebuild glyph atlases.
@@ -358,6 +359,57 @@ const listReorderState = {
   moveItem: null
 };
 
+const focusedTerminalLifecycle = createFocusedTerminalLifecycle({
+  getNodes: () => canvases.flatMap((canvasRecord) => canvasRecord.nodes),
+  isMounted: (nodeRecord) => nodeRecord?.terminal !== null || typeof nodeRecord?.terminalId === "string",
+  canAttach: (nodeRecord) => (
+    !isWindowUnloading
+    && nodeRecord?.isRemoved !== true
+    && nodeRecord?.isExited !== true
+    && nodeRecord?.managedAgentState !== "archived"
+    && nodeRecord?.canvas?.id === activeCanvasId
+    && nodeRecord === activeNodeRecord
+  ),
+  detach: async (nodeRecord) => {
+    const hasDurableSession = nodeRecord.backend === "tmux" && nodeRecord.tmuxSessionName !== null;
+    await releaseTerminalSession(nodeRecord, {
+      shouldDestroySession: false,
+      retainDetachedIdentity: hasDurableSession
+    });
+
+    if (!hasDurableSession && !nodeRecord.isRemoved) {
+      setNodeExitedState(nodeRecord, null, null);
+      setTerminalNodeStatus(nodeRecord, "Restart required");
+      nodeRecord.meta.textContent = "tmux is unavailable; reopen to start a fresh shell";
+    }
+  },
+  attach: (nodeRecord) => bindTerminalSession(nodeRecord, { shouldFocus: false }),
+  focus: (nodeRecord) => {
+    requestAnimationFrame(() => {
+      if (
+        nodeRecord === activeNodeRecord
+        && nodeRecord.terminal !== null
+        && !nodeRecord.isTitleEditing
+      ) {
+        nodeRecord.terminal.focus();
+      }
+    });
+  },
+  onError: (nodeRecord, error) => {
+    console.error(error);
+
+    if (nodeRecord == null || nodeRecord.isRemoved) {
+      return;
+    }
+
+    setNodeExitedState(nodeRecord, null, null);
+    const message = error instanceof Error ? error.message : String(error ?? "Could not attach terminal");
+    const isStoppedSession = /not running|can't find session|missing/u.test(message);
+    setTerminalNodeStatus(nodeRecord, isStoppedSession ? "Stopped" : "Attach failed");
+    nodeRecord.meta.textContent = message;
+  }
+});
+
 const removeTerminalDataListener = window.noteCanvas.onTerminalData(({ terminalId, data }) => {
   const nodeRecord = terminalNodeMap.get(terminalId);
 
@@ -388,6 +440,16 @@ const removeTerminalExitListener = window.noteCanvas.onTerminalExit(({ terminalI
     return;
   }
 
+  terminalNodeMap.delete(terminalId);
+  if (nodeRecord.terminalId === terminalId) {
+    nodeRecord.terminalId = null;
+  }
+  nodeRecord.disposeInput();
+  nodeRecord.disposeInput = () => {};
+  nodeRecord.resizeObserver?.disconnect();
+  nodeRecord.resizeObserver = null;
+  nodeRecord.syncSize = () => {};
+  detachTerminalWebglRenderer(nodeRecord);
   setNodeExitedState(nodeRecord, exitCode, signal);
   renderCanvasSwitcher();
 });
@@ -830,6 +892,9 @@ function updateExitedOverlay(nodeRecord) {
 
     nodeRecord.overlayTitle.textContent = "Shell exited";
     nodeRecord.overlayMeta.textContent = `${exitLabel} · Reopen shell to continue here.`;
+    if (nodeRecord.reopenButton instanceof HTMLButtonElement) {
+      nodeRecord.reopenButton.textContent = nodeRecord.managedAgentName === null ? "Reopen shell" : "Resume agent";
+    }
     nodeRecord.overlay.hidden = false;
   } else {
     nodeRecord.overlay.hidden = true;
@@ -914,7 +979,12 @@ function getAttentionQueueNodes() {
   }
   const activeNodes = canvasRecord.nodes.filter((nodeRecord) => !nodeRecord.isRemoved && nodeRecord.element !== null);
   const queueIds = window.noteCanvasRendererNodeStatus.deriveAttentionQueue(
-    activeNodes.map((nodeRecord) => ({ id: nodeRecord.id, state: nodeRecord.element.dataset.state }))
+    activeNodes.map((nodeRecord) => ({
+      id: nodeRecord.id,
+      state: nodeRecord.element.dataset.state,
+      attention: nodeRecord.managedAttention,
+      agentState: nodeRecord.managedAgentState
+    }))
   );
   return queueIds
     .map((queueId) => activeNodes.find((nodeRecord) => nodeRecord.id === queueId))
@@ -946,6 +1016,12 @@ function getAttentionNodeKey(canvasRecord, nodeRecord) {
 function refreshAttentionState() {
   const chip = document.getElementById("board-attention-chip");
   const queueNodes = getAttentionQueueNodes();
+  const handoffCount = queueNodes.filter((nodeRecord) => (
+    window.noteCanvasRendererNodeStatus.isHandoffAttention({
+      attention: nodeRecord.managedAttention,
+      agentState: nodeRecord.managedAgentState
+    })
+  )).length;
 
   if (chip !== null) {
     if (chip.dataset.bound !== "1") {
@@ -953,7 +1029,13 @@ function refreshAttentionState() {
       chip.addEventListener("click", focusNextAttentionNode);
     }
     chip.hidden = queueNodes.length === 0;
-    chip.textContent = queueNodes.length === 1 ? "1 agent needs you" : `${queueNodes.length} agents need you`;
+    if (handoffCount === queueNodes.length && handoffCount > 0) {
+      chip.textContent = handoffCount === 1 ? "1 handoff needs review" : `${handoffCount} handoffs need review`;
+    } else if (handoffCount > 0) {
+      chip.textContent = `${queueNodes.length} items need you · ${handoffCount} handoff${handoffCount === 1 ? "" : "s"}`;
+    } else {
+      chip.textContent = queueNodes.length === 1 ? "1 agent needs you" : `${queueNodes.length} agents need you`;
+    }
   }
 
   const noteButton = document.getElementById("create-note-button");
@@ -1124,7 +1206,13 @@ async function publishCanvasSnapshot() {
     buildCanvasSnapshotDescriptors(canvasRecord),
     new Date().toISOString()
   );
-  const comparable = JSON.stringify(snapshot).replace(/"generated_at":"[^"]*"/u, "");
+  const comparable = JSON.stringify({
+    ...snapshot,
+    generated_at: null,
+    terminals: Array.isArray(snapshot.terminals)
+      ? snapshot.terminals.map((terminalSnapshot) => ({ ...terminalSnapshot, quiet: null }))
+      : []
+  });
 
   if (comparable === lastCanvasSnapshotComparable) {
     return;
@@ -1514,6 +1602,11 @@ function formatTerminalMeta(nodeRecord) {
 
 function syncTerminalMeta(nodeRecord) {
   const metaText = formatTerminalMeta(nodeRecord);
+  if (typeof nodeRecord.managedAgentState === "string" && nodeRecord.managedAgentState.length > 0) {
+    nodeRecord.element.dataset.agentState = nodeRecord.managedAgentState;
+  } else {
+    delete nodeRecord.element.dataset.agentState;
+  }
   if (nodeRecord.meta.textContent !== metaText) {
     nodeRecord.meta.textContent = metaText;
   }
@@ -1652,40 +1745,80 @@ function syncManagedNodeState(nodeRecord, agentSnapshot) {
 async function releaseTerminalSession(nodeRecord, options = {}) {
   const shouldDestroySession = options.shouldDestroySession !== false;
   const preserveSession = options.preserveSession === true;
-  const terminalId = nodeRecord.terminalId;
+  const retainDetachedIdentity = options.retainDetachedIdentity === true;
 
-  nodeRecord.disposeInput();
-  nodeRecord.disposeInput = () => {};
-  nodeRecord.resizeObserver?.disconnect();
-  nodeRecord.resizeObserver = null;
-  nodeRecord.syncSize = () => {};
+  if (nodeRecord.terminalReleasePromise != null) {
+    await nodeRecord.terminalReleasePromise;
 
-  if (typeof terminalId === "string") {
-    await window.noteCanvas.destroyTerminal(terminalId, {
-      preserveSession: preserveSession || !shouldDestroySession
-    });
+    // A destructive close that arrives while a preservation detach is in
+    // flight must still remove the now-detached tmux session.
+    if (shouldDestroySession) {
+      return releaseTerminalSession(nodeRecord, options);
+    }
+    return;
   }
 
-  if (typeof terminalId === "string") {
-    terminalNodeMap.delete(terminalId);
-  }
+  const releasePromise = (async () => {
+    const terminalId = nodeRecord.terminalId;
+    const shouldPreserveSession = preserveSession || !shouldDestroySession;
+    nodeRecord.terminalBindingGeneration += 1;
+    nodeRecord.disposeInput();
+    nodeRecord.disposeInput = () => {};
+    nodeRecord.resizeObserver?.disconnect();
+    nodeRecord.resizeObserver = null;
+    nodeRecord.syncSize = () => {};
+    pendingTerminalSizeNodes.delete(nodeRecord);
+    pendingTerminalRefreshNodes.delete(nodeRecord);
+    pendingTailUpdateNodes.delete(nodeRecord);
 
-  nodeRecord.terminalId = null;
-  detachTerminalWebglRenderer(nodeRecord);
-  nodeRecord.terminal?.dispose();
-  nodeRecord.terminal = null;
-  nodeRecord.fitAddon = null;
-  nodeRecord.terminalMount?.replaceChildren();
+    try {
+      if (typeof terminalId === "string" || nodeRecord.tmuxSessionName !== null) {
+        await window.noteCanvas.destroyTerminal(terminalId, {
+          sessionKey: nodeRecord.sessionKey,
+          tmuxSessionName: nodeRecord.tmuxSessionName,
+          preserveSession: shouldPreserveSession,
+          retainDetachedIdentity: shouldPreserveSession && retainDetachedIdentity
+        });
+      }
+    } finally {
+      if (typeof terminalId === "string") {
+        terminalNodeMap.delete(terminalId);
+      }
+
+      nodeRecord.terminalId = null;
+      detachTerminalWebglRenderer(nodeRecord);
+      nodeRecord.terminal?.dispose();
+      nodeRecord.terminal = null;
+      nodeRecord.fitAddon = null;
+      nodeRecord.terminalMount?.replaceChildren();
+    }
+  })();
+
+  nodeRecord.terminalReleasePromise = releasePromise;
+
+  try {
+    await releasePromise;
+  } finally {
+    if (nodeRecord.terminalReleasePromise === releasePromise) {
+      nodeRecord.terminalReleasePromise = null;
+    }
+  }
 }
 
 async function bindTerminalSession(nodeRecord, options = {}) {
   const shouldFocus = options.shouldFocus !== false;
+
+  if (nodeRecord.terminal !== null || typeof nodeRecord.terminalId === "string") {
+    return;
+  }
 
   if (typeof TerminalConstructor !== "function" || typeof FitAddonConstructor !== "function") {
     throw new Error("Terminal renderer assets failed to load.");
   }
 
   const terminalId = crypto.randomUUID();
+  const bindingGeneration = nodeRecord.terminalBindingGeneration + 1;
+  nodeRecord.terminalBindingGeneration = bindingGeneration;
   const terminalTheme = getTerminalTheme();
   const terminal = new TerminalConstructor({
     allowProposedApi: true,
@@ -1748,7 +1881,8 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       sessionKey: nodeRecord.sessionKey,
       tmuxSessionName: nodeRecord.tmuxSessionName,
       agentProjectTag: nodeRecord.canvas?.agentProjectTag ?? null,
-      managedAgentName: nodeRecord.managedAgentName
+      managedAgentName: nodeRecord.managedAgentName,
+      parentAgentName: nodeRecord.managedParentAgent
     });
 
     if (nodeRecord.isRemoved) {
@@ -1769,6 +1903,18 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       scheduleCanvasAgentSync();
     }
 
+    // Child-spawned terminals come back with their parent agent name. The
+    // agentmux graph sync will eventually reconfirm this, but writing it now
+    // means the navigator shows the parent relationship immediately.
+    if (
+      nodeRecord.managedParentAgent === null
+      && typeof created.managedParentAgent === "string"
+      && created.managedParentAgent.length > 0
+    ) {
+      nodeRecord.managedParentAgent = created.managedParentAgent;
+      scheduleCanvasAgentSync();
+    }
+
     setNodeLiveState(
       nodeRecord,
       created.shellName,
@@ -1780,8 +1926,11 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       name: nodeRecord.managedAgentName,
       role: nodeRecord.managedAgentRole,
       project: nodeRecord.managedProjectTag,
+      parent_agent: nodeRecord.managedParentAgent,
+      depth: nodeRecord.managedDepth,
       runtime_state: nodeRecord.managedRuntimeState,
       agent_state: nodeRecord.managedAgentState,
+      attention: nodeRecord.managedAttention,
       tmux_session: nodeRecord.tmuxSessionName,
       workdir: nodeRecord.cwd
     });
@@ -1807,7 +1956,13 @@ async function bindTerminalSession(nodeRecord, options = {}) {
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = 0;
 
-        if (isWindowUnloading || nodeRecord.isRemoved || nodeRecord.terminal === null) {
+        if (
+          isWindowUnloading
+          || nodeRecord.isRemoved
+          || nodeRecord.terminal !== terminal
+          || nodeRecord.terminalId !== terminalId
+          || nodeRecord.terminalBindingGeneration !== bindingGeneration
+        ) {
           return;
         }
 
@@ -1817,15 +1972,14 @@ async function bindTerminalSession(nodeRecord, options = {}) {
           return;
         }
 
-        attachTerminalWebglRenderer(nodeRecord);
-        scheduleTerminalRefresh([nodeRecord]);
-
         if (fittedSize.cols === lastSyncedCols && fittedSize.rows === lastSyncedRows) {
           return;
         }
 
         lastSyncedCols = fittedSize.cols;
         lastSyncedRows = fittedSize.rows;
+        attachTerminalWebglRenderer(nodeRecord);
+        scheduleTerminalRefresh([nodeRecord]);
         void window.noteCanvas.resizeTerminal(terminalId, fittedSize.cols, fittedSize.rows);
       });
     };
@@ -1855,13 +2009,33 @@ async function reopenTerminalNode(nodeRecord) {
     return;
   }
 
+  if (nodeRecord.managedAgentName !== null && nodeRecord.managedRuntimeState === "stopped") {
+    await resumeManagedAgentRuntime(nodeRecord, {
+      project: nodeRecord.managedProjectTag
+    });
+    return;
+  }
+
   setTerminalNodeStatus(nodeRecord, "Reopening");
-  nodeRecord.meta.textContent = "Starting fresh shell";
+  nodeRecord.meta.textContent = nodeRecord.managedAgentName === null
+    ? "Starting fresh shell"
+    : "Attaching to agent runtime";
   nodeRecord.overlay.hidden = true;
 
   try {
-    await releaseTerminalSession(nodeRecord);
-    await bindTerminalSession(nodeRecord);
+    await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    if (nodeRecord.managedAgentName === null) {
+      nodeRecord.tmuxSessionName = null;
+    }
+    nodeRecord.isExited = false;
+    nodeRecord.exitCode = null;
+    nodeRecord.exitSignal = null;
+
+    if (FOCUSED_TERMINAL_MODE) {
+      await activateFocusedTerminalNode(nodeRecord);
+    } else {
+      await bindTerminalSession(nodeRecord);
+    }
   } catch (error) {
     setNodeExitedState(nodeRecord, null, null);
     setTerminalNodeStatus(nodeRecord, "Restart failed");
@@ -2832,9 +3006,235 @@ function scheduleTerminalNavigatorScrollSync(options = {}) {
   });
 }
 
+// Drag-and-drop state for rearranging the terminal tree. Dragging between
+// rows reorders siblings; dropping onto a row's middle re-parents. The
+// arrangement is stored as a local `userParentSessionKey` override on the
+// node record — agentmux sync never touches it.
+let terminalTreeDragSourceId = null;
+
+function getTerminalTreeDropZone(event, item) {
+  const rect = item.getBoundingClientRect();
+
+  if (rect.height <= 0) {
+    return "onto";
+  }
+
+  const ratio = (event.clientY - rect.top) / rect.height;
+
+  if (ratio < 0.3) {
+    return "before";
+  }
+
+  if (ratio > 0.7) {
+    return "after";
+  }
+
+  return "onto";
+}
+
+function clearTerminalTreeDragState() {
+  terminalTreeDragSourceId = null;
+  terminalNavigator?.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after, .is-drop-onto").forEach((element) => {
+    element.classList.remove("is-dragging", "is-drop-before", "is-drop-after", "is-drop-onto");
+  });
+}
+
+function applyTerminalTreeDrop(sourceNodeId, targetNodeId, zone) {
+  const activeCanvas = getActiveCanvas();
+
+  if (activeCanvas === null) {
+    return;
+  }
+
+  const action = deriveTerminalTreeDropAction({
+    nodes: activeCanvas.nodes.filter((nodeRecord) => nodeRecord.isRemoved !== true),
+    sourceNodeId,
+    targetNodeId,
+    zone
+  });
+
+  if (action.type === "noop") {
+    return;
+  }
+
+  const sourceNode = activeCanvas.nodes.find((nodeRecord) => String(nodeRecord.id) === String(sourceNodeId));
+  const targetNode = activeCanvas.nodes.find((nodeRecord) => String(nodeRecord.id) === String(targetNodeId));
+
+  if (sourceNode == null || targetNode == null) {
+    return;
+  }
+
+  sourceNode.userParentSessionKey = action.parentSessionKey;
+
+  if (action.type === "reorder") {
+    const nodes = activeCanvas.nodes;
+    const fromIndex = nodes.indexOf(sourceNode);
+
+    if (fromIndex >= 0) {
+      nodes.splice(fromIndex, 1);
+      let insertIndex = nodes.indexOf(targetNode);
+
+      if (insertIndex < 0) {
+        insertIndex = nodes.length;
+      }
+
+      if (action.position === "after") {
+        insertIndex += 1;
+      }
+
+      nodes.splice(insertIndex, 0, sourceNode);
+    }
+  }
+
+  renderTerminalNavigator();
+  scheduleAppSessionSave();
+}
+
+function attachTerminalTreeDragAndDrop(item, dragHandle, row) {
+  if (!(item instanceof HTMLElement) || !(dragHandle instanceof HTMLElement)) {
+    return;
+  }
+
+  item.draggable = false;
+  dragHandle.draggable = true;
+
+  dragHandle.addEventListener("dragstart", (event) => {
+    terminalTreeDragSourceId = row.id;
+    item.classList.add("is-dragging");
+
+    if (event.dataTransfer != null) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", `terminal-node:${row.id}`);
+    }
+  });
+
+  dragHandle.addEventListener("dragend", () => {
+    clearTerminalTreeDragState();
+  });
+
+  dragHandle.addEventListener("keydown", (event) => {
+    const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+
+    if (direction === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const activeCanvas = getActiveCanvas();
+    const canvasId = activeCanvas?.id ?? null;
+    const treeRows = deriveTerminalTreeRows({
+      activeCanvas,
+      activeNodeId: activeNodeRecord?.id ?? null,
+      collapsedAgentNames: canvasId === null ? new Set() : getCollapsedAgentNamesForCanvas(canvasId)
+    }).rows;
+    const sourceRow = treeRows.find((candidate) => candidate.id === String(row.id));
+    const siblings = sourceRow == null
+      ? []
+      : treeRows.filter((candidate) => (
+        candidate.parentSessionKey === sourceRow.parentSessionKey
+        && candidate.agentState !== "archived"
+      ));
+    const sourceIndex = siblings.findIndex((candidate) => candidate.id === String(row.id));
+    const targetRow = siblings[sourceIndex + direction];
+
+    if (targetRow == null) {
+      return;
+    }
+
+    applyTerminalTreeDrop(row.id, targetRow.id, direction < 0 ? "before" : "after");
+    requestAnimationFrame(() => {
+      const nextHandle = Array.from(terminalNavigator?.querySelectorAll(".terminal-navigator-drag-handle") ?? [])
+        .find((candidate) => candidate.dataset.nodeId === String(row.id));
+      nextHandle?.focus();
+    });
+  });
+
+  item.addEventListener("dragover", (event) => {
+    if (terminalTreeDragSourceId === null || terminalTreeDragSourceId === row.id) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (event.dataTransfer != null) {
+      event.dataTransfer.dropEffect = "move";
+    }
+
+    const zone = getTerminalTreeDropZone(event, item);
+    item.classList.toggle("is-drop-before", zone === "before");
+    item.classList.toggle("is-drop-after", zone === "after");
+    item.classList.toggle("is-drop-onto", zone === "onto");
+  });
+
+  item.addEventListener("dragleave", () => {
+    item.classList.remove("is-drop-before", "is-drop-after", "is-drop-onto");
+  });
+
+  item.addEventListener("drop", (event) => {
+    if (terminalTreeDragSourceId === null) {
+      return;
+    }
+
+    event.preventDefault();
+    const sourceNodeId = terminalTreeDragSourceId;
+    const zone = getTerminalTreeDropZone(event, item);
+    clearTerminalTreeDragState();
+    applyTerminalTreeDrop(sourceNodeId, row.id, zone);
+  });
+}
+
+async function spawnChildTerminalFromNode(parentNodeRecord) {
+  if (parentNodeRecord === null) {
+    return undefined;
+  }
+
+  const activeCanvas = getActiveCanvas();
+  if (activeCanvas === null) {
+    return undefined;
+  }
+
+  const parentAgentName = normalizeManagedAgentName(parentNodeRecord.managedAgentName);
+
+  if (parentAgentName === null) {
+    console.warn("spawnChildTerminalFromNode: refusing to spawn — parent is not a managed agent.", parentNodeRecord);
+    return undefined;
+  }
+
+  // Place the new node just to the right of the parent on the board so the
+  // spatial tree mirrors the agentmux tree. Falls back to the viewport
+  // center if the parent has no position yet.
+  const parentX = Number.isFinite(parentNodeRecord.x) ? parentNodeRecord.x : 0;
+  const parentY = Number.isFinite(parentNodeRecord.y) ? parentNodeRecord.y : 0;
+  const childX = parentX + DEFAULT_NODE_WIDTH + MANAGED_AGENT_NODE_GAP;
+  const childY = parentY;
+
+  try {
+    const createdNode = await createTerminalNode({
+      canvasRecord: activeCanvas,
+      managedParentAgent: parentAgentName,
+      cwd: parentNodeRecord.cwd,
+      x: childX,
+      y: childY,
+      shouldFocus: true
+    });
+
+    if (createdNode !== undefined) {
+      activateFocusedTerminalNode(createdNode);
+      renderTerminalNavigator();
+    }
+
+    return createdNode;
+  } catch (error) {
+    console.error("spawnChildTerminalFromNode failed:", error);
+    return undefined;
+  }
+}
+
 function createTerminalNavigatorEntry(row) {
   const item = document.createElement("li");
   item.className = "terminal-navigator-row";
+  item.dataset.nodeId = row.id;
 
   const button = document.createElement("button");
   button.type = "button";
@@ -2842,9 +3242,7 @@ function createTerminalNavigatorEntry(row) {
   button.dataset.nodeId = row.id;
   button.style.setProperty("--workspace-entry-depth", String(row.depth));
   button.title = row.label;
-  button.setAttribute("aria-label", row.hasChildren
-    ? `${row.isCollapsed ? "Expand" : "Collapse"} ${row.label}`
-    : `Focus ${row.label}`);
+  button.setAttribute("aria-label", `Focus ${row.label}`);
 
   if (row.isActive) {
     button.classList.add("is-active");
@@ -2864,6 +3262,11 @@ function createTerminalNavigatorEntry(row) {
     button.dataset.attention = row.attention;
   }
 
+  if (typeof row.agentState === "string" && row.agentState.length > 0) {
+    button.dataset.agentState = row.agentState;
+    item.dataset.agentState = row.agentState;
+  }
+
   // Decoration: disclosure chevron (only when the row has children) + a
   // terminal icon. Reuses the workspace-browser entry pattern.
   const decoration = document.createElement("span");
@@ -2874,6 +3277,9 @@ function createTerminalNavigatorEntry(row) {
   if (row.hasChildren) {
     disclosure.classList.toggle("is-expanded", !row.isCollapsed);
     disclosure.innerHTML = '<svg class="terminal-navigator-disclosure-icon" viewBox="0 0 16 16"><path d="M6 3.75 10.75 8 6 12.25"></path></svg>';
+    disclosure.title = `${row.isCollapsed ? "Expand" : "Collapse"} ${row.label}`;
+    disclosure.setAttribute("role", "button");
+    disclosure.tabIndex = 0;
   } else {
     disclosure.classList.add("is-placeholder");
   }
@@ -2905,8 +3311,8 @@ function createTerminalNavigatorEntry(row) {
     if (row.hasChildren && event.target instanceof Element) {
       const targetIsDisclosure = event.target.closest(".terminal-navigator-disclosure") !== null;
       if (targetIsDisclosure) {
-        if (canvasId !== null && row.agentName !== null) {
-          toggleTerminalBranchCollapsed(canvasId, row.agentName);
+        if (canvasId !== null && row.branchKey !== null) {
+          toggleTerminalBranchCollapsed(canvasId, row.branchKey);
           renderTerminalNavigator();
         }
         return;
@@ -2918,16 +3324,62 @@ function createTerminalNavigatorEntry(row) {
     }
   });
 
-  button.addEventListener("dblclick", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const nodeRecord = getActiveCanvasNodeById(row.id);
-    if (nodeRecord !== null) {
-      activateTerminalStripNode(nodeRecord, { clickCount: 2 });
-    }
-  });
+  if (row.hasChildren) {
+    disclosure.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (canvasId !== null && row.branchKey !== null) {
+        toggleTerminalBranchCollapsed(canvasId, row.branchKey);
+        renderTerminalNavigator();
+      }
+    });
+  }
 
   item.append(button);
+
+  // "+" affordance: spawn a child terminal under this row's agent. Only
+  // managed-agent rows can have children — plain shells have no agent in
+  // the agentmux graph to be a parent. Kept as a sibling of the entry
+  // button (nesting buttons is invalid HTML) and revealed on hover/focus
+  // so the row stays calm at rest.
+  const canSpawnChild = typeof row.agentName === "string" && row.agentName.length > 0;
+
+  if (canSpawnChild) {
+    const spawnButton = document.createElement("button");
+    spawnButton.type = "button";
+    spawnButton.className = "terminal-navigator-spawn";
+    spawnButton.dataset.nodeId = row.id;
+    spawnButton.title = "Spawn a child terminal under this agent";
+    spawnButton.setAttribute("aria-label", `Spawn child terminal under ${row.label}`);
+    spawnButton.innerHTML = '<svg class="terminal-navigator-spawn-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10"></path><path d="M3 8h10"></path></svg>';
+
+    spawnButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const nodeRecord = getActiveCanvasNodeById(row.id);
+      if (nodeRecord !== null) {
+        void spawnChildTerminalFromNode(nodeRecord);
+      }
+    });
+
+    item.append(spawnButton);
+  }
+
+  const dragHandle = document.createElement("button");
+  dragHandle.type = "button";
+  dragHandle.className = "terminal-navigator-drag-handle";
+  dragHandle.dataset.nodeId = row.id;
+  dragHandle.title = `Drag to move or nest ${row.label}; use Up and Down arrow keys to reorder`;
+  dragHandle.setAttribute("aria-label", `Move ${row.label}; use Up and Down arrow keys to reorder`);
+  dragHandle.setAttribute("aria-keyshortcuts", "ArrowUp ArrowDown");
+  dragHandle.setAttribute("aria-roledescription", "drag handle");
+  dragHandle.innerHTML = '<svg class="terminal-navigator-drag-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1"></circle><circle cx="11" cy="4" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="12" r="1"></circle><circle cx="11" cy="12" r="1"></circle></svg>';
+
+  item.append(dragHandle);
+  attachTerminalTreeDragAndDrop(item, dragHandle, row);
   return item;
 }
 
@@ -2935,6 +3387,10 @@ function renderTerminalNavigator() {
   if (!(terminalNavigator instanceof HTMLElement)) {
     return;
   }
+
+  // A status refresh can rebuild the navigator while Chromium still owns a
+  // native drag. Cancel that stale source before replacing its DOM element.
+  clearTerminalTreeDragState();
 
   const activeCanvas = getActiveCanvas();
   if (createTerminalButton instanceof HTMLButtonElement) {
@@ -3127,6 +3583,9 @@ function renderCanvasOverviewHeader() {
 }
 
 function openWorkspaceDrawer() {
+  if (activeSidebarView !== "explorer") {
+    setActiveSidebarView("explorer");
+  }
   setSidebarCollapsed(false);
   document.getElementById("workspace-browser-section")?.scrollIntoView({ block: "nearest" });
 }
@@ -3283,7 +3742,7 @@ function bringNodeToFront(nodeRecord) {
   nodeRecord.element.style.zIndex = String(nodeRecord.canvas.highestNodeLayer);
 }
 
-function setActiveNode(nodeRecord) {
+function setActiveNode(nodeRecord, options = {}) {
   if (nodeRecord === null) {
     activeNodeRecord?.element.classList.remove("is-active");
     activeNodeRecord = null;
@@ -3291,7 +3750,9 @@ function setActiveNode(nodeRecord) {
     renderTerminalStrip();
     window.noteCanvas.setActiveTerminalShortcutState(false);
     syncAllTerminalInteractionOverlays();
-    return;
+    return FOCUSED_TERMINAL_MODE
+      ? focusedTerminalLifecycle.request(null, { shouldFocus: false })
+      : Promise.resolve();
   }
 
   if (activeNodeRecord === nodeRecord) {
@@ -3300,7 +3761,9 @@ function setActiveNode(nodeRecord) {
     renderTerminalStrip();
     window.noteCanvas.setActiveTerminalShortcutState(true);
     syncAllTerminalInteractionOverlays();
-    return;
+    return FOCUSED_TERMINAL_MODE
+      ? focusedTerminalLifecycle.request(nodeRecord, options)
+      : Promise.resolve();
   }
 
   activeNodeRecord?.element.classList.remove("is-active");
@@ -3312,19 +3775,22 @@ function setActiveNode(nodeRecord) {
   renderTerminalStrip();
   window.noteCanvas.setActiveTerminalShortcutState(true);
   syncAllTerminalInteractionOverlays();
+  return FOCUSED_TERMINAL_MODE
+    ? focusedTerminalLifecycle.request(nodeRecord, options)
+    : Promise.resolve();
 }
 
 function activateFocusedTerminalNode(nodeRecord, options = {}) {
   if (nodeRecord === null || nodeRecord?.isRemoved === true) {
-    return;
+    return Promise.resolve();
   }
 
-  setActiveNode(nodeRecord);
-  scheduleTerminalSizeSync([nodeRecord], { settle: true });
+  const activationPromise = setActiveNode(nodeRecord, options);
 
-  if (options.shouldFocus !== false) {
-    requestAnimationFrame(() => nodeRecord.terminal?.focus());
-  }
+  void activationPromise.then(() => {
+    scheduleTerminalSizeSync([nodeRecord], { settle: true });
+  });
+  return activationPromise;
 }
 
 function isTerminalNodeRendererVisible(nodeRecord) {
@@ -3589,7 +4055,6 @@ function scheduleTerminalRefresh(nodeRecords) {
         && nodeRecord.terminal.rows > 0
       ) {
         attachTerminalWebglRenderer(nodeRecord);
-        nodeRecord.terminal.clearTextureAtlas?.();
         nodeRecord.terminal.refresh(0, nodeRecord.terminal.rows - 1);
       }
     });
@@ -6589,6 +7054,9 @@ function serializeTerminalNodeRecord(nodeRecord) {
     managedProjectTag: nodeRecord.managedProjectTag,
     managedParentAgent: nodeRecord.managedParentAgent,
     managedDepth: nodeRecord.managedDepth,
+    ...(Object.prototype.hasOwnProperty.call(nodeRecord, "userParentSessionKey")
+      ? { userParentSessionKey: nodeRecord.userParentSessionKey }
+      : {}),
     isExited: nodeRecord.isExited,
     exitCode: nodeRecord.exitCode,
     exitSignal: nodeRecord.exitSignal
@@ -6866,6 +7334,9 @@ async function restoreCanvasSession(sessionSnapshot) {
           managedProjectTag: nodeSnapshot.managedProjectTag,
           managedParentAgent: nodeSnapshot.managedParentAgent,
           managedDepth: nodeSnapshot.managedDepth,
+          ...(Object.prototype.hasOwnProperty.call(nodeSnapshot, "userParentSessionKey")
+            ? { userParentSessionKey: nodeSnapshot.userParentSessionKey }
+            : {}),
           tmuxSessionName: nodeSnapshot.tmuxSessionName,
           shouldFocus: false,
           deferChromeRefresh: true
@@ -6905,7 +7376,7 @@ async function restoreCanvasSession(sessionSnapshot) {
     })();
 
     if (restoredActiveNode !== null) {
-      activateFocusedTerminalNode(restoredActiveNode);
+      await activateFocusedTerminalNode(restoredActiveNode);
     }
   }
 }
@@ -7032,6 +7503,9 @@ function parseImportedTerminalNode(nodeRecord) {
     managedProjectTag: normalizeOptionalString(nodeRecord?.managedProjectTag),
     managedParentAgent: normalizeManagedAgentName(nodeRecord?.managedParentAgent),
     managedDepth: Number.isInteger(nodeRecord?.managedDepth) ? nodeRecord.managedDepth : null,
+    ...(Object.prototype.hasOwnProperty.call(nodeRecord ?? {}, "userParentSessionKey")
+      ? { userParentSessionKey: normalizeOptionalString(nodeRecord.userParentSessionKey) }
+      : {}),
     isExited: nodeRecord?.isExited === true,
     exitCode: Number.isInteger(nodeRecord?.exitCode) ? nodeRecord.exitCode : null,
     exitSignal: normalizeOptionalString(nodeRecord?.exitSignal)
@@ -7167,6 +7641,9 @@ async function importCanvasFromData(importedCanvas) {
         managedProjectTag: nodeRecord.managedProjectTag,
         managedParentAgent: nodeRecord.managedParentAgent,
         managedDepth: nodeRecord.managedDepth,
+        ...(Object.prototype.hasOwnProperty.call(nodeRecord, "userParentSessionKey")
+          ? { userParentSessionKey: nodeRecord.userParentSessionKey }
+          : {}),
         shouldFocus: false
       });
 
@@ -7185,7 +7662,7 @@ async function importCanvasFromData(importedCanvas) {
       ?? null;
 
     if (fallbackImportedNode !== null) {
-      activateFocusedTerminalNode(fallbackImportedNode);
+      await activateFocusedTerminalNode(fallbackImportedNode);
     }
 
     scheduleCanvasAgentSync();
@@ -7989,7 +8466,8 @@ async function createTerminalNode(options) {
     isWebglRendererDisabled: false,
     needsTerminalRepaint: false,
     isAgentResumeInFlight: false,
-    agentResumeRetryAfter: 0,
+    terminalBindingGeneration: 0,
+    terminalReleasePromise: null,
     resizeObserver: null,
     syncSize: () => {},
     disposeInput: () => {},
@@ -8020,6 +8498,12 @@ async function createTerminalNode(options) {
       : "agent",
     managedProjectTag: typeof options.managedProjectTag === "string" && options.managedProjectTag.length > 0 ? options.managedProjectTag : null,
     managedParentAgent: normalizeManagedAgentName(options.managedParentAgent),
+    // User-arranged tree parent (drag-and-drop in the navigator). Absent =
+    // follow the agentmux graph; null = forced root; string = parent
+    // sessionKey. agentmux sync never touches this field.
+    ...(Object.prototype.hasOwnProperty.call(options, "userParentSessionKey")
+      ? { userParentSessionKey: normalizeOptionalString(options.userParentSessionKey) }
+      : {}),
 
     managedDepth: Number.isInteger(options.managedDepth) ? options.managedDepth : null,
     managedRuntimeState: typeof options.managedRuntimeState === "string" && options.managedRuntimeState.length > 0 ? options.managedRuntimeState : null,
@@ -8264,6 +8748,7 @@ async function createTerminalNode(options) {
     project: nodeRecord.managedProjectTag,
     runtime_state: nodeRecord.managedRuntimeState,
     agent_state: nodeRecord.managedAgentState,
+    attention: nodeRecord.managedAttention,
     tmux_session: nodeRecord.tmuxSessionName,
     parent_agent: nodeRecord.managedParentAgent,
     depth: nodeRecord.managedDepth,
@@ -8271,22 +8756,28 @@ async function createTerminalNode(options) {
   });
   updateEmptyState();
 
-  if (shouldFocus && activeCanvas.id === activeCanvasId) {
-    setActiveNode(nodeRecord);
-  }
+  const activationPromise = shouldFocus && activeCanvas.id === activeCanvasId
+    ? setActiveNode(nodeRecord)
+    : Promise.resolve();
 
   try {
     if (nodeRecord.isExited) {
       setNodeExitedState(nodeRecord, nodeRecord.exitCode, nodeRecord.exitSignal);
-    } else {
+    } else if (!FOCUSED_TERMINAL_MODE) {
       await bindTerminalSession(nodeRecord, { shouldFocus });
+    }
+
+    if (FOCUSED_TERMINAL_MODE) {
+      await activationPromise;
     }
 
     if (nodeRecord.isMaximized) {
       setNodeMaximized(nodeRecord, true, { shouldSelect: false });
     }
   } catch (error) {
-    await destroyTerminalNode(nodeRecord, { shouldDestroySession: false });
+    if (!FOCUSED_TERMINAL_MODE) {
+      await destroyTerminalNode(nodeRecord, { shouldDestroySession: false });
+    }
     throw error;
   }
 
@@ -8563,15 +9054,19 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
     ? agentSnapshot.runtime_state
     : null;
 
-  if (agentRuntimeState !== "stopped") {
-    nodeRecord.agentResumeRetryAfter = 0;
-  }
-
-  // The agent's tmux session is gone (e.g. tmux server restarted). Try to
-  // resume the runtime via `agentmux resume` before rebinding, so the user
-  // sees a live opencode/claude session instead of a dead shell.
+  // Reconciliation reports state; it never changes lifecycle intent. A
+  // stopped agent remains stopped until the user presses Resume.
   if (agentRuntimeState === "stopped" && !nodeRecord.isRemoved) {
-    await resumeManagedAgentRuntime(nodeRecord, agentSnapshot);
+    nodeRecord.tmuxSessionName = nextTmuxSessionName;
+    nodeRecord.backend = "tmux";
+    if (nodeRecord.terminal !== null || typeof nodeRecord.terminalId === "string") {
+      await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    }
+    nodeRecord.isExited = true;
+    nodeRecord.exitCode = null;
+    nodeRecord.exitSignal = null;
+    nodeRecord.element.classList.add("is-exited");
+    updateExitedOverlay(nodeRecord);
     return;
   }
 
@@ -8582,9 +9077,18 @@ async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
   nodeRecord.tmuxSessionName = nextTmuxSessionName;
   nodeRecord.backend = "tmux";
 
+  if (FOCUSED_TERMINAL_MODE && nodeRecord !== activeNodeRecord) {
+    return;
+  }
+
   try {
-    await releaseTerminalSession(nodeRecord);
-    await bindTerminalSession(nodeRecord, { shouldFocus: false });
+    await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    nodeRecord.isExited = false;
+    if (FOCUSED_TERMINAL_MODE) {
+      await focusedTerminalLifecycle.request(nodeRecord, { shouldFocus: false });
+    } else {
+      await bindTerminalSession(nodeRecord, { shouldFocus: false });
+    }
   } catch (error) {
     console.error(error);
     setNodeExitedState(nodeRecord, null, null);
@@ -8598,7 +9102,6 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
     nodeRecord.isRemoved
     || nodeRecord.managedAgentName === null
     || nodeRecord.isAgentResumeInFlight
-    || nodeRecord.agentResumeRetryAfter > Date.now()
   ) {
     return;
   }
@@ -8638,12 +9141,18 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
     nodeRecord.isExited = false;
     nodeRecord.exitCode = null;
     nodeRecord.exitSignal = null;
-    nodeRecord.agentResumeRetryAfter = 0;
+    nodeRecord.managedRuntimeState = "starting";
+    nodeRecord.managedAgentState = "active";
 
-    await releaseTerminalSession(nodeRecord);
-    await bindTerminalSession(nodeRecord, { shouldFocus: false });
+    await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    if (FOCUSED_TERMINAL_MODE) {
+      if (nodeRecord === activeNodeRecord) {
+        await focusedTerminalLifecycle.request(nodeRecord, { shouldFocus: true });
+      }
+    } else {
+      await bindTerminalSession(nodeRecord, { shouldFocus: false });
+    }
   } catch (error) {
-    nodeRecord.agentResumeRetryAfter = Date.now() + MANAGED_AGENT_RESUME_RETRY_DELAY_MS;
     console.error(error);
     setNodeExitedState(nodeRecord, null, null);
     setTerminalNodeStatus(nodeRecord, "Resume failed");
@@ -8731,6 +9240,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
         managedDepth: agentSnapshot.depth,
         managedRuntimeState: agentSnapshot.runtime_state,
         managedAgentState: agentSnapshot.agent_state,
+        isExited: agentSnapshot.runtime_state === "stopped",
         deferChromeRefresh: true,
         shouldFocus: false
       });
@@ -8741,6 +9251,14 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
     } catch (error) {
       console.error(error);
     }
+  }
+
+  if (
+    FOCUSED_TERMINAL_MODE
+    && activeNodeRecord?.canvas === canvasRecord
+    && activeNodeRecord.managedAgentState === "archived"
+  ) {
+    await setActiveNode(pickFocusedNode(canvasRecord.nodes), { shouldFocus: false });
   }
 
   const staleNodes = getManagedCanvasNodes(canvasRecord).filter((nodeRecord) => !seenAgentNames.has(nodeRecord.managedAgentName));
@@ -9273,7 +9791,7 @@ function handleWindowKeyDown(event) {
 
     if (isWorkspacePreviewOpen()) {
       event.preventDefault();
-      closeWorkspacePreview();
+      void closeWorkspacePreviewSafely();
       return;
     }
 
@@ -9309,7 +9827,7 @@ function handleWindowKeyDown(event) {
 
   if (isCommandShortcut && shortcutKey === "l" && isWorkspacePreviewOpen()) {
     event.preventDefault();
-    closeWorkspacePreview();
+    void closeWorkspacePreviewSafely();
     return;
   }
 
@@ -9392,6 +9910,7 @@ if (window.noteCanvas.isSmokeTest) {
 
     const activeCanvas = getActiveCanvas();
     const activeNodes = activeCanvas?.nodes ?? [];
+    const allNodes = canvases.flatMap((canvasRecord) => canvasRecord.nodes);
     const previewViewModel = deriveWorkspacePreviewViewModel(workspacePreviewState);
     const previewImage = fileInspector?.querySelector(".file-inspector-image");
     const previewPdfFrame = fileInspector?.querySelector(".file-inspector-pdf-frame");
@@ -9451,7 +9970,12 @@ if (window.noteCanvas.isSmokeTest) {
           y: activeCanvas.viewportOffset.y
         },
       viewportScale: activeCanvas?.viewportScale ?? null,
+      activeSessionKey: activeNodeRecord?.sessionKey ?? null,
       terminalIds: activeNodes.map((nodeRecord) => nodeRecord.terminalId),
+      mountedXtermCount: allNodes.filter((nodeRecord) => nodeRecord.terminal !== null).length,
+      rendererAttachmentCount: allNodes.filter((nodeRecord) => typeof nodeRecord.terminalId === "string").length,
+      resizeObserverCount: allNodes.filter((nodeRecord) => nodeRecord.resizeObserver !== null).length,
+      webglRendererCount: allNodes.filter((nodeRecord) => nodeRecord.webglAddon !== null).length,
       nodeTitles: activeNodes.map((nodeRecord) => nodeRecord.titleText),
       nodeSizes: activeNodes.map((nodeRecord) => ({
         width: nodeRecord.width,
@@ -9461,7 +9985,7 @@ if (window.noteCanvas.isSmokeTest) {
       exitedNodeTitles: activeNodes.filter((nodeRecord) => nodeRecord.isExited).map((nodeRecord) => nodeRecord.titleText),
       nodeScreenPositions,
       maximizedNodeTitle: activeNodes.find((nodeRecord) => nodeRecord.isMaximized)?.titleText ?? null,
-      firstTerminalText: getTerminalBufferText(activeNodes[0]),
+      firstTerminalText: getTerminalBufferText(activeNodeRecord),
       visibleNodeCount: [...nodesLayer.querySelectorAll(".terminal-node")].filter((nodeElement) => {
         if (!(nodeElement instanceof HTMLElement)) {
           return false;
@@ -9531,6 +10055,31 @@ if (window.noteCanvas.isSmokeTest) {
       };
     };
 
+  const getTerminalTreeSnapshot = () => {
+    const activeCanvas = getActiveCanvas();
+    const { rows } = deriveTerminalTreeRows({
+      activeCanvas,
+      activeNodeId: activeNodeRecord?.id ?? null,
+      collapsedAgentNames: new Set()
+    });
+
+    return {
+      nodeOrder: activeCanvas?.nodes.map((nodeRecord) => String(nodeRecord.id)) ?? [],
+      nodes: activeCanvas?.nodes.map((nodeRecord) => ({
+        id: String(nodeRecord.id),
+        sessionKey: nodeRecord.sessionKey,
+        agentName: nodeRecord.managedAgentName,
+        parentAgent: nodeRecord.managedParentAgent,
+        depth: nodeRecord.managedDepth
+      })) ?? [],
+      rows: rows.map((row) => ({
+        id: row.id,
+        depth: row.depth,
+        parentSessionKey: row.parentSessionKey
+      }))
+    };
+  };
+
   const waitForAnimationFrame = () => new Promise((resolve) => {
     requestAnimationFrame(() => {
       resolve();
@@ -9583,6 +10132,51 @@ if (window.noteCanvas.isSmokeTest) {
     createCanvas: () => {
       createCanvas();
       return getCanvasSnapshot();
+    },
+    focusTerminal: async (index) => {
+      const nodeRecord = getActiveCanvas()?.nodes[index] ?? null;
+
+      if (nodeRecord !== null) {
+        await activateFocusedTerminalNode(nodeRecord);
+        await focusedTerminalLifecycle.whenIdle();
+        await waitForAnimationFrame();
+      }
+
+      return getCanvasSnapshot();
+    },
+    setTerminalManagedGraph: (entries) => {
+      const activeCanvas = getActiveCanvas();
+
+      if (activeCanvas === null || !Array.isArray(entries)) {
+        return getTerminalTreeSnapshot();
+      }
+
+      entries.forEach((entry, index) => {
+        const nodeRecord = activeCanvas.nodes[index];
+
+        if (nodeRecord == null) {
+          return;
+        }
+
+        nodeRecord.managedAgentName = normalizeManagedAgentName(entry?.name);
+        nodeRecord.managedAgentRole = nodeRecord.managedAgentName === null ? null : "agent";
+        nodeRecord.managedProjectTag = "smoke-project";
+        nodeRecord.managedParentAgent = normalizeManagedAgentName(entry?.parentAgent);
+        nodeRecord.managedDepth = Number.isInteger(entry?.depth) ? entry.depth : null;
+        nodeRecord.managedRuntimeState = "ready";
+        nodeRecord.managedAgentState = "active";
+        nodeRecord.managedAttention = null;
+        delete nodeRecord.userParentSessionKey;
+        syncTerminalMeta(nodeRecord);
+      });
+      renderTerminalNavigator();
+      return getTerminalTreeSnapshot();
+    },
+    getTerminalTreeSnapshot,
+    waitForFocusedTerminalIdle: async () => {
+      await focusedTerminalLifecycle.whenIdle();
+      await waitForAnimationFrame();
+      return getTerminalTreeSnapshot();
     },
     switchCanvas: (index) => {
       const canvasRecord = canvases[index];
@@ -9648,9 +10242,14 @@ if (window.noteCanvas.isSmokeTest) {
         canvasNames: snapshot.canvasNames,
         activeCanvasName: snapshot.activeCanvasName,
         activeNodeCount: snapshot.activeNodeCount,
+        activeSessionKey: snapshot.activeSessionKey,
         viewportOffset: snapshot.viewportOffset,
         viewportScale: snapshot.viewportScale,
         terminalIds: snapshot.terminalIds,
+        mountedXtermCount: snapshot.mountedXtermCount,
+        rendererAttachmentCount: snapshot.rendererAttachmentCount,
+        resizeObserverCount: snapshot.resizeObserverCount,
+        webglRendererCount: snapshot.webglRendererCount,
         nodeTitles: snapshot.nodeTitles,
         nodeSizes: snapshot.nodeSizes,
         nodeWorkingDirectories: snapshot.nodeWorkingDirectories,
@@ -9715,6 +10314,62 @@ if (window.noteCanvas.isSmokeTest) {
       });
 
       return getCanvasSnapshot();
+    },
+    renameActiveTerminalThroughButton: async (title) => {
+      const nodeRecord = activeNodeRecord;
+
+      if (nodeRecord === null || !(nodeRecord.renameButton instanceof HTMLButtonElement)) {
+        return null;
+      }
+
+      nodeRecord.renameButton.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 73,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons: 1
+      }));
+      nodeRecord.renameButton.click();
+      await focusedTerminalLifecycle.whenIdle();
+      await waitForAnimationFrame();
+      await waitForAnimationFrame();
+
+      const editing = {
+        isEditing: nodeRecord.isTitleEditing,
+        hasFocus: document.activeElement === nodeRecord.titleInput,
+        isReadOnly: nodeRecord.titleInput?.readOnly ?? true,
+        tabIndex: nodeRecord.titleInput?.tabIndex ?? -1,
+        ariaPressed: nodeRecord.renameButton.getAttribute("aria-pressed")
+      };
+
+      if (editing.isEditing && nodeRecord.titleInput instanceof HTMLInputElement) {
+        nodeRecord.titleInput.value = title;
+        nodeRecord.titleInput.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true
+        }));
+        await waitForAnimationFrame();
+      }
+
+      const serializedNode = serializeAppSession()
+        .canvases
+        .find((canvasRecord) => canvasRecord.id === nodeRecord.canvas.id)
+        ?.terminalNodes
+        .find((nodeSnapshot) => nodeSnapshot.sessionKey === nodeRecord.sessionKey);
+      const navigatorLabel = terminalNavigator
+        ?.querySelector(`.terminal-navigator-entry[data-node-id="${nodeRecord.id}"] .terminal-navigator-label`)
+        ?.textContent ?? null;
+
+      return {
+        editing,
+        titleText: nodeRecord.titleText,
+        navigatorLabel,
+        sessionSnapshotTitle: serializedNode?.title ?? null,
+        isEditingAfterCommit: nodeRecord.isTitleEditing
+      };
     },
     renameCanvasAt: async (index, title) => {
       const canvasRecord = canvases[index];
@@ -9933,7 +10588,7 @@ if (window.noteCanvas.isSmokeTest) {
       return lastExportedCanvasDebugPayload;
     },
     setFirstTerminalWorkingDirectory: async (cwd) => {
-      const firstNode = getActiveCanvas()?.nodes[0];
+      const firstNode = activeNodeRecord;
 
       if (firstNode?.terminalId && typeof cwd === "string" && cwd.length > 0) {
         await window.noteCanvas.writeTerminal(firstNode.terminalId, `cd '${escapeShellPathForSingleQuotes(cwd)}'\r`);
@@ -9942,7 +10597,7 @@ if (window.noteCanvas.isSmokeTest) {
       return getCanvasSnapshot();
     },
     resolveFirstTerminalWorkingDirectory: async () => {
-      const firstNode = getActiveCanvas()?.nodes[0];
+      const firstNode = activeNodeRecord;
 
       if (!(typeof firstNode?.terminalId === "string")) {
         return null;
@@ -9999,9 +10654,9 @@ if (window.noteCanvas.isSmokeTest) {
       return window.__canvasLearningDebug.getSnapshot();
     },
     sendToFirstTerminal: async (data) => {
-      const firstNode = getActiveCanvas()?.nodes[0];
+      const firstNode = activeNodeRecord;
 
-      if (firstNode !== undefined) {
+      if (firstNode !== null && typeof firstNode.terminalId === "string") {
         await window.noteCanvas.writeTerminal(firstNode.terminalId, data);
       }
     }

@@ -325,7 +325,7 @@ test("workspace-directory:choose-canvas replaces the owner's existing workspace 
   }
 });
 
-test("terminal:create falls back to a plain shell when a saved tmux session is gone", async () => {
+test("terminal:create keeps a missing saved tmux session stopped", async () => {
   const spawnCalls = [];
   const ptySpawnCalls = [];
   const originalWarn = console.warn;
@@ -387,24 +387,25 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
 
     assert.equal(typeof createTerminalHandler, "function");
 
-    const created = await createTerminalHandler(
-      { sender: { id: 41 } },
-      {
-        terminalId: "terminal-1",
-        cols: 80,
-        rows: 24,
-        cwd: os.homedir(),
-        sessionKey: "joke-worker",
-        tmuxSessionName: "termcanvas-joke-worker"
-      }
+    await assert.rejects(
+      () => createTerminalHandler(
+        { sender: { id: 41 } },
+        {
+          terminalId: "terminal-1",
+          cols: 80,
+          rows: 24,
+          cwd: os.homedir(),
+          sessionKey: "joke-worker",
+          tmuxSessionName: "termcanvas-joke-worker"
+        }
+      ),
+      (error) => error.code === "TMUX_SESSION_MISSING"
     );
 
-    assert.equal(created.backend, "pty");
-    assert.equal(created.tmuxSessionName, null);
-    assert.ok(warnMessages.some((message) => /termcanvas-joke-worker/.test(message)));
-    assert.ok(
+    assert.equal(
       ptySpawnCalls.some(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0),
-      "expected fallback shell PTY spawn"
+      false,
+      "restoration must not replace a missing saved session with a new shell"
     );
 
     delete require.cache[mainPath];
@@ -413,13 +414,14 @@ test("terminal:create falls back to a plain shell when a saved tmux session is g
   }
 });
 
-test("terminal:create auto-resumes a managed agent when its tmux session is gone", async () => {
+test("terminal:create never auto-resumes a managed agent when its tmux session is gone", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-auto-resume-"));
   const agentmuxRoot = path.join(tempRoot, "agentmux");
   const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
   const ptySpawnCalls = [];
   const originalWarn = console.warn;
   const warnMessages = [];
+  let resumeCallCount = 0;
 
   console.warn = (message) => {
     warnMessages.push(String(message));
@@ -437,6 +439,7 @@ test("terminal:create auto-resumes a managed agent when its tmux session is gone
         spawnSync: (command, args) => {
           // agentmux resume invocation: python3 agentmux.py resume <name>
           if (Array.isArray(args) && args.includes("resume")) {
+            resumeCallCount += 1;
             return {
               status: 0,
               stdout: "Resumed opencode-worker (abc123)\ntmux: agentmux-opencode-worker-abc123\nrun:  opencode\n",
@@ -476,36 +479,28 @@ test("terminal:create auto-resumes a managed agent when its tmux session is gone
 
     assert.equal(typeof createTerminalHandler, "function");
 
-    const created = await createTerminalHandler(
-      { sender: { id: 41 } },
-      {
-        terminalId: "terminal-1",
-        cols: 80,
-        rows: 24,
-        cwd: os.homedir(),
-        sessionKey: "opencode-worker",
-        tmuxSessionName: "termcanvas-opencode-worker",
-        agentProjectTag: "project-watch",
-        managedAgentName: "opencode-worker"
-      }
+    await assert.rejects(
+      () => createTerminalHandler(
+        { sender: { id: 41 } },
+        {
+          terminalId: "terminal-1",
+          cols: 80,
+          rows: 24,
+          cwd: os.homedir(),
+          sessionKey: "opencode-worker",
+          tmuxSessionName: "termcanvas-opencode-worker",
+          agentProjectTag: "project-watch",
+          managedAgentName: "opencode-worker"
+        }
+      ),
+      (error) => error.code === "TMUX_SESSION_MISSING"
     );
 
-    // The auto-resume should have re-spawned opencode inside a fresh tmux
-    // session, so the terminal should be tmux-backed, not a plain shell.
-    assert.equal(created.backend, "tmux");
-    assert.equal(created.tmuxSessionName, "agentmux-opencode-worker-abc123");
-    assert.ok(
-      ptySpawnCalls.some(({ command, args }) => (
-        command === "tmux"
-        && Array.isArray(args)
-        && args.includes("attach-session")
-        && args.includes("agentmux-opencode-worker-abc123")
-      )),
-      "expected PTY to attach to the resumed tmux session"
-    );
-    assert.ok(
-      !warnMessages.some((message) => /Falling back to a plain shell PTY/u.test(message)),
-      "should not fall back to plain shell when resume succeeds"
+    assert.equal(resumeCallCount, 0, "restoration must never invoke agentmux resume");
+    assert.equal(
+      ptySpawnCalls.some(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0),
+      false,
+      "restoration must not spawn a fallback shell"
     );
 
     delete require.cache[mainPath];
@@ -520,7 +515,7 @@ test("terminal:create auto-resumes a managed agent when its tmux session is gone
   }
 });
 
-test("terminal:create falls back to plain shell when managed agent resume fails", async () => {
+test("terminal:create does not fall back to a shell for a stopped managed agent", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-resume-fails-"));
   const agentmuxRoot = path.join(tempRoot, "agentmux");
   const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
@@ -568,26 +563,27 @@ test("terminal:create falls back to plain shell when managed agent resume fails"
 
     const createTerminalHandler = handlers.get("terminal:create");
 
-    const created = await createTerminalHandler(
-      { sender: { id: 41 } },
-      {
-        terminalId: "terminal-1",
-        cols: 80,
-        rows: 24,
-        cwd: os.homedir(),
-        sessionKey: "opencode-worker",
-        tmuxSessionName: "termcanvas-opencode-worker",
-        agentProjectTag: "project-watch",
-        managedAgentName: "opencode-worker"
-      }
+    await assert.rejects(
+      () => createTerminalHandler(
+        { sender: { id: 41 } },
+        {
+          terminalId: "terminal-1",
+          cols: 80,
+          rows: 24,
+          cwd: os.homedir(),
+          sessionKey: "opencode-worker",
+          tmuxSessionName: "termcanvas-opencode-worker",
+          agentProjectTag: "project-watch",
+          managedAgentName: "opencode-worker"
+        }
+      ),
+      (error) => error.code === "TMUX_SESSION_MISSING"
     );
 
-    // Resume failed, so it should fall back to a plain shell.
-    assert.equal(created.backend, "pty");
-    assert.equal(created.tmuxSessionName, null);
-    assert.ok(
-      warnMessages.some((message) => /Could not resume agent 'opencode-worker'/u.test(message)),
-      "expected a warn about resume failure"
+    assert.equal(
+      ptySpawnCalls.some(({ command, args }) => command !== "tmux" && Array.isArray(args) && args.length === 0),
+      false,
+      "a stopped managed agent must remain stopped"
     );
 
     delete require.cache[mainPath];
@@ -1026,7 +1022,7 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
 
     await destroyTerminalHandler(
       { sender: { id: 47 } },
-      { terminalId: "managed-terminal", preserveSession: true }
+      { terminalId: "managed-terminal", preserveSession: true, retainDetachedIdentity: true }
     );
 
     const restored = await createTerminalHandler(
@@ -1065,6 +1061,244 @@ test("terminal:create registers fresh canvas terminals as managed agents with AG
       )).length,
       1,
       "closing a restored terminal must destroy its tmux session exactly once"
+    );
+  } finally {
+    delete require.cache[mainPath];
+  }
+});
+
+test("terminal:create with parentAgentName spawns a child agent via agentmux worker --parent", async () => {
+  const spawnCalls = [];
+  const agentmuxSpawnCalls = [];
+  const childTmuxSessionName = "agentmux-child-a1b2c3-fffff";
+
+  const runTmuxStub = (command, args, options) => {
+    spawnCalls.push({ command, args, options });
+
+    if (command === "tmux" && args[0] === "-V") {
+      return { status: 0, stdout: "tmux 3.4", stderr: "" };
+    }
+
+    if (command === "tmux" && args[0] === "has-session") {
+      const targetSession = Array.isArray(args) ? args[2] : null;
+      return targetSession === childTmuxSessionName
+        ? { status: 0, stdout: "", stderr: "" }
+        : { status: 1, stdout: "", stderr: "no session" };
+    }
+
+    if (command === "tmux" && args[0] === "display-message") {
+      return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
+    }
+
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  const spawnTmux = createMockSpawn(runTmuxStub);
+
+  function createFakeAgentmuxChild(command, args) {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+
+    agentmuxSpawnCalls.push({ command, args });
+
+    setImmediate(() => {
+      if (Array.isArray(args) && args.includes("worker")) {
+        // Mirror agentmux.py's worker output: "Created worker <name> (<short>)\ntmux: <session>\ncwd: <dir>\n"
+        const workerIndex = args.indexOf("worker");
+        const agentName = args[workerIndex + 2];
+        child.stdout.emit("data", `Created worker ${agentName} (abc123)\ntmux: ${childTmuxSessionName}\ncwd:  ${os.homedir()}\n`);
+      } else {
+        child.stdout.emit("data", "ok\n");
+      }
+      child.emit("close", 0);
+    });
+
+    return child;
+  }
+
+  const ptySpawnCalls = [];
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: runTmuxStub,
+      spawn: (command, args, options) => {
+        if (command === "tmux") {
+          return spawnTmux(command, args, options);
+        }
+        return createFakeAgentmuxChild(command, args);
+      }
+    },
+    nodePtyStub: {
+      spawn: (command, args) => {
+        ptySpawnCalls.push({ command, args });
+        return createMockPtyProcess();
+      }
+    }
+  });
+
+  try {
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    const created = await createTerminalHandler(
+      { sender: { id: 71 } },
+      {
+        terminalId: "child-terminal-1",
+        sessionKey: "child-session-1",
+        cols: 80,
+        rows: 24,
+        cwd: os.homedir(),
+        agentProjectTag: "proj-canvas1",
+        parentAgentName: "parent-agent"
+      }
+    );
+
+    assert.equal(created.managedParentAgent, "parent-agent");
+    assert.equal(created.managedProjectTag, "proj-canvas1");
+    assert.match(created.managedAgentName, /^child-[a-z0-9]{6}$/u);
+    assert.equal(created.tmuxSessionName, childTmuxSessionName);
+    assert.equal(created.backend, "tmux");
+
+    // agentmux worker should have been invoked with --parent and --harness shell.
+    const workerCall = agentmuxSpawnCalls.find(({ args }) => Array.isArray(args) && args.includes("worker"));
+    assert.ok(workerCall, "expected agentmux worker to be invoked for the child spawn path");
+    const workerArgs = workerCall.args;
+    assert.equal(workerArgs[workerArgs.indexOf("worker") + 1], "proj-canvas1");
+    assert.equal(workerArgs[workerArgs.indexOf("--parent") + 1], "parent-agent");
+    assert.equal(workerArgs[workerArgs.indexOf("--harness") + 1], "shell");
+
+    // The child spawn path must NOT call agentmux import — agentmux worker
+    // already registers the agent in the graph.
+    const importCall = agentmuxSpawnCalls.find(({ args }) => Array.isArray(args) && args.includes("import"));
+    assert.equal(importCall, undefined, "child terminals must not call agentmux import");
+
+    // main must NOT open a fresh `tmux new-session` for this terminal —
+    // agentmux worker created it. The startup tmux probe (a `new-session`
+    // with a `termcanvas-probe-*` name) is allowed and unrelated.
+    const newSessionCall = spawnCalls.find(({ command, args }) => {
+      if (command !== "tmux" || !Array.isArray(args) || args[0] !== "new-session") {
+        return false;
+      }
+      const sessionName = args[args.indexOf("-s") + 1];
+      return typeof sessionName === "string" && !sessionName.startsWith("termcanvas-probe-");
+    });
+    assert.equal(newSessionCall, undefined, "child terminals must not spawn a fresh tmux session");
+
+    // main attaches via node-pty to the agentmux-spawned tmux session.
+    const attachCall = ptySpawnCalls.find(({ command, args }) => (
+      command === "tmux"
+      && Array.isArray(args)
+      && args[0] === "-u"
+      && args[1] === "attach-session"
+      && args.includes(childTmuxSessionName)
+    ));
+    assert.ok(attachCall, "expected main to attach to the agentmux-spawned tmux session");
+  } finally {
+    delete require.cache[mainPath];
+  }
+});
+
+test("terminal:create with parentAgentName + tmuxSessionName restores instead of re-spawning a worker", async () => {
+  const spawnCalls = [];
+  const agentmuxSpawnCalls = [];
+  const existingChildTmuxSession = "agentmux-child-restore-1234";
+
+  const runTmuxStub = (command, args, options) => {
+    spawnCalls.push({ command, args, options });
+    if (command === "tmux" && args[0] === "-V") return { status: 0, stdout: "tmux 3.4", stderr: "" };
+    if (command === "tmux" && args[0] === "has-session") {
+      return args[2] === existingChildTmuxSession
+        ? { status: 0, stdout: "", stderr: "" }
+        : { status: 1, stdout: "", stderr: "no session" };
+    }
+    if (command === "tmux" && args[0] === "display-message") return { status: 0, stdout: `${os.homedir()}\n`, stderr: "" };
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: runTmuxStub,
+      spawn: (command, args, options) => {
+        if (command === "tmux") return createMockSpawn(runTmuxStub)(command, args, options);
+        const child = new EventEmitter();
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        agentmuxSpawnCalls.push({ command, args });
+        setImmediate(() => child.emit("close", 0));
+        return child;
+      }
+    },
+    nodePtyStub: { spawn: () => createMockPtyProcess() }
+  });
+
+  try {
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    const restored = await createTerminalHandler(
+      { sender: { id: 91 } },
+      {
+        terminalId: "restored-child",
+        sessionKey: "restored-child",
+        cols: 80,
+        rows: 24,
+        cwd: os.homedir(),
+        agentProjectTag: "proj-canvas1",
+        tmuxSessionName: existingChildTmuxSession,
+        managedAgentName: "child-restore",
+        parentAgentName: "parent-agent"
+      }
+    );
+
+    // Restore path returns the existing session — should NOT call worker or import.
+    assert.equal(restored.tmuxSessionName, existingChildTmuxSession);
+    assert.equal(restored.managedAgentName, null, "restored terminals must not re-adopt");
+    assert.equal(restored.managedParentAgent, undefined, "restore path should not synthesize a parent echo");
+    assert.equal(agentmuxSpawnCalls.length, 0, "restore must not spawn any agentmux subprocess");
+  } finally {
+    delete require.cache[mainPath];
+  }
+});
+
+test("terminal:create with parentAgentName rejects when the canvas project tag is missing", async () => {
+  const { handlers, mainPath } = loadMainWithMocks({
+    smokeTest: true,
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    childProcessStub: {
+      spawnSync: () => ({ status: 0, stdout: "", stderr: "" }),
+      spawn: (command, args) => {
+        const child = new EventEmitter();
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setImmediate(() => child.emit("close", 0));
+        return child;
+      }
+    },
+    nodePtyStub: { spawn: () => createMockPtyProcess() }
+  });
+
+  try {
+    const createTerminalHandler = handlers.get("terminal:create");
+
+    await assert.rejects(
+      () => createTerminalHandler(
+        { sender: { id: 73 } },
+        {
+          terminalId: "child-terminal-2",
+          sessionKey: "child-session-2",
+          cols: 80,
+          rows: 24,
+          cwd: os.homedir(),
+          parentAgentName: "parent-agent"
+        }
+      ),
+      /outside a managed canvas project/u
     );
   } finally {
     delete require.cache[mainPath];

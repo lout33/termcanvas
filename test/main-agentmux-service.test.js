@@ -239,6 +239,106 @@ test("resumeAgent rejects when agent name is missing", async () => {
   );
 });
 
+test("spawnChildWorker runs agentmux worker --parent and parses the echoed agent/tmux session", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-spawn-child-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    [
+      "import sys, json, shlex",
+      "assert sys.argv[1] == 'worker'",
+      "assert sys.argv[2] == 'my-proj'",
+      // The third positional is the agent name we generated (child-<6hex).
+      "assert sys.argv[3].startswith('child-') and len(sys.argv[3]) >= 7",
+      "assert sys.argv[4] == '--harness'",
+      "assert sys.argv[5] == 'shell'",
+      "assert sys.argv[6] == '--parent'",
+      "assert sys.argv[7] == 'parent-agent'",
+      "assert sys.argv[8] == '--workdir'",
+      "assert sys.argv[9] == '/tmp/cwd'",
+      "name = sys.argv[3]",
+      "print('Created worker ' + name + ' (abc123)')",
+      "print('tmux: agentmux-' + name + '-abc123')",
+      "print('cwd:  /tmp/cwd')"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+    const result = await service.spawnChildWorker({
+      projectTag: "my-proj",
+      parentAgentName: "parent-agent",
+      workdir: "/tmp/cwd"
+    });
+
+    assert.equal(result.parentAgentName, "parent-agent");
+    assert.equal(result.projectTag, "my-proj");
+    assert.match(result.agentName, /^child-[a-z0-9]{6}$/u);
+    assert.equal(result.tmuxSessionName, `agentmux-${result.agentName}-abc123`);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("spawnChildWorker throws when agentmux worker output omits the tmux session line", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-spawn-child-no-tmux-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    [
+      "import sys",
+      "print('Created worker ' + sys.argv[3] + ' (abc123)')"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+
+    await assert.rejects(
+      () => service.spawnChildWorker({
+        projectTag: "my-proj",
+        parentAgentName: "parent-agent",
+        workdir: "/tmp/cwd"
+      }),
+      /did not report a tmux session/u
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("spawnChildWorker rejects missing project tag or parent agent name", async () => {
+  const repoRoot = path.join(__dirname, "..");
+  const service = createAgentmuxService({ agentmuxHomePath: path.join(repoRoot, ".tmp-agentmux-home") });
+
+  await assert.rejects(
+    () => service.spawnChildWorker({ parentAgentName: "p", workdir: "/tmp" }),
+    /project tag is required/u
+  );
+  await assert.rejects(
+    () => service.spawnChildWorker({ projectTag: "proj", workdir: "/tmp" }),
+    /parent agent name is required/u
+  );
+  await assert.rejects(
+    () => service.spawnChildWorker({}),
+    /project tag is required/u
+  );
+});
+
 test("vendored agentmux recovers app-scoped home from a repaired tmux session", () => {
   const repoRoot = path.join(__dirname, "..");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-wrapper-home-"));

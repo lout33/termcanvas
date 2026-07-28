@@ -1,10 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   ATTENTION_STATES,
   deriveNodeStatus,
   deriveAttentionQueue,
+  isHandoffAttention,
   extractLastMeaningfulLine,
   formatQuietDuration
 } = require("../renderer_node_status.js");
@@ -23,10 +26,17 @@ test("exited node reports error when the shell failed", () => {
   });
 });
 
-test("attention waiting wins over an active agent state", () => {
+test("declared active state owns the primary color over waiting runtime attention", () => {
   assert.deepEqual(deriveNodeStatus({ attention: "waiting", agentState: "active" }), {
-    state: "needs-input",
-    label: "Needs input"
+    state: "working",
+    label: "Active"
+  });
+});
+
+test("declared idle state stays dim when the runtime is waiting", () => {
+  assert.deepEqual(deriveNodeStatus({ attention: "waiting", agentState: "idle", runtimeState: "waiting" }), {
+    state: "idle",
+    label: "Idle"
   });
 });
 
@@ -43,12 +53,31 @@ test("attention stale and stopped map to idle", () => {
   assert.equal(deriveNodeStatus({ attention: "stopped" }).state, "idle");
 });
 
-test("agent state drives status when attention is absent", () => {
+test("agent state drives the primary status", () => {
   assert.equal(deriveNodeStatus({ agentState: "active" }).state, "working");
   assert.equal(deriveNodeStatus({ agentState: "finished" }).state, "done");
   assert.equal(deriveNodeStatus({ agentState: "failed" }).state, "error");
   assert.equal(deriveNodeStatus({ agentState: "idle" }).state, "idle");
-  assert.equal(deriveNodeStatus({ agentState: "archived" }).state, "idle");
+  assert.equal(deriveNodeStatus({ agentState: "archived" }).state, "archived");
+});
+
+test("declared agent state drives terminal colors while runtime stays secondary", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "renderer.js"), "utf8");
+
+  assert.match(styles, /\[data-agent-state="active"\] \.terminal-navigator-icon\s*\{[\s\S]*?var\(--color-status-pending\)/);
+  assert.match(styles, /\.terminal-node\[data-state="working"\] \.terminal-node-lead-dot\s*\{[\s\S]*?var\(--color-status-pending\)/);
+  assert.match(styles, /\.terminal-navigator-row\[data-agent-state="archived"\]\s*\{[\s\S]*?display:\s*none/);
+  assert.doesNotMatch(styles, /\[data-runtime-state=[^\]]+\] \.terminal-navigator-icon/);
+  assert.match(renderer, /nodeRecord\.element\.dataset\.agentState = nodeRecord\.managedAgentState/);
+  assert.match(renderer, /button\.dataset\.agentState = row\.agentState/);
+});
+
+test("selecting a terminal does not change navigator row geometry", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
+
+  assert.match(styles, /\.terminal-navigator-label\s*\{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/);
+  assert.doesNotMatch(styles, /\.terminal-navigator-entry\.is-active \.terminal-navigator-label/);
 });
 
 test("runtime state is the fallback when attention and agent state are absent", () => {
@@ -76,6 +105,18 @@ test("attention queue lists needs-input before error, stable within groups", () 
   ]);
 
   assert.deepEqual(queue, ["b", "d", "a", "e"]);
+});
+
+test("attention queue puts finished waiting handoffs first", () => {
+  const queue = deriveAttentionQueue([
+    { id: "blocked", state: "needs-input", attention: "waiting", agentState: "idle" },
+    { id: "handoff", state: "done", attention: "waiting", agentState: "finished" },
+    { id: "error", state: "error", attention: "failed", agentState: "failed" }
+  ]);
+
+  assert.deepEqual(queue, ["handoff", "blocked", "error"]);
+  assert.equal(isHandoffAttention({ attention: " WAITING ", agentState: "FINISHED" }), true);
+  assert.equal(isHandoffAttention({ attention: "waiting", agentState: "idle" }), false);
 });
 
 test("attention queue ignores malformed input", () => {

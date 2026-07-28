@@ -137,11 +137,100 @@
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
   }
 
+  function normalizeSessionKeyValue(value) {
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }
+
   function getTerminalNodeLabel(nodeRecord) {
     if (typeof nodeRecord?.titleText === "string" && nodeRecord.titleText.trim().length > 0) {
       return nodeRecord.titleText.trim();
     }
     return "Terminal";
+  }
+
+  // Branch identity for collapse state: agent name when the node is a
+  // managed agent, otherwise its session key so plain terminals can also
+  // parent arranged children.
+  function getTerminalBranchKey(nodeRecord) {
+    const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
+
+    if (agentName !== null) {
+      return agentName;
+    }
+
+    const sessionKey = normalizeSessionKeyValue(nodeRecord?.sessionKey);
+    return sessionKey === null ? null : `key:${sessionKey}`;
+  }
+
+  // Resolve each node's parent *node*. A user arrangement override
+  // (`userParentSessionKey`, present as an own property) wins over the
+  // agentmux-managed parent name; `null` forces the node to be a root so
+  // agentmux sync updates can't clobber a deliberate arrangement. Cycles
+  // (including self-parenting) are cut back to root.
+  function resolveTerminalParentMap(nodes) {
+    const safeNodes = Array.isArray(nodes) ? nodes : [];
+    const nodesBySessionKey = new Map();
+    const nodesByAgentName = new Map();
+
+    safeNodes.forEach((nodeRecord) => {
+      const sessionKey = normalizeSessionKeyValue(nodeRecord?.sessionKey);
+
+      if (sessionKey !== null && !nodesBySessionKey.has(sessionKey)) {
+        nodesBySessionKey.set(sessionKey, nodeRecord);
+      }
+
+      const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
+
+      if (agentName !== null && !nodesByAgentName.has(agentName)) {
+        nodesByAgentName.set(agentName, nodeRecord);
+      }
+    });
+
+    const rawParentByNode = new Map();
+
+    safeNodes.forEach((nodeRecord) => {
+      let parent = null;
+
+      if (nodeRecord != null && Object.prototype.hasOwnProperty.call(nodeRecord, "userParentSessionKey")) {
+        const overrideKey = normalizeSessionKeyValue(nodeRecord.userParentSessionKey);
+        parent = overrideKey === null ? null : nodesBySessionKey.get(overrideKey) ?? null;
+      } else {
+        const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
+        const requestedParentKey = normalizeAgentName(nodeRecord?.managedParentAgent);
+
+        if (requestedParentKey !== null && requestedParentKey !== agentName) {
+          parent = nodesByAgentName.get(requestedParentKey) ?? null;
+        }
+      }
+
+      if (parent === nodeRecord) {
+        parent = null;
+      }
+
+      rawParentByNode.set(nodeRecord, parent);
+    });
+
+    const parentByNode = new Map();
+
+    safeNodes.forEach((nodeRecord) => {
+      const visited = new Set([nodeRecord]);
+      let ancestor = rawParentByNode.get(nodeRecord) ?? null;
+      let isValid = true;
+
+      while (ancestor !== null) {
+        if (visited.has(ancestor)) {
+          isValid = false;
+          break;
+        }
+
+        visited.add(ancestor);
+        ancestor = rawParentByNode.get(ancestor) ?? null;
+      }
+
+      parentByNode.set(nodeRecord, isValid ? (rawParentByNode.get(nodeRecord) ?? null) : null);
+    });
+
+    return parentByNode;
   }
 
   function deriveTerminalTreeRows({ activeCanvas, activeNodeId, collapsedAgentNames }) {
@@ -154,49 +243,37 @@
     }
 
     const collapsedSet = collapsedAgentNames instanceof Set ? collapsedAgentNames : new Set(collapsedAgentNames ?? []);
+    const parentByNode = resolveTerminalParentMap(nodes);
 
-    // Group children by parent agent name. Roots (parent == null) go under
-    // the sentinel key `null`.
+    // Group children by their resolved parent node. Roots go under `null`.
     const childrenByParent = new Map();
-    const knownAgentNames = new Set(
-      nodes
-        .map((nodeRecord) => normalizeAgentName(nodeRecord?.managedAgentName))
-        .filter((agentName) => agentName !== null)
-    );
 
     nodes.forEach((nodeRecord) => {
-      const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
-      const requestedParentKey = normalizeAgentName(nodeRecord?.managedParentAgent);
-      const parentKey = requestedParentKey !== agentName && knownAgentNames.has(requestedParentKey)
-        ? requestedParentKey
-        : null;
-      const bucket = childrenByParent.get(parentKey) ?? [];
+      const parent = parentByNode.get(nodeRecord) ?? null;
+      const bucket = childrenByParent.get(parent) ?? [];
       bucket.push(nodeRecord);
-      childrenByParent.set(parentKey, bucket);
+      childrenByParent.set(parent, bucket);
     });
 
     const rows = [];
     const visitedNodes = new Set();
     const coveredNodes = new Set();
 
-    const markDescendantsCovered = (parentKey) => {
-      const bucket = childrenByParent.get(parentKey) ?? [];
+    const markDescendantsCovered = (parentNode) => {
+      const bucket = childrenByParent.get(parentNode) ?? [];
       bucket.forEach((nodeRecord) => {
         if (coveredNodes.has(nodeRecord)) {
           return;
         }
         coveredNodes.add(nodeRecord);
-        const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
-        if (agentName !== null) {
-          markDescendantsCovered(agentName);
-        }
+        markDescendantsCovered(nodeRecord);
       });
     };
 
     // Stable iteration: keep canvas order within each parent bucket so the
-    // tree matches the top strip's order users already know.
-    const appendChildren = (parentKey, depth) => {
-      const bucket = childrenByParent.get(parentKey) ?? [];
+    // tree matches the order users already know.
+    const appendChildren = (parentNode, depth) => {
+      const bucket = childrenByParent.get(parentNode) ?? [];
       bucket.forEach((nodeRecord) => {
         if (visitedNodes.has(nodeRecord)) {
           return;
@@ -205,29 +282,36 @@
         visitedNodes.add(nodeRecord);
         coveredNodes.add(nodeRecord);
         const agentName = normalizeAgentName(nodeRecord?.managedAgentName);
-        const hasChildren = agentName !== null
-          && (childrenByParent.get(agentName) ?? []).some((childRecord) => !visitedNodes.has(childRecord));
-        const isCollapsed = agentName !== null && collapsedSet.has(agentName);
+        const branchKey = getTerminalBranchKey(nodeRecord);
+        const hasChildren = (childrenByParent.get(nodeRecord) ?? [])
+          .some((childRecord) => !visitedNodes.has(childRecord));
+        const isCollapsed = branchKey !== null && collapsedSet.has(branchKey);
         const nodeId = typeof nodeRecord?.id === "string" || typeof nodeRecord?.id === "number"
           ? String(nodeRecord.id)
           : "";
+        const parentNode = parentByNode.get(nodeRecord) ?? null;
 
         rows.push({
           id: nodeId,
           label: getTerminalNodeLabel(nodeRecord),
           agentName,
+          branchKey,
           depth,
           hasChildren,
           isCollapsed,
           isActive: nodeId.length > 0 && nodeId === String(activeNodeId),
+          isUserArranged: nodeRecord != null && Object.prototype.hasOwnProperty.call(nodeRecord, "userParentSessionKey"),
+          sessionKey: normalizeSessionKeyValue(nodeRecord?.sessionKey),
+          parentSessionKey: parentNode === null ? null : normalizeSessionKeyValue(parentNode.sessionKey),
           runtimeState: typeof nodeRecord?.managedRuntimeState === "string" ? nodeRecord.managedRuntimeState : null,
+          agentState: typeof nodeRecord?.managedAgentState === "string" ? nodeRecord.managedAgentState : null,
           attention: typeof nodeRecord?.managedAttention === "string" ? nodeRecord.managedAttention : null
         });
 
         if (hasChildren && !isCollapsed) {
-          appendChildren(agentName, depth + 1);
+          appendChildren(nodeRecord, depth + 1);
         } else if (hasChildren) {
-          markDescendantsCovered(agentName);
+          markDescendantsCovered(nodeRecord);
         }
       });
     };
@@ -245,11 +329,69 @@
     return { isEmpty: false, rows };
   }
 
+  // Decide what a drag-and-drop in the terminal tree means. Zones:
+  // - "before"/"after": reorder siblings; the dragged node adopts the
+  //   target's parent (which may be root).
+  // - "onto": make the dragged node a child of the target.
+  // Dropping a node onto itself or one of its own descendants is a noop so
+  // the arrangement graph can never cycle.
+  function deriveTerminalTreeDropAction({ nodes, sourceNodeId, targetNodeId, zone }) {
+    const safeNodes = (Array.isArray(nodes) ? nodes : [])
+      .filter((nodeRecord) => nodeRecord?.isRemoved !== true);
+    const sourceNode = safeNodes.find((nodeRecord) => String(nodeRecord?.id) === String(sourceNodeId));
+    const targetNode = safeNodes.find((nodeRecord) => String(nodeRecord?.id) === String(targetNodeId));
+
+    if (sourceNode == null || targetNode == null || sourceNode === targetNode) {
+      return { type: "noop", reason: "invalid-target" };
+    }
+
+    if (zone !== "before" && zone !== "after" && zone !== "onto") {
+      return { type: "noop", reason: "invalid-zone" };
+    }
+
+    const parentByNode = resolveTerminalParentMap(safeNodes);
+
+    let ancestor = targetNode;
+
+    while (ancestor != null) {
+      if (ancestor === sourceNode) {
+        return { type: "noop", reason: "cycle" };
+      }
+
+      ancestor = parentByNode.get(ancestor) ?? null;
+    }
+
+    if (zone === "onto") {
+      const parentSessionKey = normalizeSessionKeyValue(targetNode.sessionKey);
+
+      if (parentSessionKey === null) {
+        return { type: "noop", reason: "target-missing-key" };
+      }
+
+      return {
+        type: "reparent",
+        parentSessionKey,
+        targetSessionKey: parentSessionKey
+      };
+    }
+
+    const targetParent = parentByNode.get(targetNode) ?? null;
+
+    return {
+      type: "reorder",
+      position: zone,
+      parentSessionKey: targetParent === null ? null : normalizeSessionKeyValue(targetParent.sessionKey),
+      targetSessionKey: normalizeSessionKeyValue(targetNode.sessionKey)
+    };
+  }
+
   return {
     deriveCanvasSwitcherViewModel,
     deriveCanvasStripOverflowState,
     deriveTerminalStripViewModel,
     deriveTerminalStripDropTarget,
-    deriveTerminalTreeRows
+    deriveTerminalTreeRows,
+    deriveTerminalTreeDropAction,
+    resolveTerminalParentMap
   };
 });

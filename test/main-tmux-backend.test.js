@@ -40,9 +40,10 @@ function createPtyProcess({ autoExit = false } = {}) {
   };
 }
 
-function createBackendHarness() {
+function createBackendHarness({ panePids = {}, psTable = "" } = {}) {
   const calls = [];
   const ptyCalls = [];
+  const killCalls = [];
   const sessions = new Set();
   let serverStopped = true;
 
@@ -92,6 +93,12 @@ function createBackendHarness() {
       return { status: 0, stdout: "/dev/ttys001\n/dev/ttys002\n", stderr: "" };
     }
 
+    if (args[0] === "list-panes") {
+      const sessionName = args[args.indexOf("-t") + 1];
+      const pids = panePids[sessionName] ?? [];
+      return { status: 0, stdout: pids.map((pid) => `${pid}\n`).join(""), stderr: "" };
+    }
+
     return { status: 0, stdout: "", stderr: "" };
   };
 
@@ -102,6 +109,15 @@ function createBackendHarness() {
     calls.push({ command, args, options });
 
     setImmediate(() => {
+      if (command === "ps") {
+        if (psTable.length > 0) {
+          child.stdout.emit("data", psTable);
+        }
+
+        child.emit("close", 0);
+        return;
+      }
+
       const result = getCommandResult(command, args);
 
       if (result.stdout.length > 0) {
@@ -134,13 +150,18 @@ function createBackendHarness() {
       FORCE_COLOR: "3"
     }),
     resolveExistingDirectory: (candidatePath) => candidatePath,
-    probeTimeoutMs: 20
+    probeTimeoutMs: 20,
+    orphanReapGraceMs: 0,
+    killProcess: (pid, signal) => {
+      killCalls.push({ pid, signal });
+    }
   });
 
   return {
     backend,
     calls,
     ptyCalls,
+    killCalls,
     sessions,
     stopServer: () => {
       sessions.clear();
@@ -230,6 +251,46 @@ test("tmux destroy and redraw preserve explicit session semantics", async () => 
   assert.equal(commands.filter((command) => (
     command[0] === "kill-session" && command[2] === "termcanvas-one"
   )).length, 1);
+  assert.equal(harness.sessions.has("termcanvas-one"), false);
+});
+
+test("destroying a tmux session reaps the pane's surviving process tree", async () => {
+  const harness = createBackendHarness({
+    panePids: { "termcanvas-one": [4321] },
+    psTable: [
+      "  4321     1", // pane shell
+      "  5555  4321", // opencode inside the pane
+      "  6666  5555", // double-forked grandchild
+      "  7777     1"  // unrelated process
+    ].join("\n") + "\n"
+  });
+
+  await harness.backend.createClientSession(createSessionOptions("one"));
+  await harness.backend.destroySession("termcanvas-one");
+
+  const commands = getTmuxCommands(harness.calls);
+  const listPanesIndex = commands.findIndex((command) => command[0] === "list-panes");
+  const killSessionIndex = commands.findIndex((command) => command[0] === "kill-session");
+
+  assert.notEqual(listPanesIndex, -1);
+  assert.notEqual(killSessionIndex, -1);
+  assert.ok(listPanesIndex < killSessionIndex, "process tree must be captured before kill-session");
+
+  const sigtermPids = harness.killCalls.filter((call) => call.signal === "SIGTERM").map((call) => call.pid);
+  const sigkillPids = harness.killCalls.filter((call) => call.signal === "SIGKILL").map((call) => call.pid);
+
+  assert.deepEqual([...sigtermPids].sort(), [4321, 5555, 6666]);
+  assert.deepEqual([...sigkillPids].sort(), [4321, 5555, 6666]);
+  assert.equal(sigtermPids.includes(7777), false, "unrelated processes must not be killed");
+});
+
+test("destroying a tmux session without panes skips reaping", async () => {
+  const harness = createBackendHarness();
+
+  await harness.backend.createClientSession(createSessionOptions("one"));
+  await harness.backend.destroySession("termcanvas-one");
+
+  assert.equal(harness.killCalls.length, 0);
   assert.equal(harness.sessions.has("termcanvas-one"), false);
 });
 

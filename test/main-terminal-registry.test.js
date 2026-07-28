@@ -91,6 +91,77 @@ test("terminal registry releases identities for a later renderer reattachment", 
   });
 });
 
+test("terminal registry keeps a detached tmux identity owner-bound for reattachment", () => {
+  const registry = createTerminalSessionRegistry();
+  const firstReservation = registry.reserve({
+    terminalId: "attachment-a",
+    sessionKey: "session-a",
+    tmuxSessionName: "termcanvas-session-a",
+    ownerWebContentsId: 7
+  });
+  const firstAttachment = createAttachment("session-a", "termcanvas-session-a");
+  firstAttachment.ownerWebContentsId = 7;
+
+  registry.attach(firstReservation, firstAttachment);
+  assert.equal(registry.detachAttachment("attachment-a"), firstAttachment);
+  assert.deepEqual(registry.getSession("session-a"), {
+    sessionKey: "session-a",
+    terminalId: null,
+    tmuxSessionName: "termcanvas-session-a",
+    ownerWebContentsId: 7,
+    state: "detached"
+  });
+
+  assert.throws(
+    () => registry.reserve({
+      terminalId: "attachment-b",
+      sessionKey: "session-a",
+      tmuxSessionName: "termcanvas-session-a",
+      ownerWebContentsId: 8
+    }),
+    (error) => error.code === TERMINAL_REGISTRY_ERROR_CODES.SESSION_ATTACHED
+  );
+
+  const secondReservation = registry.reserve({
+    terminalId: "attachment-c",
+    sessionKey: "session-a",
+    tmuxSessionName: "termcanvas-session-a",
+    ownerWebContentsId: 7
+  });
+  const secondAttachment = createAttachment("session-a", "termcanvas-session-a");
+  secondAttachment.ownerWebContentsId = 7;
+  registry.attach(secondReservation, secondAttachment);
+
+  assert.equal(registry.getAttachment("attachment-c"), secondAttachment);
+  assert.equal(registry.getSession("session-a").state, "attached");
+});
+
+test("terminal registry restores detached identity when reattachment is cancelled", () => {
+  const registry = createTerminalSessionRegistry();
+  const firstReservation = registry.reserve({
+    terminalId: "attachment-a",
+    sessionKey: "session-a",
+    tmuxSessionName: "termcanvas-session-a",
+    ownerWebContentsId: 7
+  });
+  const attachment = createAttachment("session-a", "termcanvas-session-a");
+  attachment.ownerWebContentsId = 7;
+
+  registry.attach(firstReservation, attachment);
+  registry.detachAttachment("attachment-a");
+  const reattachment = registry.reserve({
+    terminalId: "attachment-b",
+    sessionKey: "session-a",
+    tmuxSessionName: "termcanvas-session-a",
+    ownerWebContentsId: 7
+  });
+
+  assert.equal(registry.cancel(reattachment), true);
+  assert.equal(registry.getSession("session-a").state, "detached");
+  assert.equal(registry.releaseSession("session-a").state, "detached");
+  assert.equal(registry.getSession("session-a"), undefined);
+});
+
 test("terminal registry cancels failed creation without leaving a stale identity", () => {
   const registry = createTerminalSessionRegistry();
   const reservation = registry.reserve({

@@ -318,13 +318,6 @@ function getTmuxSessionName(sessionKey) {
   return `${TMUX_SESSION_PREFIX}-${sessionKey}`;
 }
 
-function isMissingTmuxSessionError(error) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return error?.code === "TMUX_SESSION_MISSING"
-    || /tmux session '.+' is not running\./u.test(message)
-    || /can't find session/u.test(message);
-}
-
 function shouldPreserveTerminalSessionsOnWindowClose() {
   return process.env.CANVAS_SMOKE_TEST !== "1";
 }
@@ -549,6 +542,9 @@ function isToggleActiveTerminalMaximizeShortcut(input) {
 async function destroyTerminalSession(terminalId, options = {}) {
   const session = getSession(terminalId);
   const preserveSession = options.preserveSession === true;
+  const retainDetachedIdentity = preserveSession
+    && options.retainDetachedIdentity === true
+    && session?.backend === "tmux";
 
   if (session === undefined || session.isDisposing) {
     return;
@@ -570,19 +566,41 @@ async function destroyTerminalSession(terminalId, options = {}) {
   }
 
   session.pty.kill();
-  terminalSessionRegistry.releaseAttachment(terminalId);
+  if (retainDetachedIdentity) {
+    terminalSessionRegistry.detachAttachment(terminalId);
+  } else {
+    terminalSessionRegistry.releaseAttachment(terminalId);
+  }
 }
 
-function destroyOwnedTerminalSessions(ownerWebContentsId, options = {}) {
+async function destroyOwnedTerminalSessions(ownerWebContentsId, options = {}) {
+  const cleanupPromises = [];
+
   terminalSessionRegistry.forEachAttachment((session, terminalId) => {
     if (session.ownerWebContentsId === ownerWebContentsId) {
-      void destroyTerminalSession(terminalId, options);
+      cleanupPromises.push(destroyTerminalSession(terminalId, options));
     }
   });
+
+  terminalSessionRegistry.forEachSession((sessionRecord, sessionKey) => {
+    if (sessionRecord.ownerWebContentsId !== ownerWebContentsId || sessionRecord.state !== "detached") {
+      return;
+    }
+
+    if (options.preserveSession !== true && typeof sessionRecord.tmuxSessionName === "string") {
+      cleanupPromises.push(tmuxBackend.destroySession(sessionRecord.tmuxSessionName).catch((error) => {
+        console.error(error instanceof Error ? error.message : error);
+      }));
+    }
+
+    terminalSessionRegistry.releaseSession(sessionKey);
+  });
+
+  await Promise.all(cleanupPromises);
 }
 
 function destroyOwnedWindowState(ownerWebContentsId) {
-  destroyOwnedTerminalSessions(ownerWebContentsId, {
+  void destroyOwnedTerminalSessions(ownerWebContentsId, {
     preserveSession: shouldPreserveTerminalSessionsOnWindowClose()
   });
   workspaceService.destroyOwner(ownerWebContentsId);
@@ -825,6 +843,257 @@ async function runSmokeTest(window) {
         throw new Error(`Smoke test failed: focused terminal layout or resize was unstable. Result: ${JSON.stringify(focusedResizeResult)}`);
       }
 
+      logStep("verify focused mode keeps one mounted terminal");
+      const firstSessionKey = snapshot.activeSessionKey;
+      await window.webContents.executeJavaScript("window.__canvasLearningDebug.createTerminalAt(960, 420)");
+      const secondTerminalSnapshot = await waitForSnapshot(
+        "window.__canvasLearningDebug.getSnapshot()",
+        (nextSnapshot) => (
+          nextSnapshot.activeNodeCount === 2
+          && nextSnapshot.mountedXtermCount === 1
+          && nextSnapshot.rendererAttachmentCount === 1
+          && nextSnapshot.resizeObserverCount === 1
+        ),
+        5000
+      );
+
+      if (
+        secondTerminalSnapshot.mountedXtermCount !== 1
+        || secondTerminalSnapshot.rendererAttachmentCount !== 1
+        || secondTerminalSnapshot.resizeObserverCount !== 1
+        || secondTerminalSnapshot.webglRendererCount > 1
+      ) {
+        throw new Error(`Smoke test failed: focused mode mounted more than one terminal. Snapshot: ${JSON.stringify(secondTerminalSnapshot)}`);
+      }
+
+      logStep("verify navigator click and drag separation");
+      const navigatorResult = await window.webContents.executeJavaScript(`(async () => {
+        document.getElementById("sidebar-view-terminals")?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+        const getRows = () => [...document.querySelectorAll(".terminal-navigator-row")]
+          .filter((row) => getComputedStyle(row).display !== "none");
+        const readNavigator = () => {
+          const rows = getRows();
+          return {
+            order: rows.map((row) => row.dataset.nodeId),
+            positions: rows.map((row) => {
+              const rowRect = row.getBoundingClientRect();
+              const entryRect = row.querySelector(".terminal-navigator-entry")?.getBoundingClientRect();
+              return {
+                nodeId: row.dataset.nodeId,
+                row: { left: rowRect.left, top: rowRect.top, width: rowRect.width, height: rowRect.height },
+                entry: entryRect == null ? null : { left: entryRect.left, top: entryRect.top, width: entryRect.width, height: entryRect.height }
+              };
+            }),
+            rowDraggable: rows.map((row) => row.draggable),
+            entryDraggable: rows.map((row) => row.querySelector(".terminal-navigator-entry")?.draggable),
+            handleDraggable: rows.map((row) => row.querySelector(".terminal-navigator-drag-handle")?.draggable),
+            draggingRows: document.querySelectorAll(".terminal-navigator-row.is-dragging").length
+          };
+        };
+        const dispatchDrag = (element, type, transfer, clientY = 0) => element?.dispatchEvent(new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          clientY,
+          dataTransfer: transfer
+        }));
+
+        const before = readNavigator();
+        const initialRows = getRows();
+        const ignoredTransfer = new DataTransfer();
+        dispatchDrag(initialRows[0]?.querySelector(".terminal-navigator-entry"), "dragstart", ignoredTransfer);
+        dispatchDrag(initialRows[1], "drop", ignoredTransfer, initialRows[1]?.getBoundingClientRect().bottom - 1);
+        const entryDrag = readNavigator();
+
+        initialRows[0]?.querySelector(".terminal-navigator-entry")?.click();
+        const clickedSessionKey = window.__canvasLearningDebug.getSnapshot().activeSessionKey;
+        await window.__canvasLearningDebug.focusTerminal(0);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const afterClick = readNavigator();
+
+        const handleRows = getRows();
+        const handle = handleRows[0]?.querySelector(".terminal-navigator-drag-handle");
+        const handleTransfer = new DataTransfer();
+        dispatchDrag(handle, "dragstart", handleTransfer);
+        const handleStarted = readNavigator();
+        const dropTarget = handleRows[1];
+        const dropTargetRect = dropTarget?.getBoundingClientRect();
+        dispatchDrag(dropTarget, "dragover", handleTransfer, (dropTargetRect?.bottom ?? 1) - 1);
+        const dropIndicator = dropTarget?.classList.contains("is-drop-after") === true;
+        dispatchDrag(dropTarget, "drop", handleTransfer, (dropTargetRect?.bottom ?? 1) - 1);
+        const handleDropped = readNavigator();
+
+        const reorderedRows = getRows();
+        const restoreSource = reorderedRows.find((row) => row.dataset.nodeId === before.order[0]);
+        const restoreTarget = reorderedRows.find((row) => row.dataset.nodeId === before.order[1]);
+        const restoreTransfer = new DataTransfer();
+        dispatchDrag(restoreSource?.querySelector(".terminal-navigator-drag-handle"), "dragstart", restoreTransfer);
+        const restoreRect = restoreTarget?.getBoundingClientRect();
+        dispatchDrag(restoreTarget, "drop", restoreTransfer, (restoreRect?.top ?? 0) + 1);
+        const handleRestored = readNavigator();
+
+        const staleRows = getRows();
+        const staleTransfer = new DataTransfer();
+        dispatchDrag(staleRows[0]?.querySelector(".terminal-navigator-drag-handle"), "dragstart", staleTransfer);
+        const staleStarted = readNavigator();
+        staleRows[0]?.querySelector(".terminal-navigator-entry")?.click();
+        const nextRows = getRows();
+        dispatchDrag(nextRows[1], "drop", staleTransfer, nextRows[1]?.getBoundingClientRect().bottom - 1);
+        const afterRerender = readNavigator();
+
+        const keyboardSourceId = before.order[1];
+        const pressMoveKey = (key) => getRows()
+          .find((row) => row.dataset.nodeId === keyboardSourceId)
+          ?.querySelector(".terminal-navigator-drag-handle")
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+        pressMoveKey("ArrowUp");
+        const keyboardMoved = readNavigator();
+        pressMoveKey("ArrowDown");
+        const keyboardRestored = readNavigator();
+        await window.__canvasLearningDebug.focusTerminal(0);
+
+        return {
+          before,
+          entryDrag,
+          clickedSessionKey,
+          afterClick,
+          handleStarted,
+          dropIndicator,
+          handleDropped,
+          handleRestored,
+          staleStarted,
+          afterRerender,
+          keyboardMoved,
+          keyboardRestored
+        };
+      })()`);
+
+      const expectedOrder = JSON.stringify(navigatorResult.before.order);
+
+      if (
+        navigatorResult.before.order.length !== 2
+        || navigatorResult.before.rowDraggable.some(Boolean)
+        || navigatorResult.before.entryDraggable.some(Boolean)
+        || navigatorResult.before.handleDraggable.some((isDraggable) => isDraggable !== true)
+        || navigatorResult.entryDrag.draggingRows !== 0
+        || JSON.stringify(navigatorResult.entryDrag.order) !== expectedOrder
+        || navigatorResult.clickedSessionKey !== firstSessionKey
+        || JSON.stringify(navigatorResult.afterClick.order) !== expectedOrder
+        || JSON.stringify(navigatorResult.afterClick.positions) !== JSON.stringify(navigatorResult.before.positions)
+        || navigatorResult.handleStarted.draggingRows !== 1
+        || navigatorResult.dropIndicator !== true
+        || JSON.stringify(navigatorResult.handleDropped.order) !== JSON.stringify([...navigatorResult.before.order].reverse())
+        || navigatorResult.handleDropped.draggingRows !== 0
+        || JSON.stringify(navigatorResult.handleRestored.order) !== expectedOrder
+        || navigatorResult.staleStarted.draggingRows !== 1
+        || navigatorResult.afterRerender.draggingRows !== 0
+        || JSON.stringify(navigatorResult.afterRerender.order) !== expectedOrder
+        || JSON.stringify(navigatorResult.keyboardMoved.order) !== JSON.stringify([...navigatorResult.before.order].reverse())
+        || JSON.stringify(navigatorResult.keyboardRestored.order) !== expectedOrder
+      ) {
+        throw new Error(`Smoke test failed: navigator click/drag contract regressed. Result: ${JSON.stringify(navigatorResult)}`);
+      }
+
+      const reattachedFirstSnapshot = await waitForSnapshot(
+        "window.__canvasLearningDebug.getSnapshot()",
+        (nextSnapshot) => (
+          nextSnapshot.activeSessionKey === firstSessionKey
+          && nextSnapshot.mountedXtermCount === 1
+          && nextSnapshot.rendererAttachmentCount === 1
+          && typeof nextSnapshot.firstTerminalText === "string"
+          && nextSnapshot.firstTerminalText.length > 0
+        ),
+        5000
+      );
+
+      if (
+        reattachedFirstSnapshot.activeSessionKey !== firstSessionKey
+        || reattachedFirstSnapshot.mountedXtermCount !== 1
+        || reattachedFirstSnapshot.rendererAttachmentCount !== 1
+        || reattachedFirstSnapshot.firstTerminalText.length === 0
+      ) {
+        throw new Error(`Smoke test failed: focused terminal did not survive detach and reattach. Snapshot: ${JSON.stringify(reattachedFirstSnapshot)}`);
+      }
+
+      logStep("verify double-click preserves managed terminal position");
+      const doubleClickSetup = await window.webContents.executeJavaScript(`(async () => {
+        await window.__canvasLearningDebug.focusTerminal(0);
+        const before = window.__canvasLearningDebug.setTerminalManagedGraph([
+          { name: "smoke-parent", parentAgent: null, depth: 0 },
+          { name: "smoke-child", parentAgent: "smoke-parent", depth: 1 }
+        ]);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+        return {
+          before,
+          childId: before.nodes[1]?.id ?? null,
+          childSessionKey: before.nodes[1]?.sessionKey ?? null
+        };
+      })()`);
+
+      if (doubleClickSetup.childId === null || doubleClickSetup.childSessionKey === null) {
+        throw new Error(`Smoke test failed: managed child was unavailable for double-click. Setup: ${JSON.stringify(doubleClickSetup)}`);
+      }
+
+      const doubleClickResult = await window.webContents.executeJavaScript(`(async () => {
+        const childId = ${JSON.stringify(doubleClickSetup.childId)};
+        const dispatch = (type, detail) => {
+          const entry = document.querySelector('.terminal-navigator-entry[data-node-id="' + childId + '"]');
+          entry?.dispatchEvent(new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            detail
+          }));
+        };
+
+        dispatch("click", 1);
+        dispatch("click", 2);
+        dispatch("dblclick", 2);
+        const tree = await window.__canvasLearningDebug.waitForFocusedTerminalIdle();
+        const snapshot = window.__canvasLearningDebug.getSnapshot();
+        return {
+          activeSessionKey: snapshot.activeSessionKey,
+          mountedXtermCount: snapshot.mountedXtermCount,
+          rendererAttachmentCount: snapshot.rendererAttachmentCount,
+          tree
+        };
+      })()`);
+
+      if (
+        doubleClickResult.activeSessionKey !== doubleClickSetup.childSessionKey
+        || doubleClickResult.mountedXtermCount !== 1
+        || doubleClickResult.rendererAttachmentCount !== 1
+        || JSON.stringify(doubleClickResult.tree.nodeOrder) !== JSON.stringify(doubleClickSetup.before.nodeOrder)
+        || JSON.stringify(doubleClickResult.tree.nodes) !== JSON.stringify(doubleClickSetup.before.nodes)
+        || JSON.stringify(doubleClickResult.tree.rows) !== JSON.stringify(doubleClickSetup.before.rows)
+      ) {
+        throw new Error(`Smoke test failed: double-click moved a managed terminal. Result: ${JSON.stringify({ setup: doubleClickSetup, result: doubleClickResult })}`);
+      }
+
+      await window.webContents.executeJavaScript("window.__canvasLearningDebug.focusTerminal(0)");
+
+      logStep("verify focused terminal title edit button");
+      const editedTerminalTitle = "Focused terminal renamed";
+      const titleEditResult = await window.webContents.executeJavaScript(
+        `window.__canvasLearningDebug.renameActiveTerminalThroughButton(${JSON.stringify(editedTerminalTitle)})`
+      );
+
+      if (
+        titleEditResult?.editing?.isEditing !== true
+        || titleEditResult.editing.hasFocus !== true
+        || titleEditResult.editing.isReadOnly !== false
+        || titleEditResult.editing.tabIndex !== 0
+        || titleEditResult.editing.ariaPressed !== "true"
+        || titleEditResult.titleText !== editedTerminalTitle
+        || titleEditResult.navigatorLabel !== editedTerminalTitle
+        || titleEditResult.sessionSnapshotTitle !== editedTerminalTitle
+        || titleEditResult.isEditingAfterCommit !== false
+      ) {
+        throw new Error(`Smoke test failed: terminal title edit button did not keep the editor active or serialize the title. Result: ${JSON.stringify(titleEditResult)}`);
+      }
+
       logStep("verify terminal input after resize");
       await window.webContents.executeJavaScript("window.__canvasLearningDebug.sendToFirstTerminal('echo focused-resize-check\\r')");
       const resizedTerminalSnapshot = await waitForSnapshot(
@@ -837,6 +1106,7 @@ async function runSmokeTest(window) {
         throw new Error(`Smoke test failed: focused terminal stopped responding after resize. Snapshot: ${JSON.stringify(resizedTerminalSnapshot)}`);
       }
 
+      await destroyOwnedTerminalSessions(window.webContents.id, { preserveSession: false });
       console.log("Smoke test passed.");
       app.quit();
       return;
@@ -1495,10 +1765,12 @@ async function runSmokeTest(window) {
       throw new Error(`Smoke test failed: imported canvas default cwd should be the exported workspace. Value: ${JSON.stringify(importedCanvasDefaultCwd)}`);
     }
 
+    await destroyOwnedTerminalSessions(window.webContents.id, { preserveSession: false });
     console.log("Smoke test passed.");
     app.quit();
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
+    await destroyOwnedTerminalSessions(window.webContents.id, { preserveSession: false });
     app.exit(1);
   } finally {
     smokeWorkspacePaths.forEach((workspacePath) => {
@@ -1866,10 +2138,117 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   const payloadManagedAgentName = typeof payload?.managedAgentName === "string" && payload.managedAgentName.trim().length > 0
     ? payload.managedAgentName.trim()
     : null;
+  const payloadParentAgentName = typeof payload?.parentAgentName === "string" && payload.parentAgentName.trim().length > 0
+    ? payload.parentAgentName.trim()
+    : null;
+
+  // Child-spawn path: a parent agent was named, so we delegate tmux session
+  // creation to `agentmux worker --parent`, then attach to the resulting
+  // session. The agent is already registered in the graph; we do NOT run
+  // `agentmux import` again. Returns early — the fresh-root path below is
+  // skipped.
+  //
+  // This branch is reserved for FRESH children (no saved tmux session yet).
+  // Restored child terminals pass `tmuxSessionName` so they reattach to the
+  // existing session and the agent that agentmux already knows about; they
+  // fall through to the standard reattach path below.
+  if (payloadParentAgentName !== null && requestedTmuxSessionName === null) {
+    if (agentProjectTag === null) {
+      throw new Error("Cannot spawn a child terminal outside a managed canvas project.");
+    }
+
+    const spawned = await agentmuxService.spawnChildWorker({
+      projectTag: agentProjectTag,
+      parentAgentName: payloadParentAgentName,
+      workdir: terminalCwd
+    });
+    const childTmuxSessionName = spawned.tmuxSessionName;
+    const childReservation = terminalSessionRegistry.reserve({
+      terminalId,
+      sessionKey,
+      tmuxSessionName: childTmuxSessionName,
+      ownerWebContentsId: event.sender.id
+    });
+    let childTerminalPty = null;
+    let childDidAttach = false;
+
+    try {
+      const childTmuxSession = await createTmuxClientSession({
+        ownerWebContentsId: event.sender.id,
+        cols: safeCols,
+        rows: safeRows,
+        cwd: terminalCwd,
+        shellName,
+        sessionKey,
+        tmuxSessionName: childTmuxSessionName,
+        createIfMissing: false,
+        sessionEnv: {}
+      });
+      if (childTmuxSession === null) {
+        throw new Error(`Could not attach to child tmux session '${childTmuxSessionName}'.`);
+      }
+
+      childTerminalPty = childTmuxSession.session.pty;
+      const childSession = childTmuxSession.session;
+
+      terminalSessionRegistry.attach(childReservation, childSession);
+      childDidAttach = true;
+
+      agentGraphWatcher.notifyProjectTagChanged(agentProjectTag);
+
+      childTerminalPty.onData((data) => {
+        sendToOwner(childSession.ownerWebContentsId, "terminal:data", {
+          terminalId,
+          data
+        });
+      });
+
+      childTerminalPty.onExit(({ exitCode, signal }) => {
+        if (!childSession.isDisposing) {
+          sendToOwner(childSession.ownerWebContentsId, "terminal:exit", {
+            terminalId,
+            exitCode,
+            signal
+          });
+        }
+        terminalSessionRegistry.releaseAttachment(terminalId);
+      });
+
+      return {
+        terminalId,
+        shellName,
+        cwd: childSession.cwd,
+        backend: childSession.backend,
+        sessionKey: childSession.sessionKey,
+        tmuxSessionName: childSession.tmuxSessionName,
+        managedAgentName: spawned.agentName,
+        managedParentAgent: spawned.parentAgentName,
+        managedProjectTag: agentProjectTag,
+        cols: safeCols,
+        rows: safeRows
+      };
+    } catch (error) {
+      if (childDidAttach) {
+        const attachedSession = terminalSessionRegistry.releaseAttachment(terminalId);
+
+        if (attachedSession !== undefined && !attachedSession.isDisposing) {
+          attachedSession.isDisposing = true;
+          attachedSession.pty.kill();
+        }
+      } else {
+        terminalSessionRegistry.cancel(childReservation);
+        childTerminalPty?.kill();
+      }
+      throw error;
+    }
+  }
+
   // Fresh canvas terminals are born as managed root agents so every process
   // inside them (claude, codex, ...) inherits AGENTMUX_* context. Restored
   // terminals reattach to existing tmux sessions and keep their agent record.
-  const shouldAdoptAsAgent = agentProjectTag !== null && requestedTmuxSessionName === null;
+  const shouldAdoptAsAgent = agentProjectTag !== null
+    && requestedTmuxSessionName === null
+    && payloadManagedAgentName === null;
   const plannedAgentName = shouldAdoptAsAgent ? `terminal-${randomUUID().slice(0, 6)}` : null;
   const plannedTmuxSessionName = requestedTmuxSessionName ?? getTmuxSessionName(sessionKey);
   const sessionEnv = agentProjectTag === null
@@ -1895,54 +2274,24 @@ ipcMain.handle("terminal:create", async (event, payload) => {
   try {
     let tmuxSession = null;
 
-    try {
-      tmuxSession = await createTmuxClientSession({
-        ownerWebContentsId: event.sender.id,
-        cols: safeCols,
-        rows: safeRows,
-        cwd: terminalCwd,
-        shellName,
-        sessionKey,
-        tmuxSessionName: requestedTmuxSessionName,
-        createIfMissing: requestedTmuxSessionName === null,
-        sessionEnv
-      });
-    } catch (error) {
-      if (requestedTmuxSessionName !== null && isMissingTmuxSessionError(error)) {
-        if (payloadManagedAgentName !== null) {
-          // The tmux session backing this managed agent is gone. Try to
-          // resume the agent runtime (re-spawn opencode/claude/...) via
-          // `agentmux resume` before falling back to a dead plain shell.
-          try {
-            const resumed = await agentmuxService.resumeAgent({ agentName: payloadManagedAgentName });
-            const resumedTmuxSessionName = typeof resumed.tmuxSessionName === "string" && resumed.tmuxSessionName.length > 0
-              ? resumed.tmuxSessionName
-              : requestedTmuxSessionName;
-            tmuxSession = await createTmuxClientSession({
-              ownerWebContentsId: event.sender.id,
-              cols: safeCols,
-              rows: safeRows,
-              cwd: terminalCwd,
-              shellName,
-              sessionKey,
-              tmuxSessionName: resumedTmuxSessionName,
-              createIfMissing: false,
-              sessionEnv
-            });
-            agentGraphWatcher.notifyProjectTagChanged(agentProjectTag);
-          } catch (resumeError) {
-            console.warn(
-              `Could not resume agent '${payloadManagedAgentName}': ${resumeError instanceof Error ? resumeError.message : resumeError}. Falling back to a plain shell PTY.`
-            );
-          }
-        } else {
-          console.warn(
-            `tmux session '${requestedTmuxSessionName}' is not running; restoring terminal as a plain shell PTY.`
-          );
-        }
-      } else {
-        throw error;
-      }
+    tmuxSession = await createTmuxClientSession({
+      ownerWebContentsId: event.sender.id,
+      cols: safeCols,
+      rows: safeRows,
+      cwd: terminalCwd,
+      shellName,
+      sessionKey,
+      tmuxSessionName: requestedTmuxSessionName,
+      createIfMissing: requestedTmuxSessionName === null,
+      sessionEnv
+    });
+
+    // A saved tmux identity is attach-only. Observation and restoration must
+    // never recreate a stopped agent or silently replace it with a new shell.
+    if (requestedTmuxSessionName !== null && tmuxSession === null) {
+      const error = new Error(`tmux session '${requestedTmuxSessionName}' is not running.`);
+      error.code = "TMUX_SESSION_MISSING";
+      throw error;
     }
 
     terminalPty = tmuxSession?.session?.pty ?? pty.spawn(shell, [], {
@@ -2130,19 +2479,52 @@ ipcMain.handle("terminal:redraw", async (event, payload) => {
 });
 
 ipcMain.handle("terminal:destroy", async (event, payload) => {
-  const session = getSession(payload.terminalId);
+  const terminalId = typeof payload?.terminalId === "string" ? payload.terminalId : null;
+  const sessionKey = normalizeTerminalSessionKey(payload?.sessionKey);
+  const tmuxSessionName = typeof payload?.tmuxSessionName === "string" && payload.tmuxSessionName.length > 0
+    ? payload.tmuxSessionName
+    : null;
+  const session = terminalId === null ? undefined : getSession(terminalId);
 
-  if (session === undefined) {
+  if (session === undefined && sessionKey === null) {
     return;
   }
 
-  if (session.ownerWebContentsId !== event.sender.id) {
-    throw new Error("Terminal session is not owned by this window.");
+  if (session !== undefined) {
+    if (session.ownerWebContentsId !== event.sender.id) {
+      throw new Error("Terminal session is not owned by this window.");
+    }
+
+    await destroyTerminalSession(terminalId, {
+      preserveSession: payload?.preserveSession === true,
+      retainDetachedIdentity: payload?.retainDetachedIdentity === true
+    });
+    return;
   }
 
-  await destroyTerminalSession(payload.terminalId, {
-    preserveSession: payload?.preserveSession === true
-  });
+  const detachedSession = terminalSessionRegistry.getSession(sessionKey);
+
+  if (detachedSession === undefined) {
+    return;
+  }
+
+  if (
+    detachedSession.state !== "detached"
+    || detachedSession.ownerWebContentsId !== event.sender.id
+    || detachedSession.tmuxSessionName !== tmuxSessionName
+  ) {
+    throw new Error("Detached terminal session is not owned by this window.");
+  }
+
+  if (payload?.preserveSession !== true && tmuxSessionName !== null) {
+    try {
+      await tmuxBackend.destroySession(tmuxSessionName);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+    }
+  }
+
+  terminalSessionRegistry.releaseSession(sessionKey);
 });
 
 ipcMain.handle("canvas-agent:sync", async (_event, payload) => {

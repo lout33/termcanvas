@@ -25,8 +25,10 @@
   // agentmux attention domain: failed | waiting | stopped | stale | done | null
   // agentmux agent_state domain: active | idle | finished | failed | archived
   //
+  // Declared agent state is the user's control surface and therefore owns the
+  // primary color. Runtime and attention remain fallbacks and queue signals.
   // Returns { state, label } where state is one of:
-  //   exited | error | needs-input | done | idle | working | live
+  //   exited | error | needs-input | done | idle | working | archived | live
   function deriveNodeStatus(descriptor) {
     if (descriptor?.isExited === true) {
       const exitCode = descriptor.exitCode;
@@ -34,6 +36,28 @@
         state: typeof exitCode === "number" && exitCode !== 0 ? "error" : "exited",
         label: "Exited"
       };
+    }
+
+    const agentState = normalizeToken(descriptor?.agentState);
+
+    if (agentState === "failed") {
+      return { state: "error", label: "Failed" };
+    }
+
+    if (agentState === "active") {
+      return { state: "working", label: "Active" };
+    }
+
+    if (agentState === "idle") {
+      return { state: "idle", label: "Idle" };
+    }
+
+    if (agentState === "finished") {
+      return { state: "done", label: "Finished" };
+    }
+
+    if (agentState === "archived") {
+      return { state: "archived", label: "Archived" };
     }
 
     const attention = normalizeToken(descriptor?.attention);
@@ -58,24 +82,6 @@
       return { state: "idle", label: "Stopped" };
     }
 
-    const agentState = normalizeToken(descriptor?.agentState);
-
-    if (agentState === "failed") {
-      return { state: "error", label: "Failed" };
-    }
-
-    if (agentState === "finished") {
-      return { state: "done", label: "Done" };
-    }
-
-    if (agentState === "active") {
-      return { state: "working", label: "Working" };
-    }
-
-    if (agentState === "idle" || agentState === "archived") {
-      return { state: "idle", label: "Idle" };
-    }
-
     const runtimeState = normalizeToken(descriptor?.runtimeState);
 
     if (runtimeState === "waiting") {
@@ -89,6 +95,11 @@
     return { state: "live", label: "Live" };
   }
 
+  function isHandoffAttention(descriptor) {
+    return normalizeToken(descriptor?.attention) === "waiting"
+      && normalizeToken(descriptor?.agentState) === "finished";
+  }
+
   // Given node descriptors ({ id, state }), return the ids that need a human,
   // most urgent first: needs-input before error, stable within each group.
   function deriveAttentionQueue(nodes) {
@@ -97,12 +108,28 @@
     }
 
     const queue = [];
+    const queuedIds = new Set();
 
-    for (const targetState of ATTENTION_STATES) {
-      for (const node of nodes) {
-        if (node?.id != null && node?.state === targetState) {
-          queue.push(node.id);
-        }
+    for (const node of nodes) {
+      if (node?.id != null && isHandoffAttention(node)) {
+        queue.push(node.id);
+        queuedIds.add(node.id);
+      }
+    }
+
+    for (const node of nodes) {
+      const needsInput = normalizeToken(node?.attention) === "waiting" || node?.state === "needs-input";
+      if (node?.id != null && needsInput && !queuedIds.has(node.id)) {
+        queue.push(node.id);
+        queuedIds.add(node.id);
+      }
+    }
+
+    for (const node of nodes) {
+      const hasError = normalizeToken(node?.attention) === "failed" || node?.state === "error";
+      if (node?.id != null && hasError && !queuedIds.has(node.id)) {
+        queue.push(node.id);
+        queuedIds.add(node.id);
       }
     }
 
@@ -164,6 +191,7 @@
     ATTENTION_STATES,
     deriveNodeStatus,
     deriveAttentionQueue,
+    isHandoffAttention,
     extractLastMeaningfulLine,
     formatQuietDuration
   };

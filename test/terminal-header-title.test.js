@@ -34,6 +34,7 @@ test("terminal title editing starts from the rename button, not header double cl
   assert.doesNotMatch(renderer, /elements\.titleGroup\.addEventListener\("dblclick"/);
   assert.match(renderer, /elements\.dragArea\.addEventListener\("dblclick", \(event\) => \{[\s\S]*setNodeMaximized\(nodeRecord, !nodeRecord\.isMaximized\);/);
   assert.match(renderer, /elements\.titleInput\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*if \(!nodeRecord\.isTitleEditing\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*return;[\s\S]*event\.stopPropagation\(\);/);
+  assert.match(renderer, /focus: \(nodeRecord\) => \{[\s\S]*nodeRecord === activeNodeRecord[\s\S]*nodeRecord\.terminal !== null[\s\S]*!nodeRecord\.isTitleEditing[\s\S]*nodeRecord\.terminal\.focus\(\);/);
 });
 
 test("custom terminal titles survive managed-agent background sync", () => {
@@ -123,6 +124,33 @@ test("terminal navigator renders depth-indented rows from the agent spawn graph"
   assert.match(renderer, /sidebarViewTerminalsTab\?\.addEventListener\("click", \(\) => \{/);
   // Activation plumbing from the old strip is reused by the navigator.
   assert.match(renderer, /function activateAdjacentTerminalFromStrip\(direction\) \{/);
+});
+
+test("terminal navigator clicks cannot initiate tree reordering", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /item\.draggable = false;/);
+  assert.match(renderer, /dragHandle\.className = "terminal-navigator-drag-handle";/);
+  assert.match(renderer, /dragHandle\.draggable = true;/);
+  assert.match(renderer, /dragHandle\.addEventListener\("dragstart"/);
+  assert.match(renderer, /dragHandle\.addEventListener\("keydown"[\s\S]*?event\.key === "ArrowUp"[\s\S]*?event\.key === "ArrowDown"/);
+  assert.match(renderer, /candidate\.agentState !== "archived"/);
+  assert.doesNotMatch(renderer, /item\.addEventListener\("dragstart"/);
+  assert.match(renderer, /attachTerminalTreeDragAndDrop\(item, dragHandle, row\);/);
+  assert.match(
+    renderer,
+    /function renderTerminalNavigator\(\) \{[\s\S]*?clearTerminalTreeDragState\(\);[\s\S]*?terminalNavigator\.replaceChildren\(fragment\);/
+  );
+});
+
+test("terminal navigator double-click preserves managed tree identity", () => {
+  const renderer = readRenderer();
+
+  assert.match(
+    renderer,
+    /syncManagedNodeState\(nodeRecord, \{[\s\S]*?parent_agent: nodeRecord\.managedParentAgent,[\s\S]*?depth: nodeRecord\.managedDepth,[\s\S]*?attention: nodeRecord\.managedAttention,[\s\S]*?tmux_session: nodeRecord\.tmuxSessionName,[\s\S]*?workdir: nodeRecord\.cwd[\s\S]*?\}\);/
+  );
+  assert.doesNotMatch(renderer, /button\.addEventListener\("dblclick"/);
 });
 
 test("canvas close is guarded by the header menu instead of the vertical rail", () => {
@@ -225,7 +253,7 @@ test("removing a reconciled node detaches its PTY while preserving tmux", () => 
 
   assert.match(
     renderer,
-    /if \(typeof terminalId === "string"\) \{[\s\S]*destroyTerminal\(terminalId, \{[\s\S]*preserveSession: preserveSession \|\| !shouldDestroySession/
+    /destroyTerminal\(terminalId, \{[\s\S]*preserveSession: shouldPreserveSession,[\s\S]*retainDetachedIdentity: shouldPreserveSession && retainDetachedIdentity/
   );
   assert.match(
     renderer,

@@ -109,7 +109,7 @@ HARNESSES: dict[str, Harness] = {
 }
 
 DEFAULT_HARNESS_MODELS = {
-    "opencode": os.environ.get("AGENTMUX_OPENCODE_MODEL", "ollama-cloud/glm-5.1"),
+    "opencode": os.environ.get("AGENTMUX_OPENCODE_MODEL", "ollama-cloud/glm-5.2"),
 }
 
 # Harnesses that read injected text as an AI prompt. Shell/custom sessions would

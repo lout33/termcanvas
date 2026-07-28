@@ -39,8 +39,11 @@ function createTerminalSessionRegistry() {
     }
 
     const existingSession = sessionsByKey.get(sessionKey);
+    const canReattachDetachedSession = existingSession?.state === "detached"
+      && existingSession.ownerWebContentsId === ownerWebContentsId
+      && existingSession.tmuxSessionName === tmuxSessionName;
 
-    if (existingSession !== undefined) {
+    if (existingSession !== undefined && !canReattachDetachedSession) {
       throw createRegistryError(
         TERMINAL_REGISTRY_ERROR_CODES.SESSION_ATTACHED,
         `Terminal session '${sessionKey}' is already attached as '${existingSession.terminalId}'.`
@@ -50,7 +53,7 @@ function createTerminalSessionRegistry() {
     if (tmuxSessionName !== null) {
       const existingTmuxSessionKey = sessionKeyByTmuxName.get(tmuxSessionName);
 
-      if (existingTmuxSessionKey !== undefined) {
+      if (existingTmuxSessionKey !== undefined && existingTmuxSessionKey !== sessionKey) {
         throw createRegistryError(
           TERMINAL_REGISTRY_ERROR_CODES.TMUX_ATTACHED,
           `tmux session '${tmuxSessionName}' is already attached as terminal session '${existingTmuxSessionKey}'.`
@@ -63,6 +66,7 @@ function createTerminalSessionRegistry() {
       sessionKey,
       tmuxSessionName,
       ownerWebContentsId,
+      previousSession: canReattachDetachedSession ? existingSession : null,
       state: "creating"
     };
 
@@ -123,10 +127,14 @@ function createTerminalSessionRegistry() {
     }
 
     reservationsByAttachmentId.delete(reservation.terminalId);
-    sessionsByKey.delete(reservation.sessionKey);
+    if (reservation.previousSession !== null) {
+      sessionsByKey.set(reservation.sessionKey, reservation.previousSession);
+    } else {
+      sessionsByKey.delete(reservation.sessionKey);
 
-    if (reservation.tmuxSessionName !== null) {
-      sessionKeyByTmuxName.delete(reservation.tmuxSessionName);
+      if (reservation.tmuxSessionName !== null) {
+        sessionKeyByTmuxName.delete(reservation.tmuxSessionName);
+      }
     }
 
     return true;
@@ -162,8 +170,56 @@ function createTerminalSessionRegistry() {
     return attachment;
   }
 
+  function detachAttachment(terminalId) {
+    const attachment = attachmentsById.get(terminalId);
+
+    if (attachment === undefined) {
+      return undefined;
+    }
+
+    attachmentsById.delete(terminalId);
+    const sessionRecord = sessionsByKey.get(attachment.sessionKey);
+
+    if (sessionRecord?.terminalId === terminalId) {
+      sessionsByKey.set(attachment.sessionKey, {
+        sessionKey: attachment.sessionKey,
+        terminalId: null,
+        tmuxSessionName: attachment.tmuxSessionName ?? null,
+        ownerWebContentsId: attachment.ownerWebContentsId,
+        state: "detached"
+      });
+    }
+
+    return attachment;
+  }
+
+  function releaseSession(sessionKey) {
+    const sessionRecord = sessionsByKey.get(sessionKey);
+
+    if (sessionRecord === undefined) {
+      return undefined;
+    }
+
+    if (typeof sessionRecord.terminalId === "string") {
+      attachmentsById.delete(sessionRecord.terminalId);
+      reservationsByAttachmentId.delete(sessionRecord.terminalId);
+    }
+
+    sessionsByKey.delete(sessionKey);
+
+    if (sessionRecord.tmuxSessionName !== null) {
+      sessionKeyByTmuxName.delete(sessionRecord.tmuxSessionName);
+    }
+
+    return sessionRecord;
+  }
+
   function forEachAttachment(callback) {
     attachmentsById.forEach(callback);
+  }
+
+  function forEachSession(callback) {
+    sessionsByKey.forEach(callback);
   }
 
   return Object.freeze({
@@ -173,7 +229,10 @@ function createTerminalSessionRegistry() {
     getAttachment,
     getSession,
     releaseAttachment,
-    forEachAttachment
+    detachAttachment,
+    releaseSession,
+    forEachAttachment,
+    forEachSession
   });
 }
 

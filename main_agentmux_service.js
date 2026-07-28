@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 
 const DEFAULT_TIMEOUT_MS = 60000;
@@ -326,6 +327,62 @@ function createAgentmuxService(options = {}) {
     return { agentName };
   }
 
+  async function spawnChildWorker(payload) {
+    const projectTag = normalizeNonEmptyString(payload?.projectTag);
+    const parentAgentName = normalizeNonEmptyString(payload?.parentAgentName);
+
+    if (projectTag === null) {
+      throw new Error("A project tag is required to spawn a child worker.");
+    }
+
+    if (parentAgentName === null) {
+      throw new Error("A parent agent name is required to spawn a child worker.");
+    }
+
+    const workdir = normalizeNonEmptyString(payload?.workdir);
+    const harnessId = normalizeNonEmptyString(payload?.harnessId) ?? "shell";
+    const plannedAgentName = `child-${randomUUID().slice(0, 6)}`;
+
+    const args = [
+      "worker",
+      projectTag,
+      plannedAgentName,
+      "--harness",
+      harnessId,
+      "--parent",
+      parentAgentName
+    ];
+
+    if (workdir !== null) {
+      args.push("--workdir", workdir);
+    }
+
+    const output = await runAgentmuxCommand(args, `spawn child worker under ${parentAgentName}`);
+    const lines = output.split(/\r?\n/u).map((line) => line.trim());
+    const createdLine = lines.find((line) => line.startsWith("Created worker"));
+    const tmuxLine = lines.find((line) => line.startsWith("tmux:"));
+
+    // agentmux slugifies the requested name, so trust the echoed line if we can
+    // parse a single token out of "Created worker <name> (<short>)".
+    const echoedAgentName = createdLine !== undefined
+      ? normalizeNonEmptyString(createdLine.replace(/^Created worker\s+/u, "").split(/\s+/u)[0])
+      : null;
+    const echoedTmuxSession = tmuxLine !== undefined
+      ? normalizeNonEmptyString(tmuxLine.slice("tmux:".length))
+      : null;
+
+    if (echoedTmuxSession === null) {
+      throw new Error(`agentmux worker did not report a tmux session for ${plannedAgentName}.`);
+    }
+
+    return {
+      agentName: echoedAgentName ?? plannedAgentName,
+      tmuxSessionName: echoedTmuxSession,
+      parentAgentName,
+      projectTag
+    };
+  }
+
   async function resumeAgent(payload) {
     const agentName = normalizeNonEmptyString(payload?.agentName);
 
@@ -432,6 +489,7 @@ function createAgentmuxService(options = {}) {
     deleteAgent,
     sendAgentPrompt,
     adoptAgent,
+    spawnChildWorker,
     resumeAgent,
     connectAgents,
     getAgentmuxBinPath,

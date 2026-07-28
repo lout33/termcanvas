@@ -93,6 +93,8 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
       managedAgentName: null,
       managedAgentRole: null,
       managedProjectTag: null,
+      managedParentAgent: null,
+      managedDepth: null,
       tmuxSessionName: null,
       x: 10,
       y: 20,
@@ -113,6 +115,8 @@ test("normalizeAppSessionSnapshot normalizes canvases and active canvas selectio
     managedAgentName: null,
     managedAgentRole: null,
     managedProjectTag: null,
+    managedParentAgent: null,
+    managedDepth: null,
     tmuxSessionName: null,
     x: 0,
     y: 0,
@@ -174,6 +178,22 @@ test("normalizeAppSessionSnapshot keeps only safe terminal session keys", () => 
 
   assert.equal(snapshot.canvases[0].terminalNodes[0].sessionKey, "terminal_session-1");
   assert.equal(snapshot.canvases[0].terminalNodes[1].sessionKey, null);
+});
+
+test("normalizeAppSessionSnapshot preserves managed terminal tree identity", () => {
+  const snapshot = normalizeAppSessionSnapshot({
+    canvases: [{
+      id: "canvas-1",
+      terminalNodes: [{
+        managedAgentName: "child-agent",
+        managedParentAgent: "parent-agent",
+        managedDepth: 2
+      }]
+    }]
+  });
+
+  assert.equal(snapshot.canvases[0].terminalNodes[0].managedParentAgent, "parent-agent");
+  assert.equal(snapshot.canvases[0].terminalNodes[0].managedDepth, 2);
 });
 
 test("normalizeAppSessionSnapshot keeps a canvas active session key only when it matches a saved terminal", () => {

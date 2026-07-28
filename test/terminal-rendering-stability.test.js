@@ -72,7 +72,7 @@ test("Electron smoke checks read xterm buffers instead of renderer DOM", () => {
 
   assert.match(renderer, /const getTerminalBufferText = \(nodeRecord\) => \{/);
   assert.match(renderer, /lines\.push\(line\.translateToString\(true\)\);/);
-  assert.match(renderer, /firstTerminalText: getTerminalBufferText\(activeNodes\[0\]\),/);
+  assert.match(renderer, /firstTerminalText: getTerminalBufferText\(activeNodeRecord\),/);
   assert.doesNotMatch(renderer, /firstTerminalText: activeNodes\[0\]\?\.terminalMount\?\.textContent/);
 });
 
@@ -89,16 +89,14 @@ test("Electron smoke uses focused-mode layout and resize checks before legacy ca
   assert.match(main, /focusedSnapshot\?\.visibleNodeCount !== 1/);
 });
 
-test("failed managed-agent resumes are guarded and rate limited", () => {
+test("agent reconciliation never resumes stopped runtimes", () => {
   const renderer = readSource("renderer.js");
+  const rebindSource = renderer.match(
+    /async function rebindManagedNodeToAgentSession\(nodeRecord, agentSnapshot\) \{[\s\S]*?\n\}\n\nasync function resumeManagedAgentRuntime/u
+  )?.[0] ?? "";
 
-  assert.match(renderer, /const MANAGED_AGENT_RESUME_RETRY_DELAY_MS = 30000;/);
   assert.match(renderer, /isAgentResumeInFlight: false,/);
-  assert.match(renderer, /agentResumeRetryAfter: 0,/);
-  assert.match(
-    renderer,
-    /nodeRecord\.isAgentResumeInFlight[\s\S]*nodeRecord\.agentResumeRetryAfter > Date\.now\(\)/
-  );
-  assert.match(renderer, /nodeRecord\.agentResumeRetryAfter = Date\.now\(\) \+ MANAGED_AGENT_RESUME_RETRY_DELAY_MS;/);
-  assert.match(renderer, /finally \{[\s\S]*nodeRecord\.isAgentResumeInFlight = false;/);
+  assert.match(rebindSource, /stopped agent remains stopped until the user presses Resume/);
+  assert.doesNotMatch(rebindSource, /resumeManagedAgentRuntime\(/);
+  assert.match(renderer, /async function reopenTerminalNode\(nodeRecord\) \{[\s\S]*await resumeManagedAgentRuntime\(/);
 });

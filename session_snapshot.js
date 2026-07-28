@@ -172,6 +172,11 @@ function normalizeTerminalNodeSnapshot(nodeSnapshot, options = {}) {
     managedAgentName: normalizeString(nodeSnapshot?.managedAgentName),
     managedAgentRole: normalizeString(nodeSnapshot?.managedAgentRole),
     managedProjectTag: normalizeString(nodeSnapshot?.managedProjectTag),
+    managedParentAgent: normalizeString(nodeSnapshot?.managedParentAgent),
+    managedDepth: Number.isInteger(nodeSnapshot?.managedDepth) ? nodeSnapshot.managedDepth : null,
+    ...(Object.prototype.hasOwnProperty.call(nodeSnapshot ?? {}, "userParentSessionKey")
+      ? { userParentSessionKey: normalizeString(nodeSnapshot.userParentSessionKey) }
+      : {}),
     tmuxSessionName: normalizeString(nodeSnapshot?.tmuxSessionName),
     x: normalizeNumber(nodeSnapshot?.x, 0),
     y: normalizeNumber(nodeSnapshot?.y, 0),
