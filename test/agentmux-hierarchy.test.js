@@ -39,6 +39,9 @@ function createAgentmuxHarness() {
     ].join("\n"),
     { mode: 0o755 }
   );
+  for (const command of ["opencode", "claude"]) {
+    fs.writeFileSync(path.join(binPath, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
 
   return {
     root,
@@ -71,11 +74,87 @@ function assertAgentmuxOk(result) {
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
 }
 
-function readProjectPayload(harness, project) {
-  const result = runAgentmux(harness, ["ls", "--project", project, "--json"]);
+function readProjectPayload(harness, project, envOverrides = {}) {
+  const result = runAgentmux(harness, ["ls", "--project", project, "--json"], envOverrides);
   assertAgentmuxOk(result);
   return JSON.parse(result.stdout);
 }
+
+test("agentmux waiting inference ignores incidental approval and permission prose", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    const payload = readProjectPayload(harness, "proj", {
+      FAKE_TMUX_PANE: "B1 approved. The permission model is documented.\nThe guide says to press enter after setup.\n$"
+    });
+    const session = sessionsByName(payload).get("worker-a");
+
+    assert.notEqual(session.runtime_state, "waiting");
+    assert.equal(session.attention, null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux waiting inference recognizes current prompts and explicit user handoffs", () => {
+  const samples = [
+    "Permission required\nAllow once",
+    "Select an option\n[y/n]",
+    "Do you want to proceed?\n1. Yes\n2. No",
+    "PAUSED until you explicitly resume after the release decision"
+  ];
+
+  for (const [index, paneText] of samples.entries()) {
+    const harness = createAgentmuxHarness();
+    try {
+      const agentName = `worker-${index}`;
+      assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", agentName, "--workdir", harness.workspacePath, "--harness", "shell"]));
+      const session = sessionsByName(readProjectPayload(harness, "proj", { FAKE_TMUX_PANE: paneText })).get(agentName);
+
+      assert.equal(session.runtime_state, "waiting", paneText);
+      assert.equal(session.attention, "waiting", paneText);
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
+test("agentmux waiting inference clears negated and answered prompts", () => {
+  const samples = [
+    { harness: "shell", paneText: "We do not need your input for this step.\n$" },
+    { harness: "shell", paneText: "Permission required\nAllow once\ny\nBuild complete\n$" },
+    { harness: "shell", paneText: "Continue? [y/n]\nno\nCancelled\n$" },
+    { harness: "opencode", paneText: "Permission required\nAllow once\nApproved\nBuild complete" },
+    { harness: "claude", paneText: "Proceed?\nSelected Yes\nTests passed" },
+    { harness: "opencode", paneText: "Needs your input\nWe do not need your input now\nDone" }
+  ];
+
+  for (const [index, sample] of samples.entries()) {
+    const harness = createAgentmuxHarness();
+    try {
+      const agentName = `worker-${index}`;
+      assertAgentmuxOk(runAgentmux(
+        harness,
+        [
+          "import",
+          "--agent", agentName,
+          "--tmux-session", `termcanvas-prompt-${index}`,
+          "--harness", sample.harness,
+          "--project", "proj",
+          "--workdir", harness.workspacePath,
+          "--cmd", sample.harness
+        ]
+      ));
+      const session = sessionsByName(readProjectPayload(harness, "proj", { FAKE_TMUX_PANE: sample.paneText })).get(agentName);
+
+      assert.notEqual(session.runtime_state, "waiting", sample.paneText);
+      assert.equal(session.attention, null, sample.paneText);
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
 
 function sessionsByName(payload) {
   return new Map(payload.sessions.map((session) => [session.name, session]));

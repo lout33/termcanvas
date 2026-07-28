@@ -33,17 +33,44 @@ DB_PATH = APP_DIR / "agentmux.db"
 WAIT_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
-        r"need[s]? your input",
-        r"waiting for approval",
-        r"approve",
-        r"\[y/n\]",
-        r"\[y/N\]",
-        r"press enter",
-        r"select an option",
-        r"continue\?",
-        r"permission",
+        r"\bneed(?:s)? your input\b",
+        r"^\s*(?:i(?:'m| am)\s+)?waiting for (?:your )?(?:approval|input|confirmation|permission)\b[.!…]?\s*$",
+        r"\[(?:y\s*/\s*n|yes\s*/\s*no)\]",
+        r"^\s*press enter(?:\s+to\b.*)?\s*$",
+        r"^\s*select (?:an|one) option\b.*$",
+        r"^\s*(?:continue|proceed)\?\s*(?:\[[^\]]+\])?\s*$",
+        r"^\s*(?:permission|approval) (?:required|requested)\b.*$",
+        r"^\s*(?:approve|allow|deny|grant permission)(?:\s+(?:once|always))?\s*[?:]?\s*$",
+        r"^\s*(?:do you want to|would you like to)\s+(?:continue|proceed|approve|allow)\b.*\?\s*$",
+        r"\b(?:paused|blocked)\b.*\buntil\b.*\byou\b",
     ]
 ]
+WAIT_NEGATION_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\b(?:do not|don't|does not|doesn't|no longer) need(?:s)? your input\b",
+        r"\bwithout (?:your )?(?:approval|input|confirmation|permission)\b",
+    ]
+]
+ANSWER_PATTERNS = [
+    re.compile(r"^\s*(?:y|yes|n|no)\s*$", re.IGNORECASE),
+]
+PROMPT_OPTION_PATTERNS = [
+    re.compile(
+        r"^\s*(?:[>❯●○◉◯✓]\s*)?(?:[1-9]\d*[.)]\s*)?"
+        r"(?:yes|no|allow(?: once| always)?|deny|approve|cancel|continue|proceed)\b.*$",
+        re.IGNORECASE,
+    ),
+]
+PROMPT_CHROME_PATTERNS = [
+    re.compile(r"^\s*$"),
+    re.compile(r"^\s*[─-╿▀-▟⠀-⣿┃│╹]+\s*$"),
+    re.compile(r"\bctrl\+p commands\b", re.IGNORECASE),
+    re.compile(r"\besc interrupt\b", re.IGNORECASE),
+    re.compile(r"^\s*(?:▣\s*)?Build\s*·", re.IGNORECASE),
+]
+SHELL_READY_PATTERN = re.compile(r"^\s*[^\n]*[%$#❯]\s*$")
+WAIT_SCAN_LINES = 24
 
 READY_PATTERNS: dict[str, list[re.Pattern[str]]] = {
     "claude": [re.compile(r"^\s*❯\s*$", re.MULTILINE)],
@@ -738,12 +765,40 @@ def emit_event(conn: sqlite3.Connection, session_id: str, event_type: str, messa
     )
 
 
+def pane_requests_attention(pane_text: str, harness_id: str = "") -> bool:
+    recent_lines = pane_text.splitlines()[-WAIT_SCAN_LINES:]
+    latest_match_index = -1
+
+    for index, line in enumerate(recent_lines):
+        if any(pattern.search(line) for pattern in WAIT_NEGATION_PATTERNS):
+            continue
+        if any(pattern.search(line) for pattern in WAIT_PATTERNS):
+            latest_match_index = index
+
+    if latest_match_index < 0:
+        return False
+
+    trailing_lines = recent_lines[latest_match_index + 1:]
+    for line in trailing_lines:
+        if any(pattern.search(line) for pattern in WAIT_NEGATION_PATTERNS):
+            return False
+        if any(pattern.search(line) for pattern in ANSWER_PATTERNS):
+            return False
+        if harness_id in {"shell", "custom"} and SHELL_READY_PATTERN.search(line):
+            return False
+        if any(pattern.search(line) for pattern in PROMPT_CHROME_PATTERNS):
+            continue
+        if any(pattern.search(line) for pattern in PROMPT_OPTION_PATTERNS):
+            continue
+        return False
+    return True
+
+
 def infer_state(session: sqlite3.Row | dict[str, str], pane_text: str, is_running: bool) -> str:
     if not is_running:
         return "stopped"
-    for pattern in WAIT_PATTERNS:
-        if pattern.search(pane_text):
-            return "waiting"
+    if pane_requests_attention(pane_text, str(session.get("harness", "") if isinstance(session, dict) else session["harness"])):
+        return "waiting"
     last_activity = datetime.fromisoformat(session["last_activity_at"])
     seconds_since = (datetime.now(timezone.utc) - last_activity).total_seconds()
     if seconds_since < 8:

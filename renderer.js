@@ -981,9 +981,11 @@ function getAttentionQueueNodes() {
   const queueIds = window.noteCanvasRendererNodeStatus.deriveAttentionQueue(
     activeNodes.map((nodeRecord) => ({
       id: nodeRecord.id,
-      state: nodeRecord.element.dataset.state,
+      isExited: nodeRecord.isExited,
+      exitCode: nodeRecord.exitCode,
       attention: nodeRecord.managedAttention,
-      agentState: nodeRecord.managedAgentState
+      agentState: nodeRecord.managedAgentState,
+      runtimeState: nodeRecord.managedRuntimeState
     }))
   );
   return queueIds
@@ -1016,6 +1018,18 @@ function getAttentionNodeKey(canvasRecord, nodeRecord) {
 function refreshAttentionState() {
   const chip = document.getElementById("board-attention-chip");
   const queueNodes = getAttentionQueueNodes();
+  const activeNodes = getActiveCanvas()?.nodes.filter((nodeRecord) => (
+    !nodeRecord.isRemoved
+      && nodeRecord.element !== null
+      && nodeRecord.managedAgentName !== null
+  )) ?? [];
+  const fleetSummary = window.noteCanvasRendererNodeStatus.deriveFleetSummary(activeNodes.map((nodeRecord) => ({
+    isExited: nodeRecord.isExited,
+    exitCode: nodeRecord.exitCode,
+    attention: nodeRecord.managedAttention,
+    agentState: nodeRecord.managedAgentState,
+    runtimeState: nodeRecord.managedRuntimeState
+  })));
   const handoffCount = queueNodes.filter((nodeRecord) => (
     window.noteCanvasRendererNodeStatus.isHandoffAttention({
       attention: nodeRecord.managedAttention,
@@ -1028,14 +1042,15 @@ function refreshAttentionState() {
       chip.dataset.bound = "1";
       chip.addEventListener("click", focusNextAttentionNode);
     }
-    chip.hidden = queueNodes.length === 0;
-    if (handoffCount === queueNodes.length && handoffCount > 0) {
-      chip.textContent = handoffCount === 1 ? "1 handoff needs review" : `${handoffCount} handoffs need review`;
-    } else if (handoffCount > 0) {
-      chip.textContent = `${queueNodes.length} items need you · ${handoffCount} handoff${handoffCount === 1 ? "" : "s"}`;
-    } else {
-      chip.textContent = queueNodes.length === 1 ? "1 agent needs you" : `${queueNodes.length} agents need you`;
-    }
+    chip.hidden = fleetSummary.total === 0;
+    chip.disabled = queueNodes.length === 0;
+    chip.dataset.hasAttention = queueNodes.length > 0 ? "true" : "false";
+    chip.dataset.hasWorking = fleetSummary.working > 0 ? "true" : "false";
+    chip.textContent = window.noteCanvasRendererNodeStatus.formatFleetSummary(fleetSummary);
+    chip.title = queueNodes.length > 0
+      ? `Jump to the next item that needs you${handoffCount > 0 ? ` (${handoffCount} handoff${handoffCount === 1 ? "" : "s"})` : ""}`
+      : "Current agent fleet status";
+    chip.setAttribute("aria-label", `${chip.textContent}. ${chip.title}`);
   }
 
   const noteButton = document.getElementById("create-note-button");
@@ -3243,6 +3258,13 @@ function createTerminalNavigatorEntry(row) {
   button.style.setProperty("--workspace-entry-depth", String(row.depth));
   button.title = row.label;
   button.setAttribute("aria-label", `Focus ${row.label}`);
+  const rowStatus = window.noteCanvasRendererNodeStatus.deriveNodeStatus({
+    attention: row.attention,
+    agentState: row.agentState,
+    runtimeState: row.runtimeState
+  });
+  button.dataset.state = rowStatus.state;
+  button.title = `${row.label} · ${rowStatus.label}`;
 
   if (row.isActive) {
     button.classList.add("is-active");
@@ -9240,6 +9262,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
         managedDepth: agentSnapshot.depth,
         managedRuntimeState: agentSnapshot.runtime_state,
         managedAgentState: agentSnapshot.agent_state,
+        managedAttention: agentSnapshot.attention,
         isExited: agentSnapshot.runtime_state === "stopped",
         deferChromeRefresh: true,
         shouldFocus: false
@@ -9289,6 +9312,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
 
   if (didChangeNodeSet || didChangeCanvasGraph || didChangeManagedState) {
     scheduleAttentionRefresh();
+    renderCanvasOverviewHeader();
     scheduleAppSessionSave();
     // The terminal navigator tree shows runtime state (running/stopped/
     // attention) as colored status dots. Re-render it whenever managed

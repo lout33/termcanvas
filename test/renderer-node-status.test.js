@@ -7,6 +7,8 @@ const {
   ATTENTION_STATES,
   deriveNodeStatus,
   deriveAttentionQueue,
+  deriveFleetSummary,
+  formatFleetSummary,
   isHandoffAttention,
   extractLastMeaningfulLine,
   formatQuietDuration
@@ -26,17 +28,14 @@ test("exited node reports error when the shell failed", () => {
   });
 });
 
-test("declared active state owns the primary color over waiting runtime attention", () => {
+test("waiting attention overrides declared lifecycle state", () => {
   assert.deepEqual(deriveNodeStatus({ attention: "waiting", agentState: "active" }), {
-    state: "working",
-    label: "Active"
+    state: "needs-input",
+    label: "Needs input"
   });
-});
-
-test("declared idle state stays dim when the runtime is waiting", () => {
   assert.deepEqual(deriveNodeStatus({ attention: "waiting", agentState: "idle", runtimeState: "waiting" }), {
-    state: "idle",
-    label: "Idle"
+    state: "needs-input",
+    label: "Needs input"
   });
 });
 
@@ -48,9 +47,9 @@ test("attention done maps to done", () => {
   assert.equal(deriveNodeStatus({ attention: "done" }).state, "done");
 });
 
-test("attention stale and stopped map to idle", () => {
-  assert.equal(deriveNodeStatus({ attention: "stale" }).state, "idle");
-  assert.equal(deriveNodeStatus({ attention: "stopped" }).state, "idle");
+test("stale and stopped remain distinct fleet states", () => {
+  assert.equal(deriveNodeStatus({ attention: "stale", agentState: "active" }).state, "stale");
+  assert.equal(deriveNodeStatus({ attention: "stopped", agentState: "active" }).state, "stopped");
 });
 
 test("agent state drives the primary status", () => {
@@ -61,16 +60,70 @@ test("agent state drives the primary status", () => {
   assert.equal(deriveNodeStatus({ agentState: "archived" }).state, "archived");
 });
 
-test("declared agent state drives terminal colors while runtime stays secondary", () => {
+test("archived agents stay hidden even when stale runtime facts request attention", () => {
+  const archivedWaiting = { id: "waiting", agentState: "archived", attention: "waiting" };
+  const archivedFailed = { id: "failed", agentState: "archived", attention: "failed" };
+
+  assert.equal(deriveNodeStatus(archivedWaiting).state, "archived");
+  assert.equal(deriveNodeStatus(archivedFailed).state, "archived");
+  assert.deepEqual(deriveAttentionQueue([archivedWaiting, archivedFailed]), []);
+  assert.equal(deriveFleetSummary([archivedWaiting, archivedFailed]).total, 0);
+});
+
+test("canonical derived state drives terminal and navigator colors", () => {
   const styles = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
   const renderer = fs.readFileSync(path.join(__dirname, "..", "renderer.js"), "utf8");
 
-  assert.match(styles, /\[data-agent-state="active"\] \.terminal-navigator-icon\s*\{[\s\S]*?var\(--color-status-pending\)/);
+  assert.match(styles, /\[data-state="working"\] \.terminal-navigator-icon\s*\{[\s\S]*?var\(--color-status-pending\)/);
   assert.match(styles, /\.terminal-node\[data-state="working"\] \.terminal-node-lead-dot\s*\{[\s\S]*?var\(--color-status-pending\)/);
   assert.match(styles, /\.terminal-navigator-row\[data-agent-state="archived"\]\s*\{[\s\S]*?display:\s*none/);
-  assert.doesNotMatch(styles, /\[data-runtime-state=[^\]]+\] \.terminal-navigator-icon/);
+  assert.match(styles, /\[data-state="needs-input"\] \.terminal-navigator-icon/);
   assert.match(renderer, /nodeRecord\.element\.dataset\.agentState = nodeRecord\.managedAgentState/);
   assert.match(renderer, /button\.dataset\.agentState = row\.agentState/);
+});
+
+test("fleet summary uses the canonical state and excludes archived agents", () => {
+  const summary = deriveFleetSummary([
+    { agentState: "active", runtimeState: "running" },
+    { agentState: "active", attention: "stale" },
+    { agentState: "idle", attention: "waiting" },
+    { agentState: "failed" },
+    { agentState: "finished" },
+    { agentState: "idle" },
+    { agentState: "archived" }
+  ]);
+
+  assert.deepEqual(summary, {
+    total: 6,
+    working: 1,
+    needsInput: 1,
+    errors: 1,
+    idle: 1,
+    done: 1,
+    stale: 1,
+    stopped: 0,
+    exited: 0,
+    live: 0
+  });
+  assert.equal(formatFleetSummary(summary), "1 working · 1 needs input · 1 failed · 1 idle · 1 done · 1 stale");
+  assert.equal(formatFleetSummary(deriveFleetSummary([])), "No active agents");
+});
+
+test("fleet summary represents every counted terminal state", () => {
+  const summary = deriveFleetSummary([
+    { isExited: true, exitCode: 0 },
+    {}
+  ]);
+
+  assert.equal(summary.total, 2);
+  assert.equal(summary.exited, 1);
+  assert.equal(summary.live, 1);
+  assert.equal(formatFleetSummary(summary), "1 exited · 1 live");
+  assert.equal(
+    summary.working + summary.needsInput + summary.errors + summary.idle + summary.done
+      + summary.stale + summary.stopped + summary.exited + summary.live,
+    summary.total
+  );
 });
 
 test("selecting a terminal does not change navigator row geometry", () => {

@@ -1388,20 +1388,27 @@ button {
   stroke-linejoin: round;
 }
 
-.terminal-navigator-entry[data-agent-state="active"] .terminal-navigator-icon {
+.terminal-navigator-entry[data-state="working"] .terminal-navigator-icon {
   color: var(--color-status-pending);
 }
 
-.terminal-navigator-entry[data-agent-state="idle"] .terminal-navigator-icon {
+.terminal-navigator-entry[data-state="idle"] .terminal-navigator-icon,
+.terminal-navigator-entry[data-state="stale"] .terminal-navigator-icon,
+.terminal-navigator-entry[data-state="stopped"] .terminal-navigator-icon {
   color: rgba(143, 130, 110, 0.6);
 }
 
-.terminal-navigator-entry[data-agent-state="finished"] .terminal-navigator-icon {
+.terminal-navigator-entry[data-state="done"] .terminal-navigator-icon {
   color: var(--color-status-live);
 }
 
-.terminal-navigator-entry[data-agent-state="failed"] .terminal-navigator-icon {
+.terminal-navigator-entry[data-state="error"] .terminal-navigator-icon {
   color: var(--color-status-exited);
+}
+
+.terminal-navigator-entry[data-state="needs-input"] .terminal-navigator-icon {
+  color: var(--color-status-pending);
+  filter: drop-shadow(0 0 0.25rem rgba(251, 191, 36, 0.5));
 }
 
 .terminal-navigator-row[data-agent-state="archived"] {
@@ -4237,6 +4244,13 @@ body.is-focused-terminal-mode .file-inspector-markdown hr {
   opacity: 0.7;
 }
 
+.terminal-node[data-state="stale"] .terminal-node-lead-dot,
+.terminal-node[data-state="stopped"] .terminal-node-lead-dot {
+  background: rgba(143, 130, 110, 0.55);
+  box-shadow: none;
+  opacity: 0.55;
+}
+
 .terminal-node[data-state="needs-input"] .terminal-node-lead-dot {
   background: var(--color-status-pending);
   box-shadow: 0 0 0.4rem rgba(251, 191, 36, 0.5);
@@ -4293,18 +4307,16 @@ body.is-focused-terminal-mode .file-inspector-markdown hr {
   gap: 0.35rem;
   min-height: 1.7rem;
   padding: 0 var(--space-3);
-  border: 1px solid rgba(251, 191, 36, 0.42);
+  border: 1px solid rgba(178, 166, 145, 0.2);
   border-radius: var(--radius-full);
-  background: rgba(24, 20, 12, 0.92);
-  color: #fbd989;
+  background: rgba(24, 27, 34, 0.88);
+  color: rgba(210, 202, 186, 0.82);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  box-shadow:
-    0 0 0.9rem rgba(251, 191, 36, 0.14),
-    0 0.55rem 1.2rem rgba(0, 0, 0, 0.36);
+  box-shadow: 0 0.55rem 1.2rem rgba(0, 0, 0, 0.28);
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4321,14 +4333,37 @@ body.is-focused-terminal-mode .file-inspector-markdown hr {
   width: 0.44rem;
   height: 0.44rem;
   border-radius: 999px;
-  background: var(--color-status-pending);
-  box-shadow: 0 0 0.4rem rgba(251, 191, 36, 0.55);
+  background: rgba(143, 130, 110, 0.72);
+  box-shadow: none;
+}
+
+.board-attention-chip[data-has-working="true"]::before {
+  background: var(--color-status-live);
+  box-shadow: 0 0 0.4rem rgba(74, 222, 128, 0.45);
   animation: status-dot-working 2.2s ease-in-out infinite;
 }
 
-.board-attention-chip:hover {
+.board-attention-chip[data-has-attention="true"] {
+  border-color: rgba(251, 191, 36, 0.42);
+  background: rgba(24, 20, 12, 0.92);
+  color: #fbd989;
+  box-shadow:
+    0 0 0.9rem rgba(251, 191, 36, 0.14),
+    0 0.55rem 1.2rem rgba(0, 0, 0, 0.36);
+}
+
+.board-attention-chip[data-has-attention="true"]::before {
+  background: var(--color-status-pending);
+  box-shadow: 0 0 0.4rem rgba(251, 191, 36, 0.55);
+}
+
+.board-attention-chip[data-has-attention="true"]:hover {
   border-color: rgba(251, 191, 36, 0.65);
   background: rgba(30, 25, 14, 0.95);
+}
+
+.board-attention-chip:disabled {
+  cursor: default;
 }
 
 .board-attention-chip:focus-visible {
@@ -4338,6 +4373,14 @@ body.is-focused-terminal-mode .file-inspector-markdown hr {
 
 .board-attention-chip[hidden] {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-attention-chip::before,
+  .terminal-node[data-state="working"] .terminal-node-lead-dot,
+  .terminal-node[data-state="needs-input"] {
+    animation: none;
+  }
 }
 
 .board-minimap-node[data-state="needs-input"] {
