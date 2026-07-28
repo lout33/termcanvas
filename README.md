@@ -1,326 +1,175 @@
-# TermCanvas
+# termcanvas
 
-[![skills.sh](https://skills.sh/b/lout33/termcanvas)](https://skills.sh/lout33/termcanvas)
+## see which ai coding agent needs you.
 
-TermCanvas is a desktop app that lets you arrange real terminal sessions on an infinite canvas.
+termcanvas is an open-source macos app for steering claude code, codex, opencode, and shell sessions on a tmux-backed canvas.
 
-It is built for developers who juggle multiple repos, shells, AI agents, and long-running tasks and want something more spatial than tabs or split panes.
+each node is a real terminal. the sidebar shows your live agent tree, the canvas shows how agents are connected, and the attention chip points you to sessions waiting for a decision.
 
-The current direction is an agent-orchestration canvas: a fast, simple workspace where a graph of peer AI agents, normal shells, project files, and task context all live in one visible place.
+[download the latest release](https://github.com/lout33/termcanvas/releases/latest) | [read the story](https://yupanqui.xyz/termcanvas-demo) | [install the agent skill](https://skills.sh/lout33/termcanvas)
 
-## Demo
+requires macos on apple silicon and [`tmux`](https://github.com/tmux/tmux). the current build is unsigned.
 
-![TermCanvas demo GIF showing live terminal nodes being arranged on the canvas](./docs/termcanvas-demo.gif)
+![termcanvas showing a live tree of agent terminals and an agent waiting for attention](./assets/termcanvas-v2.png)
 
-Demo video: https://www.youtube.com/watch?v=4XN5jvk9P1U
+## why it exists
 
-## Latest UI
+running several coding agents is easy. keeping track of them is the work.
 
-![TermCanvas v0.2.9 — sidebar terminal navigator tree with the agent spawn graph folded into branches, Explorer/Terminals view tabs, and the attention chip in the top header](./assets/termcanvas-v2.png)
+once every task has its own terminal, you start checking the same tabs on a loop: which agent is working, which one finished, which one needs input, and which one quietly failed.
 
-v0.2.9 moves the terminal tabs out of the top strip into a vertical tree in the sidebar. The tree mirrors the agent spawn graph (roots = no parent agent, children nested under their parent), with disclosure chevrons to fold subtrees you're not steering. Explorer and Terminals share the sidebar via two tabs. The "X agents need you" attention chip now lives in the top header so it stays visible while panning the canvas.
+termcanvas keeps the whole fleet visible. when an agent needs you, the header turns amber. click it to move directly to the relevant terminal instead of polling every session yourself.
 
-## What It Is
+## install
 
-- a spatial terminal workspace
-- an infinite canvas for real shell sessions
-- a desktop app for managing multiple terminals side by side
-- a project-bound canvas for browsing files next to the terminals that operate on them
-- an agentmux-aware view of a live graph of peer AI agent terminals
-- a better fit for task-based terminal work than a pile of tabs
+1. install tmux:
 
-## Why People Use It
+   ```bash
+   brew install tmux
+   ```
 
-Normal terminal tabs get crowded fast.
+2. download the `.dmg` from the [latest release](https://github.com/lout33/termcanvas/releases/latest).
+3. move `TermCanvas.app` into `/Applications`.
+4. right-click the app in Finder and choose `Open` the first time.
 
-TermCanvas gives each task its own terminal node, so you can keep one shell per repo, feature, agent, or service and place them where they make sense.
+if gatekeeper still blocks the unsigned build, open `System Settings > Privacy & Security` and choose `Open Anyway`.
 
-Examples:
+on first launch, choose a project folder. double-click empty canvas space to create your first terminal.
 
-- one terminal for the app server, one for tests, one for logs
-- one terminal per client repo or microservice
-- one terminal per AI coding agent
-- one canvas per project, sprint, or research thread
+## what it does
 
-## Key Features
+- runs real interactive terminals on a pan-and-zoom canvas
+- shows working, idle, done, stale, failed, and waiting agents in one fleet summary
+- turns the attention chip amber when an agent needs input or fails
+- cycles through those terminals when you click the chip
+- shows agent spawn lineage and peer connections as graph edges
+- lets any agent spawn a child, connect to a peer, or delegate with `ask`
+- keeps terminals alive through app relaunches with tmux
+- restores canvases, positions, titles, project folders, and terminal identity
+- browses and previews project files beside the terminals using them
+- focuses one terminal across the workspace without losing the rest of the canvas
+- exports and imports canvas or full app data as json
 
-- Real interactive shell terminals rendered with `xterm.js`
-- Infinite canvas with pan and zoom
-- Multiple project-bound canvases for separate work contexts
-- Drag, resize, rename, maximize, restore, and close terminal nodes
-- Workspace drawer for browsing imported folders and previewing files
-- App-session restore across relaunches
-- `tmux`-backed terminal reattach when available
-- Integrated `agentmux` manager for a graph of peer AI agent terminals — any agent can spawn or connect to any other
-- Delegation and connection lines that show spawn lineage and manual peer links on the canvas, with directional arrows
-- Fresh-start welcome state that prompts for a folder instead of creating an empty phantom canvas
-- Canvas JSON export and import
-- Full app-data JSON export and import for moving setups between installs
-- Electron security boundary with Node kept out of the renderer
+prompt detection is best-effort. agent harnesses render prompts differently, so some requests for input may not be recognized yet.
 
-## Good Fit For
+## who it is for
 
-- developers who live in the terminal
-- people managing several repos at once
-- AI-assisted coding workflows
-- research, debugging, and parallel task execution
-- anyone who wants terminal layout memory across app relaunches
+termcanvas is for developers already running several coding agents, shells, services, or logs and feeling the cost of checking them manually.
 
-## Quick Start
+if you run one agent in one terminal, your existing terminal is probably enough.
 
-```bash
-npm install
-npm run dev
-```
+## why not just use tmux or tabs?
 
-`tmux` is recommended if you want live terminal sessions to survive app relaunches.
-Managed agent terminals require `tmux` because `agentmux` uses it to create and
-control agent sessions. On macOS, install it with:
+tmux is the durable session layer underneath termcanvas. it keeps processes alive, but it does not show the spatial layout or live agent graph.
+
+tabs and panes work while the workload still fits in your head. termcanvas becomes useful when the question changes from "where is that terminal?" to "which terminal needs me now?"
+
+## the agent graph
+
+termcanvas includes [`agentmux`](./vendor/agentmux), which turns managed terminals into a graph of peer agents. there is no fixed commander or manager. any agent can spawn a child, connect to another agent, and delegate work.
+
+every terminal created on the canvas starts with `AGENTMUX_PROJECT`, `AGENTMUX_AGENT_NAME`, `AGENTMUX_BIN`, and related environment variables. agents launched inside it inherit that context automatically.
+
+inside a managed terminal, agents can use:
 
 ```bash
-brew install tmux
+"$AGENTMUX_BIN" neighbors
+"$AGENTMUX_BIN" child <parent> <name> --prompt "handle this task"
+"$AGENTMUX_BIN" connect <agent-a> <agent-b> --announce
+"$AGENTMUX_BIN" ask <agent> "investigate this and return the answer"
+"$AGENTMUX_BIN" check <agent>
+"$AGENTMUX_BIN" logs <agent> --lines 120
+"$AGENTMUX_BIN" send <agent> "follow up on x"
 ```
 
-On a fresh launch, TermCanvas now waits for you to open a folder. Creating a new canvas with the `+` button also asks for the workspace folder first. If you cancel the folder picker, no canvas is created.
+`ask` waits for the target agent's turn to finish and returns its output, so agents can delegate and receive answers without using the ui as a message bus.
 
-### macOS File And App Access
+the canvas is not a manual graph editor. its edges reflect the graph agentmux knows about through spawn and peer connections.
 
-macOS attributes privacy-sensitive access from terminal commands to the terminal app that launched them. A command running inside TermCanvas may therefore produce a prompt saying that TermCanvas wants access to Desktop, Apple Music, another app, or another protected resource.
+## install the agent skill
 
-For unrestricted developer workflows, install TermCanvas in `/Applications`, then open `TermCanvas > Open Full Disk Access Settings...` and enable TermCanvas. If it is not listed, click `+` and select `/Applications/TermCanvas.app`. Full Disk Access covers protected files and other apps' containers, but macOS can still request separate approval for services such as Apple Music, Camera, or Automation when a command first uses them. TermCanvas cannot enable those approvals automatically; choose Allow only when you intended the terminal command to use that resource.
+termcanvas works without a skill. installing the bundled `agentmux` skill teaches claude code, codex, opencode, cursor, and other compatible agents how to inspect and operate the graph themselves.
 
-TermCanvas remains an unsigned developer app and does not require a paid Apple Developer account. macOS may ask for access again after installing an updated build; if that happens, re-enable the new `/Applications/TermCanvas.app` entry in Full Disk Access.
-
-## How It Works
-
-- Double-click empty space to create a terminal
-- Drag the canvas to move around
-- Use modified mouse wheel to zoom
-- Use `+` to create a new canvas by choosing a workspace folder
-- Switch between canvases from the top bar
-- Delete any canvas, including the last one; deleting the last canvas returns to the welcome state
-- Open folders in the left drawer to browse files next to your terminals
-- Close the app and reopen it to restore layout and session state
-
-## Keyboard Shortcuts
-
-- `Cmd+B`: toggle the left drawer
-- `Cmd+M`: maximize or restore the selected terminal node
-- `Cmd+L`: close the file preview inspector
-- `Esc`: close the current preview or exit maximize mode
-
-## Session Restore
-
-TermCanvas saves both layout state and terminal identity.
-
-On a normal run:
-
-- canvases, node positions, viewport, workspaces, and preview state are saved automatically
-- each terminal node keeps a stable session identity
-- if `tmux` is available, closing the app detaches from the live shell instead of killing it
-- reopening the app reattaches to that same shell session
-
-Important behavior:
-
-- closing a terminal node with `x` destroys that terminal session
-- closing the app preserves live `tmux`-backed terminals for relaunch
-- without `tmux`, the app still restores the UI layout, but not the exact live shell process
-
-## Managed Agents
-
-TermCanvas has an integrated `agentmux` manager that turns canvas terminals into a live **graph of peer AI agents** — any agent can spawn children, connect to any other agent, and delegate work directly. There is no commander, manager, or fixed hierarchy; spawning and connecting are both just edges in the same graph. Packaged apps include the runtime, so users do not need to install a separate agent manager.
-
-- every terminal you open on a canvas is registered as a root agent in the graph the moment it is created — the tmux session carries `AGENTMUX_PROJECT`, `AGENTMUX_AGENT_NAME`, `AGENTMUX_BIN`, and related env vars from birth, so anything you start inside it (Claude Code, Codex, OpenCode, ...) inherits full agent context automatically
-- agents spawned on an AI harness (`claude`, `codex`, `pi`, `opencode`) via `worker`/`child` receive an automatic `[TermCanvas]` briefing as their first message — identity, project, spawner, and how to use `neighbors`/`ask`/`check`/`child`; pass `--no-briefing` to opt out
-- packaged apps run the bundled runtime from the app resources folder
-- packaged apps store agentmux state under the app `userData` directory
-- development builds use the vendored runtime in `vendor/agentmux` by default
-- set `TERMCANVAS_AGENTMUX_ROOT` only when testing a different local runtime
-- `tmux` must be installed for managed agent terminals
-- missing `agentmux` does not block normal terminal canvas use
-- TermCanvas does not write live canvas or agent state into project `AGENTS.md`; agents should inspect runtime state through `AGENTMUX_*` env vars and `agentmux show`
-- managed terminals expose `AGENTMUX_BIN` so installed agent skills can find the bundled runtime
-- managed terminals expose `AGENTMUX_HOME` so agentmux commands use the app's live agent database instead of a stale default store
-- packaged apps expand `PATH` with common macOS CLI locations like `/opt/homebrew/bin` so `tmux` can be found from GUI launches
-
-Current agent-canvas behavior:
-
-- managed terminal nodes track agent name, role, project tag, parent agent, and depth when agentmux reports them; the node badge shows **Agent** (in the graph) or **Solo** (plain terminal, not yet adopted)
-- spawn edges (parent → child) and manual connect edges are both drawn on the canvas, with arrows showing direction — connect edges are symmetric (double-headed), spawn edges point from spawner to child
-- lines are drawn behind node cards and pan or zoom with the canvas
-- edges are project-scoped, deduplicated, and ignore self-links
-- any managed agent can spawn children (`worker`, `child`) or wire itself to any other agent (`connect`); agentmux records both as edges so the canvas renders the real graph topology
-- the terminal node menu's "Connect to terminal…" action wires two terminals together and injects a briefing into both (auto-adopting a plain Solo terminal into the graph first, if needed)
-
-This is not a manual graph editor. The intent is to show the real agent graph topology that agentmux knows about.
-
-Any terminal is a valid command center — use terminal-native `agentmux` commands for orchestration instead of adding a heavy dashboard:
-
-```bash
-vendor/agentmux/agentmux tree <project>
-vendor/agentmux/agentmux status <project>
-vendor/agentmux/agentmux neighbors <agent>
-vendor/agentmux/agentmux child <parent-agent> <worker-name> --prompt "Handle this subtask"
-vendor/agentmux/agentmux connect <agent-a> <agent-b> --announce
-vendor/agentmux/agentmux ask <agent> "Delegate this and wait for the answer"
-vendor/agentmux/agentmux check <agent>
-vendor/agentmux/agentmux logs <agent> --lines 120
-vendor/agentmux/agentmux send <agent> "Follow up on X"
-vendor/agentmux/agentmux stop <agent>
-```
-
-When run inside a managed terminal, project-aware commands can infer the project from `AGENTMUX_PROJECT`. `ask` is the key delegation primitive — it blocks until the target agent's turn finishes and returns its output, so `result=$(vendor/agentmux/agentmux ask <agent> "...")` works as a real RPC. `ask`/`check` require a graph connection to the target (spawn or connect first, or pass `--force`).
-TermCanvas should stay a minimal visual map of the live graph while the terminal remains the control surface.
-
-### Install The Agent Skill
-
-TermCanvas works without installing an agent skill. The skill matters when you want Codex, Claude Code, OpenCode, Cursor, or another coding agent to understand how to operate the live agent tree from a terminal.
-
-Packaged apps include a one-click installer:
-
-- on first launch, TermCanvas offers to install the skill when it is missing
-- you can also use `TermCanvas > Install / Update Agent Skill`
-- the top-right canvas `...` menu also includes `Install agent skill`
-- the bundled skill is copied to `~/.agents/skills/agentmux/SKILL.md`
-
-Install the public skill from this repo:
+the app offers to install it on first launch. you can also install the public copy:
 
 ```bash
 npx skills add lout33/termcanvas --skill agentmux -g -a codex -a claude-code -a opencode
 ```
 
-For a project-local install, omit `-g` so the selected agents receive the skill under the current project. The skills CLI supports GitHub repos, direct skill paths, local paths, global installs, and agent-specific installs.
+the skill teaches agents how to use the runtime; it does not install termcanvas or agentmux separately. packaged builds already include the agentmux runtime.
 
-Development checkouts can also install the bundled copy directly:
+## session behavior
+
+termcanvas saves layout and terminal identity automatically.
+
+- closing the app detaches from tmux-backed terminals and preserves them for relaunch
+- reopening the app reattaches to the same tmux sessions
+- closing a terminal node with `x` destroys that terminal session
+- killing a tmux session outside termcanvas ends continuity for that terminal
+- without tmux, termcanvas restores the layout but not the live shell process
+
+tmux sessions survive closing termcanvas. they do not survive a machine reboot unless tmux is restored separately.
+
+## controls
+
+- double-click empty space to create a terminal
+- drag empty space to pan
+- use a modified mouse wheel to zoom
+- drag a terminal by its header to move it
+- `Cmd+B` toggles the sidebar
+- `Cmd+M` focuses or restores the selected terminal
+- `Cmd+L` closes the file preview
+- `Esc` closes the current preview or exits focused mode
+
+## macos permissions
+
+commands inside termcanvas may ask for access to protected files or apps because macos attributes terminal-command permissions to the app hosting the terminal.
+
+for unrestricted developer workflows, install termcanvas in `/Applications`, then open `TermCanvas > Open Full Disk Access Settings...` and enable it. macos may still request separate approval for camera, automation, apple music, or other services when a command first uses them.
+
+only approve access when you intended the terminal command to use that resource. termcanvas cannot grant these permissions automatically.
+
+## run from source
 
 ```bash
-vendor/agentmux/agentmux install-skill --force
+git clone https://github.com/lout33/termcanvas.git
+cd termcanvas
+npm install
+npm run dev
 ```
 
-The skill does not install the runtime. It teaches agents how to resolve `AGENTMUX_BIN`, inspect `AGENTMUX_*` session state, spawn agents through `agentmux worker` or `agentmux child`, connect and delegate with `connect`/`ask`/`check`, send prompts, read logs, and stop or delete agents safely.
-
-## Current Product Direction
-
-TermCanvas is moving from a generic spatial terminal board toward a project-aware agent orchestration canvas.
-
-What we are trying to make easy:
-
-- open a project and immediately get a canvas for that project
-- see terminals, agents, files, and previews without losing context
-- see who spawned whom, and who is connected to whom, in the live agent graph
-- delegate and get answers back directly between agents with `ask`, from any terminal
-- keep the UI simple enough that the canvas feels faster than juggling tabs
-- preserve live terminal work across app relaunches when `tmux` is available
-
-Near-term roadmap:
-
-- `ask --batch` for parallel fan-out delegation across multiple agents at once
-- `--report-to` push callbacks so a delegated agent can notify its caller without polling
-- smarter `ask` answer extraction (structured markers instead of prompt-echo search)
-- expose a safe, read-only canvas snapshot so agents can understand who else is on the canvas
-- improve large-canvas feel: fit-to-content, smoother pan/zoom, and no jank with many nodes
-- add richer file/document navigation in the right preview panel
-
-## Move Data Between Installs
-
-Use the canvas menu to export and import full app data as JSON.
-
-- `Export app data` writes the saved app session to a `.json` file
-- `Import app data` replaces the saved app session for the next launch
-- after import, close and reopen `TermCanvas` to load the new state cleanly
-
-## Build Checks
+build and test:
 
 ```bash
 npm run build
 npm test
 ```
 
-`npm run build` bundles the markdown preview/editor and runs syntax checks for the main Electron files. `npm test` runs the Node test suite for renderer helper modules and preload contracts.
-
-## Local macOS Build
+create local unsigned macos artifacts:
 
 ```bash
 npm run dist:mac
 ```
 
-This builds local unsigned macOS release artifacts in:
+## current limits
 
-```text
-release/
-```
+- macos on apple silicon only
+- unsigned builds
+- prompt and status detection is heuristic
+- worker placement is manual
+- no collaboration or shared multi-window workflow
+- early, solo-maintained software
 
-Current outputs include:
+if termcanvas gets a status wrong or still makes you hunt through tabs, [open an issue](https://github.com/lout33/termcanvas/issues) with the agent harness and prompt that caused it.
 
-- `.dmg`
-- `.zip`
-- packaged `.app`
+## stack
 
-## Opening The Downloaded App On macOS
+electron, `node-pty`, tmux, `xterm.js`, and the bundled agentmux runtime. node and shell access stay in electron's main process rather than the renderer.
 
-Current macOS builds are unsigned, so macOS may block the app the first time you open it.
+## development
 
-After downloading:
+read [`AGENTS.md`](./AGENTS.md) before changing the codebase. it documents the terminal lifecycle, persistence model, ipc boundaries, and verification expectations.
 
-1. Open the downloaded `.dmg` or `.zip`.
-2. Move `TermCanvas.app` into your `Applications` folder.
-3. In Finder, right-click `TermCanvas.app` and choose `Open`.
-4. When macOS shows the warning dialog, click `Open` again.
+## license
 
-If macOS still blocks the app:
-
-1. Open `System Settings`.
-2. Go to `Privacy & Security`.
-3. Scroll to the security section and click `Open Anyway` for `TermCanvas`.
-4. Open the app again and confirm the final prompt.
-
-After the first successful launch, you can open `TermCanvas` normally like any other app.
-
-## GitHub Releases
-
-TermCanvas uses a tag-driven GitHub release flow for macOS builds.
-
-Release steps:
-
-```bash
-npm version patch --no-git-tag-version
-git add package.json package-lock.json
-git commit -m "chore: release v0.1.1"
-git push origin main
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-When the `v0.1.1` style tag is pushed, GitHub Actions:
-
-- verifies the tag matches `package.json`
-- runs the macOS build pipeline
-- creates a GitHub Release for that tag
-- uploads the `.dmg` and `.zip` artifacts
-
-## Current Limits
-
-- delegation graph lines currently come from agentmux metadata only; there is no manual node wiring
-- worker placement is still manual until auto tree layout lands
-- no collaboration yet
-- no polished multi-window shared-terminal flow yet
-- no guaranteed session continuity if `tmux` sessions are killed outside the app
-
-## Tech Stack
-
-- Electron
-- `node-pty`
-- `tmux`
-- `xterm.js`
-
-## Search Tags
-
-`terminal workspace`, `spatial terminal`, `infinite canvas terminal`, `tmux desktop app`, `developer productivity`, `ai agent workspace`, `electron terminal app`, `visual terminal manager`, `multi terminal workspace`
-
-## Development
-
-If you want to work on the codebase, read `AGENTS.md` first.
-
-## License
-
-TermCanvas is open source under the [MIT License](./LICENSE).
+[mit](./LICENSE)
