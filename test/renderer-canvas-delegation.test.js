@@ -2,7 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  closeManagedAgentSubtree,
   deriveCanvasDelegationEdges,
+  deriveManagedAgentCloseOrder,
   sortCanvasAgentSnapshotsForPlacement,
   findHorizontalCanvasNodePlacement
 } = require("../renderer_canvas_delegation.js");
@@ -72,6 +74,92 @@ test("links grandchildren to worker parents in deeper delegation trees", () => {
   assert.deepEqual(edges, [
     { fromId: "c", toId: "w", kind: "spawn" },
     { fromId: "w", toId: "g", kind: "spawn" }
+  ]);
+});
+
+test("orders a managed close subtree child-first without including peers", () => {
+  const nodes = [
+    { managedAgentName: "root", managedParentAgent: null },
+    { managedAgentName: "first-child", managedParentAgent: "root" },
+    { managedAgentName: "grandchild", managedParentAgent: "first-child" },
+    { managedAgentName: "second-child", managedParentAgent: "root" },
+    { managedAgentName: "unrelated", managedParentAgent: null }
+  ];
+
+  assert.deepEqual(
+    deriveManagedAgentCloseOrder(nodes, "root").map((node) => node.managedAgentName),
+    ["grandchild", "first-child", "second-child", "root"]
+  );
+  assert.deepEqual(
+    deriveManagedAgentCloseOrder(nodes, "second-child").map((node) => node.managedAgentName),
+    ["second-child"]
+  );
+  assert.deepEqual(deriveManagedAgentCloseOrder(nodes, "missing"), []);
+});
+
+test("managed close follows a user reparent override instead of stale lineage", () => {
+  const oldParent = { sessionKey: "old-key", managedAgentName: "old-parent", managedParentAgent: null };
+  const newParent = { sessionKey: "new-key", managedAgentName: "new-parent", managedParentAgent: null };
+  const movedChild = {
+    sessionKey: "child-key",
+    managedAgentName: "child",
+    managedParentAgent: "old-parent",
+    userParentSessionKey: "new-key"
+  };
+
+  assert.deepEqual(
+    deriveManagedAgentCloseOrder([oldParent, newParent, movedChild], "old-parent").map((node) => node.managedAgentName),
+    ["old-parent"]
+  );
+  assert.deepEqual(
+    deriveManagedAgentCloseOrder([oldParent, newParent, movedChild], "new-parent").map((node) => node.managedAgentName),
+    ["child", "new-parent"]
+  );
+});
+
+test("managed subtree close cancels without side effects and confirms child-first deletion", async () => {
+  const root = { managedAgentName: "root", managedParentAgent: null };
+  const child = { managedAgentName: "child", managedParentAgent: "root" };
+  const grandchild = { managedAgentName: "grandchild", managedParentAgent: "child" };
+  const events = [];
+  const options = {
+    nodes: [root, child, grandchild],
+    rootAgentName: "root",
+    confirmDescendantClose: async (descendantCount) => {
+      events.push(`confirm:${descendantCount}`);
+      return false;
+    },
+    onCloseConfirmed: async () => events.push("confirmed"),
+    deleteAgent: async (node) => events.push(`delete:${node.managedAgentName}`),
+    destroyNode: async (node) => events.push(`destroy:${node.managedAgentName}`)
+  };
+
+  const cancelled = await closeManagedAgentSubtree(options);
+
+  assert.deepEqual(cancelled, {
+    didClose: false,
+    descendantCount: 2,
+    closeOrder: [grandchild, child, root]
+  });
+  assert.deepEqual(events, ["confirm:2"]);
+
+  options.confirmDescendantClose = async (descendantCount) => {
+    events.push(`confirm:${descendantCount}`);
+    return true;
+  };
+  const closed = await closeManagedAgentSubtree(options);
+
+  assert.equal(closed.didClose, true);
+  assert.deepEqual(events, [
+    "confirm:2",
+    "confirm:2",
+    "confirmed",
+    "delete:grandchild",
+    "destroy:grandchild",
+    "delete:child",
+    "destroy:child",
+    "delete:root",
+    "destroy:root"
   ]);
 });
 

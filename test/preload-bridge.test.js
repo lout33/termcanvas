@@ -148,12 +148,14 @@ test("preload exposes canvas agent sync and delete methods", () => {
   exposedApi.subscribeCanvasAgentChanges({ projectTag: "project-a" });
   exposedApi.unsubscribeCanvasAgentChanges({ projectTag: "project-a" });
   exposedApi.deleteCanvasAgent("worker-1");
+  exposedApi.reparentCanvasAgent("worker-1", "worker-2", "project-a");
 
   assert.deepEqual(invokeCalls, [
     ["canvas-agent:sync", { canvasId: "canvas-1" }],
     ["canvas-agent:subscribe", { projectTag: "project-a" }],
     ["canvas-agent:unsubscribe", { projectTag: "project-a" }],
-    ["canvas-agent:delete", { agentName: "worker-1" }]
+    ["canvas-agent:delete", { agentName: "worker-1" }],
+    ["canvas-agent:reparent", { agentName: "worker-1", parentAgentName: "worker-2", projectTag: "project-a" }]
   ]);
   delete require.cache[preloadPath];
 });

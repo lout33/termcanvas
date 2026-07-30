@@ -1,16 +1,16 @@
 # termcanvas
 
-## see which ai coding agent needs you.
+## see your agent fleet in one sidebar.
 
-termcanvas is an open-source macos app for steering claude code, codex, opencode, and shell sessions on a tmux-backed canvas.
+termcanvas is an open-source macos app for steering claude code, codex, opencode, and shell sessions with a tmux-backed focused terminal and a live agent tree.
 
-each node is a real terminal. the sidebar shows your live agent tree, the canvas shows how agents are connected, and the attention chip points you to sessions waiting for a decision.
+each node is a real terminal. the sidebar shows your live agent tree. the header shows the current canvas fleet summary, and the focused terminal is the one you are steering.
 
 [download the latest release](https://github.com/lout33/termcanvas/releases/latest) | [read the story](https://yupanqui.xyz/termcanvas-demo) | [install the agent skill](https://skills.sh/lout33/termcanvas)
 
-requires macos on apple silicon and [`tmux`](https://github.com/tmux/tmux). the current build is unsigned.
+requires macos on apple silicon, [`tmux`](https://github.com/tmux/tmux), and python 3. the current build is unsigned.
 
-![termcanvas showing a live tree of agent terminals and an agent waiting for attention](./assets/termcanvas-v2.png)
+![termcanvas showing one focused terminal, a live agent tree, and the current canvas fleet summary](./assets/termcanvas-v2.png)
 
 ## why it exists
 
@@ -18,7 +18,7 @@ running several coding agents is easy. keeping track of them is the work.
 
 once every task has its own terminal, you start checking the same tabs on a loop: which agent is working, which one finished, which one needs input, and which one quietly failed.
 
-termcanvas keeps the whole fleet visible. when an agent needs you, the header turns amber. click it to move directly to the relevant terminal instead of polling every session yourself.
+termcanvas keeps the current branch visible. the sidebar keeps the agent tree nearby, and the header summarizes the current canvas. prompt detection is heuristic, so the app can still miss a request for input.
 
 ## install
 
@@ -28,9 +28,10 @@ termcanvas keeps the whole fleet visible. when an agent needs you, the header tu
    brew install tmux
    ```
 
-2. download the `.dmg` from the [latest release](https://github.com/lout33/termcanvas/releases/latest).
-3. move `TermCanvas.app` into `/Applications`.
-4. right-click the app in Finder and choose `Open` the first time.
+2. make sure `python3 --version` works in your terminal.
+3. download the `.dmg` from the [latest release](https://github.com/lout33/termcanvas/releases/latest).
+4. move `TermCanvas.app` into `/Applications`.
+5. right-click the app in Finder and choose `Open` the first time.
 
 if gatekeeper still blocks the unsigned build, open `System Settings > Privacy & Security` and choose `Open Anyway`.
 
@@ -38,12 +39,10 @@ on first launch, choose a project folder. double-click empty canvas space to cre
 
 ## what it does
 
-- runs real interactive terminals on a pan-and-zoom canvas
+- runs real interactive terminals with one focused terminal at a time
 - shows working, idle, done, stale, failed, and waiting agents in one fleet summary
-- turns the attention chip amber when an agent needs input or fails
-- cycles through those terminals when you click the chip
-- shows agent spawn lineage and peer connections as graph edges
-- lets any agent spawn a child, connect to a peer, or delegate with `ask`
+- shows agent spawn lineage in the sidebar tree
+- lets any agent create a child, connect to a peer, or delegate with `ask` (peer links exist in the runtime; the sidebar shows spawn lineage, not drawn peer edges)
 - keeps terminals alive through app relaunches with tmux
 - restores canvases, positions, titles, project folders, and terminal identity
 - browses and previews project files beside the terminals using them
@@ -60,13 +59,13 @@ if you run one agent in one terminal, your existing terminal is probably enough.
 
 ## why not just use tmux or tabs?
 
-tmux is the durable session layer underneath termcanvas. it keeps processes alive, but it does not show the spatial layout or live agent graph.
+tmux is the durable session layer underneath termcanvas. it keeps processes alive, but it does not show the current canvas agent tree or fleet state.
 
 tabs and panes work while the workload still fits in your head. termcanvas becomes useful when the question changes from "where is that terminal?" to "which terminal needs me now?"
 
 ## the agent graph
 
-termcanvas includes [`agentmux`](./vendor/agentmux), which turns managed terminals into a graph of peer agents. there is no fixed commander or manager. any agent can spawn a child, connect to another agent, and delegate work.
+termcanvas includes [`agentmux`](./vendor/agentmux), which lets managed terminals address each other at runtime. there is no fixed commander or manager. any agent can create a child, connect to another agent, and delegate work.
 
 every terminal created on the canvas starts with `AGENTMUX_PROJECT`, `AGENTMUX_AGENT_NAME`, `AGENTMUX_BIN`, and related environment variables. agents launched inside it inherit that context automatically.
 
@@ -74,7 +73,7 @@ inside a managed terminal, agents can use:
 
 ```bash
 "$AGENTMUX_BIN" neighbors
-"$AGENTMUX_BIN" child <parent> <name> --prompt "handle this task"
+"$AGENTMUX_BIN" child <parent> <name> --harness <ai-harness> --prompt "handle this task"
 "$AGENTMUX_BIN" connect <agent-a> <agent-b> --announce
 "$AGENTMUX_BIN" ask <agent> "investigate this and return the answer"
 "$AGENTMUX_BIN" check <agent>
@@ -82,9 +81,11 @@ inside a managed terminal, agents can use:
 "$AGENTMUX_BIN" send <agent> "follow up on x"
 ```
 
+when `--harness` is omitted, `child` inherits an ai parent's harness. a shell parent with `--prompt` must choose an ai harness explicitly, so a natural-language task cannot become a shell command by accident. use `--harness shell` only for literal shell input, for example `--harness shell --prompt "git status"`.
+
 `ask` waits for the target agent's turn to finish and returns its output, so agents can delegate and receive answers without using the ui as a message bus.
 
-the canvas is not a manual graph editor. its edges reflect the graph agentmux knows about through spawn and peer connections.
+the sidebar shows spawn lineage. peer links remain runtime relationships, but the focused-terminal interface does not draw them as lines.
 
 ## install the agent skill
 
@@ -151,11 +152,28 @@ create local unsigned macos artifacts:
 npm run dist:mac
 ```
 
+## github releases
+
+github releases are created by the release workflow when a `v*` tag matching `package.json` is pushed. prepare and verify the version locally before creating the tag:
+
+```bash
+npm version patch --no-git-tag-version
+npm test
+npm run dist:mac
+VERSION="$(node -p "require('./package.json').version")"
+git tag "v$VERSION"
+git push origin "v$VERSION"
+```
+
+the tag push creates the github release and uploads only the versioned dmg and zip artifacts. pushing a tag is the public release action; local packaging alone does not publish anything.
+
 ## current limits
 
 - macos on apple silicon only
 - unsigned builds
+- requires python 3 (the agentmux wrapper calls external `python3`)
 - prompt and status detection is heuristic
+- focused-terminal mode: one terminal shown at a time, not multiple simultaneously
 - worker placement is manual
 - no collaboration or shared multi-window workflow
 - early, solo-maintained software

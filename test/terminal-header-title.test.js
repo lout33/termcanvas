@@ -261,6 +261,29 @@ test("removing a reconciled node detaches its PTY while preserving tmux", () => 
   );
 });
 
+test("explicit managed closes delete the agent record before removing child-first node cards", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /async function closeManagedAgentNode\(nodeRecord\) \{[\s\S]*closeManagedAgentSubtree\(\{/);
+  assert.match(renderer, /Close \$\{nodeRecord\.titleText\} and \$\{descendantCount\} \$\{noun\}\?/);
+  assert.match(renderer, /onCloseConfirmed: \(\) => \{[\s\S]*managedAgentCloseInFlightCount \+= 1;[\s\S]*canvasAgentSyncGeneration \+= 1;/);
+  assert.match(renderer, /deleteAgent: async \(candidateNode\) => \{[\s\S]*await window\.noteCanvas\.deleteCanvasAgent\(candidateNode\.managedAgentName\);/);
+  assert.match(renderer, /destroyNode: async \(candidateNode\) => \{[\s\S]*destroyTerminalNode\(candidateNode, \{[\s\S]*shouldDestroySession: false,/);
+  assert.match(renderer, /async function closeTerminalNode\(nodeRecord\) \{[\s\S]*managedAgentName !== null[\s\S]*await closeManagedAgentNode\(nodeRecord\);[\s\S]*await destroyTerminalNode\(nodeRecord\);/);
+  assert.match(renderer, /async function closeSelectedTerminals\(\) \{[\s\S]*await closeTerminalNode\(nodeRecord\);/);
+  assert.match(renderer, /async function syncActiveCanvasAgentProject\(\) \{[\s\S]*managedAgentCloseInFlightCount > 0/);
+  assert.match(renderer, /const syncGeneration = canvasAgentSyncGeneration;/);
+  assert.match(renderer, /await reconcileCanvasAgentProject\(canvasRecord, snapshot, syncGeneration\);/);
+});
+
+test("natural terminal exits retain the existing reopen-shell card", () => {
+  const renderer = readRenderer();
+
+  assert.match(renderer, /const removeTerminalExitListener = window\.noteCanvas\.onTerminalExit\([\s\S]*setNodeExitedState\(nodeRecord, exitCode, signal\);/);
+  assert.match(renderer, /nodeRecord\.overlayTitle\.textContent = "Shell exited";/);
+  assert.match(renderer, /Reopen shell to continue here\./);
+});
+
 test("managed agent nodes preserve agentmux tmux sessions before first bind", () => {
   const renderer = readRenderer();
 

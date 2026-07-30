@@ -71,7 +71,6 @@ function resolveAgentmuxSkillSourcePath() {
     app.isPackaged === true
       ? path.join(process.resourcesPath, "agentmux", "skills", AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME)
       : null,
-    path.join(__dirname, "vendor", "agentmux", "skills", AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME),
     path.join(__dirname, "skills", AGENTMUX_SKILL_NAME, AGENTMUX_SKILL_FILE_NAME)
   ].filter((candidatePath) => typeof candidatePath === "string");
 
@@ -2549,6 +2548,12 @@ ipcMain.handle("canvas-agent:sync", async (_event, payload) => {
 
 ipcMain.handle("canvas-agent:delete", async (_event, payload) => {
   await agentmuxService.deleteAgent(payload?.agentName);
+  agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
+  return { ok: true };
+});
+
+ipcMain.handle("canvas-agent:reparent", async (_event, payload) => {
+  await agentmuxService.reparentAgent(payload?.agentName, payload?.parentAgentName);
   agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
   return { ok: true };
 });

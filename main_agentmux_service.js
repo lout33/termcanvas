@@ -285,6 +285,20 @@ function createAgentmuxService(options = {}) {
     await runAgentmuxCommand(["delete", normalizedAgentName, "--force"], `delete agent ${normalizedAgentName}`);
   }
 
+  async function reparentAgent(agentName, parentAgentName) {
+    const normalizedAgentName = normalizeNonEmptyString(agentName);
+    const normalizedParentAgentName = normalizeNonEmptyString(parentAgentName);
+
+    if (normalizedAgentName === null) {
+      throw new Error("Agent name is required.");
+    }
+
+    await runAgentmuxCommand(
+      ["reparent", normalizedAgentName, ...(normalizedParentAgentName === null ? ["--root"] : ["--parent", normalizedParentAgentName])],
+      `reparent agent ${normalizedAgentName}`
+    );
+  }
+
   async function sendAgentPrompt(agentName, message) {
     const normalizedAgentName = normalizeNonEmptyString(agentName);
     const normalizedMessage = normalizeNonEmptyString(message);
@@ -487,6 +501,7 @@ function createAgentmuxService(options = {}) {
     getAgentmuxInvocation,
     syncCanvasProject,
     deleteAgent,
+    reparentAgent,
     sendAgentPrompt,
     adoptAgent,
     spawnChildWorker,

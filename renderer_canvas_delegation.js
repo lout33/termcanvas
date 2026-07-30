@@ -77,6 +77,111 @@
     return orderedSnapshots;
   }
 
+  function getManagedAgentName(nodeRecord) {
+    return normalizeName(nodeRecord?.managedAgentName ?? nodeRecord?.agentName);
+  }
+
+  function getManagedParentAgentName(nodeRecord) {
+    return normalizeName(nodeRecord?.managedParentAgent ?? nodeRecord?.parentAgent);
+  }
+
+  function deriveManagedAgentCloseOrder(nodes, rootAgentName) {
+    const rootName = normalizeName(rootAgentName);
+
+    if (!Array.isArray(nodes) || rootName === null) {
+      return [];
+    }
+
+    const nodeByAgentName = new Map();
+    const nodeBySessionKey = new Map();
+
+    for (const nodeRecord of nodes) {
+      const agentName = getManagedAgentName(nodeRecord);
+
+      if (agentName !== null && nodeRecord?.isRemoved !== true && !nodeByAgentName.has(agentName)) {
+        nodeByAgentName.set(agentName, nodeRecord);
+      }
+      if (typeof nodeRecord?.sessionKey === "string" && nodeRecord.sessionKey.length > 0) {
+        nodeBySessionKey.set(nodeRecord.sessionKey, nodeRecord);
+      }
+    }
+
+    if (!nodeByAgentName.has(rootName)) {
+      return [];
+    }
+
+    const childrenByParentName = new Map();
+
+    for (const [agentName, nodeRecord] of nodeByAgentName) {
+      const hasUserParent = Object.prototype.hasOwnProperty.call(nodeRecord, "userParentSessionKey");
+      const arrangedParent = hasUserParent ? nodeBySessionKey.get(nodeRecord.userParentSessionKey) : null;
+      const parentName = hasUserParent ? getManagedAgentName(arrangedParent) : getManagedParentAgentName(nodeRecord);
+
+      if (parentName === null || parentName === agentName) {
+        continue;
+      }
+
+      const children = childrenByParentName.get(parentName) ?? [];
+      children.push(agentName);
+      childrenByParentName.set(parentName, children);
+    }
+
+    const closeOrder = [];
+    const visited = new Set();
+    const visiting = new Set();
+
+    function visit(agentName) {
+      if (visited.has(agentName) || visiting.has(agentName)) {
+        return;
+      }
+
+      const nodeRecord = nodeByAgentName.get(agentName);
+
+      if (nodeRecord === undefined) {
+        return;
+      }
+
+      visiting.add(agentName);
+      (childrenByParentName.get(agentName) ?? []).forEach(visit);
+      visiting.delete(agentName);
+      visited.add(agentName);
+      closeOrder.push(nodeRecord);
+    }
+
+    visit(rootName);
+    return closeOrder;
+  }
+
+  async function closeManagedAgentSubtree(options = {}) {
+    const closeOrder = deriveManagedAgentCloseOrder(options.nodes, options.rootAgentName);
+    const descendantCount = Math.max(0, closeOrder.length - 1);
+    const confirmDescendantClose = typeof options.confirmDescendantClose === "function"
+      ? options.confirmDescendantClose
+      : async () => false;
+    const onCloseConfirmed = typeof options.onCloseConfirmed === "function" ? options.onCloseConfirmed : null;
+    const deleteAgent = typeof options.deleteAgent === "function" ? options.deleteAgent : null;
+    const destroyNode = typeof options.destroyNode === "function" ? options.destroyNode : null;
+
+    if (closeOrder.length === 0 || deleteAgent === null || destroyNode === null) {
+      return { didClose: false, descendantCount, closeOrder };
+    }
+
+    if (descendantCount > 0 && await confirmDescendantClose(descendantCount, closeOrder) !== true) {
+      return { didClose: false, descendantCount, closeOrder };
+    }
+
+    if (onCloseConfirmed !== null) {
+      await onCloseConfirmed(closeOrder);
+    }
+
+    for (const nodeRecord of closeOrder) {
+      await deleteAgent(nodeRecord);
+      await destroyNode(nodeRecord);
+    }
+
+    return { didClose: true, descendantCount, closeOrder };
+  }
+
   function findHorizontalCanvasNodePlacement(preferredRect, occupiedRects, gap = 72) {
     const width = Number.isFinite(preferredRect?.width) && preferredRect.width > 0 ? preferredRect.width : 1;
     const height = Number.isFinite(preferredRect?.height) && preferredRect.height > 0 ? preferredRect.height : 1;
@@ -210,7 +315,9 @@
   }
 
   return {
+    closeManagedAgentSubtree,
     deriveCanvasDelegationEdges,
+    deriveManagedAgentCloseOrder,
     sortCanvasAgentSnapshotsForPlacement,
     findHorizontalCanvasNodePlacement
   };

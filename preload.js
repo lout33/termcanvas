@@ -78,6 +78,11 @@ contextBridge.exposeInMainWorld(
     subscribeCanvasAgentChanges: (payload) => ipcRenderer.invoke("canvas-agent:subscribe", payload),
     unsubscribeCanvasAgentChanges: (payload) => ipcRenderer.invoke("canvas-agent:unsubscribe", payload),
     deleteCanvasAgent: (agentName) => ipcRenderer.invoke("canvas-agent:delete", { agentName }),
+    reparentCanvasAgent: (agentName, parentAgentName, projectTag) => ipcRenderer.invoke("canvas-agent:reparent", {
+      agentName,
+      parentAgentName,
+      projectTag
+    }),
     sendCanvasAgentPrompt: (agentName, message) => ipcRenderer.invoke("canvas-agent:send", { agentName, message }),
     connectCanvasAgents: (agentA, agentB) => ipcRenderer.invoke("canvas-agent:connect", { agentA, agentB }),
     adoptCanvasAgent: (payload) => ipcRenderer.invoke("canvas-agent:adopt", payload),

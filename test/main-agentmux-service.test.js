@@ -239,6 +239,34 @@ test("resumeAgent rejects when agent name is missing", async () => {
   );
 });
 
+test("reparentAgent sends a parent or root update to agentmux", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-reparent-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const callsPath = path.join(tempRoot, "calls.jsonl");
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    `import json, sys\nwith open(${JSON.stringify(callsPath)}, 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\n`,
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath: path.join(tempRoot, "home")
+    });
+    await service.reparentAgent("child", "new-parent");
+    await service.reparentAgent("child", null);
+
+    assert.deepEqual(
+      fs.readFileSync(callsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)),
+      [["reparent", "child", "--parent", "new-parent"], ["reparent", "child", "--root"]]
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("spawnChildWorker runs agentmux worker --parent and parses the echoed agent/tmux session", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-spawn-child-"));
   const runtimeRoot = path.join(tempRoot, "runtime");
@@ -390,19 +418,17 @@ test("release config bundles agentmux from electron-builder config", () => {
   assert.equal(skillsShConfig.$schema, "https://skills.sh/schemas/skills.sh.schema.json");
   assert.deepEqual(skillsShConfig.groupings[0].skills, ["agentmux"]);
   assert.match(electronBuilderConfig, /extraResources:/u);
+  assert.match(electronBuilderConfig, /!skills\/\*\*/u);
   assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux"/u);
   assert.match(electronBuilderConfig, /to: "agentmux\/agentmux"/u);
   assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux\.py"/u);
   assert.match(electronBuilderConfig, /to: "agentmux\/agentmux\.py"/u);
-  assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/skills"/u);
+  assert.match(electronBuilderConfig, /from: "skills"/u);
   assert.match(electronBuilderConfig, /to: "agentmux\/skills"/u);
+  assert.doesNotMatch(electronBuilderConfig, /from: "vendor\/agentmux\/skills"/u);
   assert.match(electronBuilderConfig, /!vendor\/agentmux\/\*\*/u);
   assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "agentmux")), true);
   assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "agentmux.py")), true);
   assert.equal(fs.existsSync(path.join(repoRoot, "skills", "agentmux", "SKILL.md")), true);
-  assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "skills", "agentmux", "SKILL.md")), true);
-  assert.equal(
-    fs.readFileSync(path.join(repoRoot, "vendor", "agentmux", "skills", "agentmux", "SKILL.md"), "utf8"),
-    fs.readFileSync(path.join(repoRoot, "skills", "agentmux", "SKILL.md"), "utf8")
-  );
+  assert.equal(fs.existsSync(path.join(repoRoot, "vendor", "agentmux", "skills", "agentmux", "SKILL.md")), false);
 });

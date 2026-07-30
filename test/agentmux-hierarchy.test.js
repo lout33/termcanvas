@@ -61,6 +61,11 @@ function runAgentmux(harness, args, envOverrides = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
+      AGENTMUX_AGENT_NAME: "",
+      AGENTMUX_PROJECT: "",
+      AGENTMUX_ROLE: "",
+      AGENTMUX_DEPTH: "",
+      AGENTMUX_PARENT_AGENT: "",
       PATH: `${harness.binPath}${path.delimiter}${process.env.PATH ?? ""}`,
       AGENTMUX_HOME: harness.homePath,
       FAKE_TMUX_LOG: harness.tmuxLogPath,
@@ -102,7 +107,8 @@ test("agentmux waiting inference recognizes current prompts and explicit user ha
     "Permission required\nAllow once",
     "Select an option\n[y/n]",
     "Do you want to proceed?\n1. Yes\n2. No",
-    "PAUSED until you explicitly resume after the release decision"
+    "PAUSED until you explicitly resume after the release decision",
+    "Which account should become the creator account?\n1. @luis.fyupanqui\n2. @code4fun_gg\n⇆ tab  ↑↓ select  enter confirm  esc dismiss"
   ];
 
   for (const [index, paneText] of samples.entries()) {
@@ -248,6 +254,119 @@ test("agentmux workers are graph roots and can spawn children with lineage metad
   }
 });
 
+test("agentmux reparent replaces stale lineage and updates descendant depths", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "old-parent", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "new-parent", "--workdir", harness.workspacePath, "--harness", "shell"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "child", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "old-parent"]));
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "grandchild", "--workdir", harness.workspacePath, "--harness", "shell", "--parent", "child"]));
+
+    assertAgentmuxOk(runAgentmux(harness, ["reparent", "child", "--parent", "new-parent"]));
+    let payload = readProjectPayload(harness, "proj");
+    let sessions = sessionsByName(payload);
+
+    assert.equal(sessions.get("child").parent_agent, "new-parent");
+    assert.equal(sessions.get("child").depth, 1);
+    assert.equal(sessions.get("grandchild").parent_agent, "child");
+    assert.equal(sessions.get("grandchild").depth, 2);
+    assert.deepEqual(
+      payload.edges.filter((edge) => edge.kind === "spawn").map((edge) => [edge.from, edge.to]).sort(),
+      [["child", "grandchild"], ["new-parent", "child"]]
+    );
+
+    assertAgentmuxOk(runAgentmux(harness, ["reparent", "child", "--root"]));
+    payload = readProjectPayload(harness, "proj");
+    sessions = sessionsByName(payload);
+    assert.equal(sessions.get("child").parent_agent, "");
+    assert.equal(sessions.get("child").depth, 0);
+    assert.equal(sessions.get("grandchild").depth, 1);
+    assert.deepEqual(
+      payload.edges.filter((edge) => edge.kind === "spawn").map((edge) => [edge.from, edge.to]),
+      [["child", "grandchild"]]
+    );
+
+    const cycle = runAgentmux(harness, ["reparent", "child", "--parent", "grandchild"]);
+    assert.notEqual(cycle.status, 0);
+    assert.match(cycle.stderr, /cycle/u);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux child inherits an AI parent's harness and sends its task to that harness", () => {
+  const harness = createAgentmuxHarness();
+  const readyPane = { FAKE_TMUX_PANE: "Ask anything\nctrl+p commands\n$" };
+
+  try {
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["worker", "proj", "ai-parent", "--workdir", harness.workspacePath, "--harness", "opencode"],
+      readyPane
+    ));
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["child", "ai-parent", "ai-child", "--prompt", "Investigate the regression and report back."],
+      readyPane
+    ));
+
+    const child = sessionsByName(readProjectPayload(harness, "proj", readyPane)).get("ai-child");
+    const childLaunch = readNewSessionCalls(harness).find((args) => args.some((arg) => /^agentmux-ai-child-/u.test(arg)));
+    const childInputs = readTmuxCalls(harness)
+      .filter((args) => args[0] === "send-keys" && args[2] === child.tmux_session && args.includes("-l"))
+      .map((args) => args[args.indexOf("-l") + 1]);
+
+    assert.equal(child.harness, "opencode");
+    assert.match(child.command_text, /^opencode --model /u);
+    assert.ok(childLaunch.includes("opencode"));
+    assert.equal(childLaunch.includes("/bin/sh"), false);
+    assert.equal(childInputs.length, 1);
+    assert.match(childInputs[0], /Your first task from the operator: Investigate the regression and report back\.$/u);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux child rejects an ambiguous shell-parent task but preserves explicit shell input", () => {
+  const harness = createAgentmuxHarness();
+  const shellCommand = "printf '%s\\n' explicit-shell-child";
+
+  try {
+    assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "shell-parent", "--workdir", harness.workspacePath, "--harness", "shell"]));
+
+    const rejected = runAgentmux(
+      harness,
+      ["child", "shell-parent", "ambiguous-child", "--prompt", "Investigate the regression and report back."]
+    );
+
+    assert.notEqual(rejected.status, 0);
+    assert.match(`${rejected.stderr}\n${rejected.stdout}`, /--harness (?:claude, codex, opencode, or pi).*--harness shell/u);
+    assert.equal(sessionsByName(readProjectPayload(harness, "proj")).has("ambiguous-child"), false);
+    assert.equal(
+      readNewSessionCalls(harness).some((args) => args.some((arg) => /^agentmux-ambiguous-child-/u.test(arg))),
+      false
+    );
+
+    assertAgentmuxOk(runAgentmux(
+      harness,
+      ["child", "shell-parent", "shell-child", "--harness", "shell", "--prompt", shellCommand]
+    ));
+
+    const child = sessionsByName(readProjectPayload(harness, "proj")).get("shell-child");
+    const childLaunch = readNewSessionCalls(harness).find((args) => args.some((arg) => /^agentmux-shell-child-/u.test(arg)));
+    const childInputs = readTmuxCalls(harness)
+      .filter((args) => args[0] === "send-keys" && args[2] === child.tmux_session && args.includes("-l"))
+      .map((args) => args[args.indexOf("-l") + 1]);
+
+    assert.equal(child.harness, "shell");
+    assert.ok(childLaunch.includes("/bin/sh"));
+    assert.deepEqual(childInputs, [shellCommand]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("agentmux rejects invalid explicit worker parents", () => {
   const harness = createAgentmuxHarness();
 
@@ -304,7 +423,7 @@ test("agentmux command center shows the agent graph tree and status", () => {
 
   try {
     assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
-    assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--prompt", "Handle the subtask"]));
+    assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--harness", "shell", "--prompt", "Handle the subtask"]));
     assertAgentmuxOk(runAgentmux(
       harness,
       ["worker", "env-root", "--workdir", harness.workspacePath, "--harness", "shell"],
@@ -328,7 +447,8 @@ test("agentmux command center shows the agent graph tree and status", () => {
     assert.match(tree.stdout, /env-root \(agent\)/u);
     assert.match(tree.stdout, /Command center:/u);
     assert.doesNotMatch(tree.stdout, /mission/u);
-    assert.match(tree.stdout, /agentmux.* child <parent-agent> <worker-name> --prompt "<task>"/u);
+    assert.match(tree.stdout, /agentmux.* child <parent-agent> <worker-name> --harness <ai-harness> --prompt "<task>"/u);
+    assert.match(tree.stdout, /--harness shell.*literal shell input/u);
     assert.match(tree.stdout, /agentmux.* connect <agent-a> <agent-b> --announce/u);
     assert.match(tree.stdout, /agentmux.* ask <agent> "<prompt>"/u);
     assert.match(tree.stdout, /agentmux.* logs <agent> --lines 120/u);
@@ -358,7 +478,7 @@ test("agentmux stores spawn edges and supports connect/disconnect/neighbors", ()
   try {
     assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-a", "--workdir", harness.workspacePath, "--harness", "shell"]));
     assertAgentmuxOk(runAgentmux(harness, ["worker", "proj", "worker-b", "--workdir", harness.workspacePath, "--harness", "shell"]));
-    assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--prompt", "Handle the subtask"]));
+    assertAgentmuxOk(runAgentmux(harness, ["child", "worker-a", "child-a", "--harness", "shell", "--prompt", "Handle the subtask"]));
 
     const spawnPayload = readProjectPayload(harness, "proj");
     assert.deepEqual(
@@ -517,7 +637,8 @@ test("agentmux injects a spawn briefing into AI-harness agents", () => {
     assert.match(rootBriefing, /"\$AGENTMUX_BIN" neighbors/u);
     assert.match(rootBriefing, /"\$AGENTMUX_BIN" ask <agent>/u);
     assert.match(rootBriefing, /"\$AGENTMUX_BIN" check <agent>/u);
-    assert.match(rootBriefing, /"\$AGENTMUX_BIN" child root-agent <child-name>/u);
+    assert.match(rootBriefing, /"\$AGENTMUX_BIN" child root-agent <child-name> --harness claude --prompt "<task>"/u);
+    assert.match(rootBriefing, /--harness shell only for literal shell input/u);
     assert.doesNotMatch(rootBriefing, /Your first task/u);
 
     const childBriefing = injectedTexts.find((text) => text.includes("You are agent 'child-agent'"));
@@ -538,6 +659,26 @@ test("agentmux injects a spawn briefing into AI-harness agents", () => {
       false,
       "shell harness should never receive a briefing"
     );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("agentmux child help and bundled guidance distinguish AI tasks from shell input", () => {
+  const harness = createAgentmuxHarness();
+
+  try {
+    const help = runAgentmux(harness, ["child", "--help"]);
+    const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+    const skill = fs.readFileSync(path.join(repoRoot, "skills", "agentmux", "SKILL.md"), "utf8");
+
+    assertAgentmuxOk(help);
+    assert.match(help.stdout, /inherits the parent\s+AI harness/u);
+    assert.match(help.stdout, /--harness shell[\s\S]*literal\s+shell input/u);
+    assert.match(readme, /child <parent> <name> --harness <ai-harness> --prompt/u);
+    assert.match(readme, /--harness shell[\s\S]*literal\s+shell input/u);
+    assert.match(skill, /child <parent-agent> <agent-name> --harness <ai-harness> --prompt/u);
+    assert.match(skill, /--harness shell[\s\S]*literal\s+shell input/u);
   } finally {
     harness.cleanup();
   }

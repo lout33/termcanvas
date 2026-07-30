@@ -102,7 +102,7 @@ test("agent graph watcher debounces rapid database changes into one notification
     touchDatabase(databasePath, "1");
     touchDatabase(databasePath, "2");
     touchDatabase(databasePath, "3");
-    await waitForCondition(() => callCount >= 1, 400);
+    await waitForCondition(() => callCount >= 1);
     await new Promise((resolve) => setTimeout(resolve, 120));
     assert.equal(callCount, 1);
   } finally {

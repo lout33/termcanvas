@@ -43,6 +43,7 @@ WAIT_PATTERNS = [
         r"^\s*(?:approve|allow|deny|grant permission)(?:\s+(?:once|always))?\s*[?:]?\s*$",
         r"^\s*(?:do you want to|would you like to)\s+(?:continue|proceed|approve|allow)\b.*\?\s*$",
         r"\b(?:paused|blocked)\b.*\buntil\b.*\byou\b",
+        r"\bselect\b.*\benter confirm\b.*\besc dismiss\b",
     ]
 ]
 WAIT_NEGATION_PATTERNS = [
@@ -68,6 +69,7 @@ PROMPT_CHROME_PATTERNS = [
     re.compile(r"\bctrl\+p commands\b", re.IGNORECASE),
     re.compile(r"\besc interrupt\b", re.IGNORECASE),
     re.compile(r"^\s*(?:▣\s*)?Build\s*·", re.IGNORECASE),
+    re.compile(r"\bselect\b.*\benter confirm\b.*\besc dismiss\b", re.IGNORECASE),
 ]
 SHELL_READY_PATTERN = re.compile(r"^\s*[^\n]*[%$#❯]\s*$")
 WAIT_SCAN_LINES = 24
@@ -100,6 +102,7 @@ STATE_STYLES = {
 AGENT_STATES = ["active", "idle", "finished", "failed", "archived"]
 STALE_AFTER_SECONDS = 15 * 60
 UTF8_LOCALE = "en_US.UTF-8"
+TMUX_LITERAL_INPUT_MAX_BYTES = 4096
 
 
 @dataclass(frozen=True)
@@ -216,10 +219,15 @@ def migrate_legacy_app_dir() -> None:
 
 
 def skill_source_path() -> Path:
-    source = Path(__file__).resolve().parent / "skills" / "agentmux" / "SKILL.md"
-    if not source.exists():
-        raise SystemExit(f"Bundled skill not found: {source}")
-    return source
+    runtime_source = Path(__file__).resolve().parent / "skills" / "agentmux" / "SKILL.md"
+    if runtime_source.exists():
+        return runtime_source
+
+    development_source = Path(__file__).resolve().parents[2] / "skills" / "agentmux" / "SKILL.md"
+    if development_source.exists():
+        return development_source
+
+    raise SystemExit(f"Bundled skill not found: {runtime_source}")
 
 
 def db() -> sqlite3.Connection:
@@ -232,9 +240,9 @@ def command_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def tmux(*args: str, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     command = ["tmux", *args]
-    return subprocess.run(command, check=check, text=True, capture_output=True)
+    return subprocess.run(command, check=check, text=True, capture_output=True, input=input_text)
 
 
 def list_tmux_panes() -> list[TmuxPane]:
@@ -298,8 +306,25 @@ def capture_terminal_pane(tmux_session: str, lines: int = 500) -> str:
     return result.stdout.rstrip("\n")
 
 
+def should_paste_terminal_input(text: str) -> bool:
+    return "\n" in text or "\r" in text or len(text.encode("utf-8")) > TMUX_LITERAL_INPUT_MAX_BYTES
+
+
+def paste_terminal_input(tmux_session: str, text: str) -> None:
+    buffer_name = f"agentmux-input-{uuid.uuid4().hex}"
+
+    try:
+        tmux("load-buffer", "-b", buffer_name, "-", input_text=text)
+        tmux("paste-buffer", "-p", "-d", "-b", buffer_name, "-t", tmux_session)
+    finally:
+        tmux("delete-buffer", "-b", buffer_name, check=False)
+
+
 def send_keys(tmux_session: str, text: str, enter: bool = True) -> None:
-    tmux("send-keys", "-t", tmux_session, "-l", text)
+    if should_paste_terminal_input(text):
+        paste_terminal_input(tmux_session, text)
+    else:
+        tmux("send-keys", "-t", tmux_session, "-l", text)
     if enter:
         tmux("send-keys", "-t", tmux_session, "Enter")
 
@@ -699,6 +724,63 @@ def delete_agent_edges(conn: sqlite3.Connection, project: str, agent_name: str) 
     )
 
 
+def reparent_agent(conn: sqlite3.Connection, child_identifier: str, parent_identifier: str | None) -> sqlite3.Row:
+    child = resolve_session(conn, child_identifier)
+    project = session_project_name(child)
+    parent = resolve_session(conn, parent_identifier) if parent_identifier else None
+
+    if parent is not None:
+        parent_project = session_project_name(parent)
+        if parent_project != project:
+            raise SystemExit(f"Parent agent '{parent['name']}' belongs to project '{parent_project}', not '{project}'.")
+        if parent["id"] == child["id"]:
+            raise SystemExit("An agent cannot be its own parent.")
+
+        ancestor = parent
+        visited = set()
+        while ancestor is not None and ancestor["id"] not in visited:
+            if ancestor["id"] == child["id"]:
+                raise SystemExit("Reparenting would create a cycle.")
+            visited.add(ancestor["id"])
+            ancestor_name = metadata_text(session_metadata(ancestor), "parent_agent")
+            ancestor = try_resolve_session(conn, ancestor_name) if ancestor_name else None
+
+    sessions = filter_sessions_by_project(conn.execute("SELECT * FROM sessions").fetchall(), project)
+    children_by_parent: dict[str, list[sqlite3.Row]] = {}
+    for session in sessions:
+        parent_name = metadata_text(session_metadata(session), "parent_agent")
+        if parent_name:
+            children_by_parent.setdefault(parent_name, []).append(session)
+
+    parent_depth = metadata_depth(session_metadata(parent), fallback=0) if parent is not None else -1
+    queue = [(child, parent["name"] if parent is not None else "", parent_depth + 1)]
+    visited_names = set()
+    now = utc_now()
+    while queue:
+        session, next_parent_name, depth = queue.pop(0)
+        if session["name"] in visited_names:
+            continue
+        visited_names.add(session["name"])
+        metadata = session_metadata(session)
+        metadata["parent_agent"] = next_parent_name
+        metadata["depth"] = depth
+        conn.execute(
+            "UPDATE sessions SET metadata_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(metadata, sort_keys=True), now, session["id"]),
+        )
+        queue.extend((descendant, session["name"], depth + 1) for descendant in children_by_parent.get(session["name"], []))
+
+    conn.execute(
+        "DELETE FROM edges WHERE project = ? AND agent_b = ? AND kind = 'spawn'",
+        (project, child["name"]),
+    )
+    if parent is not None:
+        delete_edge(conn, project, parent["name"], child["name"])
+        create_edge(conn, project, parent["name"], child["name"], kind="spawn")
+
+    return conn.execute("SELECT * FROM sessions WHERE id = ?", (child["id"],)).fetchone()
+
+
 def list_project_edges(conn: sqlite3.Connection, project: str) -> list[dict[str, object]]:
     rows = conn.execute(
         "SELECT * FROM edges WHERE project = ? ORDER BY created_at ASC, id ASC",
@@ -866,8 +948,9 @@ def select_harness(args: argparse.Namespace) -> tuple[Harness, list[str]]:
     return harness, []
 
 
-def build_spawn_briefing(name: str, project: str, parent_agent: str = "") -> str:
+def build_spawn_briefing(name: str, project: str, parent_agent: str = "", harness_id: str = "") -> str:
     quoted_name = shlex.quote(name)
+    child_harness = harness_id if harness_id in BRIEFING_HARNESS_IDS else "<ai-harness>"
     parent_note = (
         f"You were spawned by agent '{parent_agent}' — your first neighbor; report back to it when it asks. "
         if parent_agent
@@ -880,7 +963,8 @@ def build_spawn_briefing(name: str, project: str, parent_agent: str = "") -> str
         f'"$AGENTMUX_BIN" neighbors (list agents connected to you), '
         f'"$AGENTMUX_BIN" ask <agent> "<task>" (delegate and wait for the answer), '
         f'"$AGENTMUX_BIN" check <agent> (peek without interrupting), '
-        f'"$AGENTMUX_BIN" child {quoted_name} <child-name> --prompt "<task>" (spawn a sub-agent wired to you). '
+        f'"$AGENTMUX_BIN" child {quoted_name} <child-name> --harness {child_harness} --prompt "<task>" '
+        f'(spawn an AI sub-agent wired to you; use --harness shell only for literal shell input). '
         f"For the full manual load the 'agentmux' skill if you have it."
     )
 
@@ -970,6 +1054,7 @@ def create_managed_session(
             name,
             normalize_project(project),
             parent_agent=metadata_text(metadata or {}, "parent_agent"),
+            harness_id=harness.id,
         )
 
     initial_message = briefing_text
@@ -1510,7 +1595,8 @@ def render_project_command_hints(project: str) -> list[str]:
     command = agentmux_command_hint()
     return [
         "Command center:",
-        f"  child:    {command} child <parent-agent> <worker-name> --prompt \"<task>\"",
+        f"  child:    {command} child <parent-agent> <worker-name> --harness <ai-harness> --prompt \"<task>\"",
+        "            Omit --harness to inherit an AI parent's harness; --harness shell sends literal shell input.",
         f"  connect:  {command} connect <agent-a> <agent-b> --announce",
         f"  ask:      {command} ask <agent> \"<prompt>\"",
         f"  inspect:  {command} show <agent>",
@@ -2242,6 +2328,13 @@ def delete_agent(args: argparse.Namespace) -> None:
     print(f"Deleted {session['name']}")
 
 
+def reparent_command(args: argparse.Namespace) -> None:
+    with db() as conn:
+        child = reparent_agent(conn, args.agent, None if args.root else args.parent)
+        metadata = session_metadata(child)
+    print(f"Reparented {child['name']} under {metadata_text(metadata, 'parent_agent') or '<root>'}")
+
+
 def project_tree_command(args: argparse.Namespace) -> None:
     with db() as conn:
         payload = project_tree_payload(conn, project_from_arg_or_env(args.project))
@@ -2283,10 +2376,29 @@ def project_worker_command(args: argparse.Namespace) -> None:
     print(f"cwd:  {worker['workdir']}")
 
 
+def resolve_child_harness(args: argparse.Namespace, parent: sqlite3.Row) -> str:
+    if args.harness is not None:
+        return args.harness
+
+    parent_harness = str(parent["harness"])
+    if parent_harness in BRIEFING_HARNESS_IDS:
+        return parent_harness
+
+    if args.prompt:
+        raise SystemExit(
+            f"Child --prompt needs an AI harness because parent '{parent['name']}' uses '{parent_harness}'. "
+            "Pass --harness claude, codex, opencode, or pi for an AI task; "
+            "pass --harness shell only for literal shell input."
+        )
+
+    return "shell"
+
+
 def child_worker_command(args: argparse.Namespace) -> None:
     with db() as conn:
         parent = resolve_session(conn, args.parent)
         project = session_project_name(parent)
+        harness_id = resolve_child_harness(args, parent)
         worker = create_project_worker(
             conn,
             project,
@@ -2294,7 +2406,7 @@ def child_worker_command(args: argparse.Namespace) -> None:
             args.workdir or parent["workdir"],
             prompt=args.prompt,
             model=args.model,
-            harness_id=args.harness,
+            harness_id=harness_id,
             parent_agent=parent["name"],
             briefing=not args.no_briefing,
         )
@@ -2600,6 +2712,13 @@ def build_parser() -> argparse.ArgumentParser:
     delete.add_argument("--force", action="store_true", help="Kill the runtime first if it is still running")
     delete.set_defaults(func=delete_agent)
 
+    reparent = sub.add_parser("reparent", help="Move an agent subtree under a different parent")
+    reparent.add_argument("agent")
+    reparent_target = reparent.add_mutually_exclusive_group(required=True)
+    reparent_target.add_argument("--parent", help="Existing agent to use as the new parent")
+    reparent_target.add_argument("--root", action="store_true", help="Move the agent to the project root")
+    reparent.set_defaults(func=reparent_command)
+
     tree = sub.add_parser("tree", help="Show the project agent graph with command hints")
     tree.add_argument("project", nargs="?", help="Project tag, defaults to AGENTMUX_PROJECT in managed terminals")
     tree.add_argument("--json", action="store_true")
@@ -2621,13 +2740,17 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--no-briefing", action="store_true", help="Skip the spawn briefing injected into AI harnesses")
     worker.set_defaults(func=project_worker_command)
 
-    child = sub.add_parser("child", help="Create a child worker under an existing agent")
+    child = sub.add_parser("child", help="Create a child agent with explicit AI-task versus shell-input intent")
     child.add_argument("parent")
     child.add_argument("agent")
     child.add_argument("--workdir", help="Workspace root for the child, defaults to the parent's workdir")
-    child.add_argument("--prompt")
+    child.add_argument("--prompt", help="Initial AI task; explicit --harness shell sends literal shell input instead")
     child.add_argument("--model")
-    child.add_argument("--harness", choices=sorted(HARNESSES.keys()), default="shell", help="Harness for the child session (default: shell)")
+    child.add_argument(
+        "--harness",
+        choices=sorted(HARNESSES.keys()),
+        help="If omitted, inherits the parent AI harness; use --harness shell only for literal shell input",
+    )
     child.add_argument("--no-briefing", action="store_true", help="Skip the spawn briefing injected into AI harnesses")
     child.set_defaults(func=child_worker_command)
 

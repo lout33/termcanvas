@@ -106,13 +106,18 @@ Spawn a root agent in a project:
 "$AGENTMUX_CLI" worker <tag> <agent-name> --workdir <canvas-root> --harness shell
 ```
 
-Spawn a child under a specific agent (from inside a managed terminal, `worker`
+Spawn an AI child under a specific agent (from inside a managed terminal, `worker`
 without `--parent` auto-parents to you):
 
 ```bash
-"$AGENTMUX_CLI" child <parent-agent> <agent-name> --prompt "Handle this subtask"
+"$AGENTMUX_CLI" child <parent-agent> <agent-name> --harness <ai-harness> --prompt "Handle this subtask"
 "$AGENTMUX_CLI" worker <tag> <agent-name> --workdir <canvas-root> --harness shell --parent <parent-agent>
 ```
+
+When `--harness` is omitted, `child` inherits an AI parent's harness. A shell
+parent with `--prompt` must choose an AI harness explicitly, so a natural-language
+task cannot silently execute in a shell. Use `--harness shell` only for literal
+shell input, for example `--harness shell --prompt "git status"`.
 
 Adopt an existing plain terminal into the graph:
 
@@ -177,9 +182,9 @@ operations for agents you did not create.
 - "Who's on this canvas?" Use `tree`, `status`, and `ls --project <tag> --json`;
   summarize agents, state, and edges.
 - "Delegate X and get the result." Use `ask <agent> "X"`; on timeout, `check`.
-- "Add an agent for X." Use `worker ... --prompt "X"` or `child ... --prompt "X"`;
+- "Add an agent for X." Use `worker ... --harness <ai-harness> --prompt "X"` or `child ... --harness <ai-harness> --prompt "X"`;
   verify with `tree`.
-- "Give agent Y subagents." Use `child Y <name> --prompt "..."`.
+- "Give agent Y subagents." Use `child Y <name> --harness <ai-harness> --prompt "..."`.
 - "Let Y and Z collaborate directly." Use `connect Y Z --announce`.
 - "Tell Y to do Z." Use `send Y "Z"` (fire-and-forget) or `ask Y "Z"` (blocking).
 - "Y is stuck." Use `logs` first, then `stop`, or `kill`/`delete --force` if the

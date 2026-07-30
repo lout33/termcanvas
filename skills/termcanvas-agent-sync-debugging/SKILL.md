@@ -6,11 +6,12 @@ description: >
   as terminal count grows, plus duplicate terminal views created after a release
   relaunch. Use when a child agent is missing, restored terminals duplicate or
   move to the wrong canvas, a folderless canvas stops syncing, UI or TUI redraws
-  recur every few seconds, WebGL glyphs degrade, or a smoke probe reports no text.
+  recur every few seconds, WebGL glyphs degrade, a smoke probe reports no text,
+  or an accidentally deleted OpenCode terminal needs its conversation restored.
 license: MIT
 metadata:
   author: termcanvas
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Debug TermCanvas restore, agent sync, and rendering stability
@@ -29,7 +30,9 @@ to 15 unique nodes; an isolated Electron relaunch restored all 15 with
 `duplicateIdentities: []`. `npm run build` passed and all 249 tests passed. Prior
 checks also reproduced the folderless sync mismatch, improved scoped polling
 from about 0.55s to 0.20s, held 10-terminal WebGL use to 8, and preserved tail
-mount height `486.4609375` and terminal size `116x27`.
+mount height `486.4609375` and terminal size `116x27`. The deleted-session path
+was verified by restoring two exact OpenCode session IDs, rebuilding their
+parent chain, and observing both running tmux sessions materialize in TermCanvas.
 
 ## Procedure
 
@@ -239,7 +242,85 @@ mount height `486.4609375` and terminal size `116x27`.
   3. `reconcileCanvasAgentProject()` matches by agent name or tmux session,
      creates missing nodes, and detaches stale PTY views without killing tmux.
 
-### 7. Probe xterm correctly
+### 7. Recover an accidentally deleted OpenCode terminal
+
+- [ ] First establish the failure boundary without changing live state:
+
+  ```sh
+  "$AGENTMUX_BIN" ls --json
+  tmux list-sessions -F '#{session_name}'
+  ```
+
+  A forced agentmux delete removes the record, events, graph edges, and tmux
+  session. If all are gone, tmux reattachment is impossible, but OpenCode's
+  native conversation may still survive independently.
+
+- [ ] Query OpenCode's durable session database by title, directory, and recency:
+
+  ```sh
+  sqlite3 -json "$HOME/.local/share/opencode/opencode.db" '
+    SELECT id, title, directory, model,
+           datetime(time_updated / 1000, "unixepoch", "localtime") AS updated_at
+    FROM session
+    WHERE lower(title) LIKE "%search terms%"
+       OR lower(directory) LIKE "%project fragment%"
+    ORDER BY time_updated DESC
+    LIMIT 30;
+  '
+  ```
+
+  Do not select by a vague title alone. Match the working directory and recent
+  activity, then inspect the earliest TermCanvas briefing to recover the exact
+  agent name, project tag, and original parent:
+
+  ```sh
+  sqlite3 -json "$HOME/.local/share/opencode/opencode.db" '
+    SELECT s.id, s.title, substr(json_extract(p.data, "$.text"), 1, 600) AS briefing
+    FROM session s
+    JOIN part p ON p.session_id = s.id
+    WHERE s.id = "<session-id>"
+      AND json_extract(p.data, "$.type") = "text"
+      AND json_extract(p.data, "$.text") LIKE "[TermCanvas] You are agent %"
+    ORDER BY p.time_created ASC
+    LIMIT 1;
+  '
+  ```
+
+- [ ] Restore parents before children using the same app-scoped `AGENTMUX_HOME`.
+  Reuse the model provider/id stored in the OpenCode row; the variant remains
+  part of the native session:
+
+  ```sh
+  "$AGENTMUX_BIN" new \
+    --harness opencode \
+    --agent <original-agent-name> \
+    --workdir <original-directory> \
+    --project <original-project-tag> \
+    --model <provider/model> \
+    --session <session-id> \
+    --no-briefing
+
+  "$AGENTMUX_BIN" reparent <restored-agent> --parent <restored-or-live-parent>
+  ```
+
+  `--no-briefing` avoids injecting a new task into the recovered conversation.
+  Reparenting restores lineage metadata, depth, and the spawn edge.
+
+- [ ] Verify all three layers before reporting recovery:
+
+  ```sh
+  "$AGENTMUX_BIN" ls --project <project-tag> --json
+  tmux has-session -t <restored-tmux-session>
+  jq '[.canvases[].terminalNodes[] | select(.managedAgentName == "<agent-name>")]' \
+    "$HOME/Library/Application Support/TermCanvas/app-session.json"
+  ```
+
+  The agentmux row must show the exact `external_session_id`, expected parent and
+  depth, the tmux session must exist, and the renderer snapshot must contain the
+  restored node. If the native OpenCode session is absent, stop: recreating a
+  new conversation is not recovery and requires the user's direction.
+
+### 8. Probe xterm correctly
 
 - [ ] Do not use `terminalMount.textContent` to decide whether terminal output
   arrived. WebGL xterm draws to a canvas, so DOM text may be empty while the PTY,
@@ -260,7 +341,7 @@ mount height `486.4609375` and terminal size `116x27`.
   Use this for Electron smoke assertions and live-echo diagnostics regardless of
   renderer type.
 
-### 8. Verify the relevant path, then the suite
+### 9. Verify the relevant path, then the suite
 
 - [ ] Run targeted regressions first:
 
@@ -319,6 +400,9 @@ mount height `486.4609375` and terminal size `116x27`.
   its parent metadata and place it independently if necessary.
 - Renderer nodes are views. Detaching a stale view must not destroy its
   long-lived tmux session.
+- A forced agentmux delete deliberately kills tmux and deletes its own events,
+  but it does not delete OpenCode's native session database. Search that durable
+  store before concluding an OpenCode conversation is lost.
 
 ## What didn't work
 
@@ -339,3 +423,8 @@ mount height `486.4609375` and terminal size `116x27`.
   live child record existed; a folderless renderer gate skipped synchronization.
 - Refreshing every stored agent before filtering by project, which makes one
   canvas pay tmux polling cost for unrelated projects.
+- Trying to recover a force-deleted agent from tmux or agentmux events. Both were
+  deleted by design; the surviving OpenCode `session` row and its TermCanvas
+  briefing held the recoverable identity and hierarchy.
+- Restoring from `app-session.json` alone. It retained node identity and titles
+  but not the native OpenCode session ID needed to resume the conversation.

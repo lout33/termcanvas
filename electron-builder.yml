@@ -12,6 +12,7 @@ files:
   - "!findings.md"
   - "!progress.md"
   - "!*.log"
+  - "!skills/**"
   - "!vendor/agentmux/**"
 asarUnpack:
   - "node_modules/node-pty/**/*"
@@ -20,7 +21,7 @@ extraResources:
     to: "agentmux/agentmux"
   - from: "vendor/agentmux/agentmux.py"
     to: "agentmux/agentmux.py"
-  - from: "vendor/agentmux/skills"
+  - from: "skills"
     to: "agentmux/skills"
 mac:
   category: public.app-category.developer-tools

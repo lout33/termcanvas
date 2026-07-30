@@ -42,6 +42,7 @@ const {
   shouldApplyWorkspacePreviewActionError
 } = window.noteCanvasRendererWorkspacePreview;
 const {
+  closeManagedAgentSubtree,
   deriveCanvasDelegationEdges,
   sortCanvasAgentSnapshotsForPlacement,
   findHorizontalCanvasNodePlacement
@@ -262,6 +263,8 @@ let canvasAgentSyncTimeout = 0;
 let canvasAgentLivenessTimeout = 0;
 let canvasAgentEventDebounceTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
+let canvasAgentSyncGeneration = 0;
+let managedAgentCloseInFlightCount = 0;
 let canvasAgentUnsubscribe = null;
 let canvasAgentChangeListenerRemover = null;
 let lastSyncedAgentProjectTag = null;
@@ -3022,9 +3025,8 @@ function scheduleTerminalNavigatorScrollSync(options = {}) {
 }
 
 // Drag-and-drop state for rearranging the terminal tree. Dragging between
-// rows reorders siblings; dropping onto a row's middle re-parents. The
-// arrangement is stored as a local `userParentSessionKey` override on the
-// node record — agentmux sync never touches it.
+// rows reorders siblings; dropping onto a row's middle re-parents. Managed
+// agents persist that parent through agentmux before the local layout override.
 let terminalTreeDragSourceId = null;
 
 function getTerminalTreeDropZone(event, item) {
@@ -3054,7 +3056,7 @@ function clearTerminalTreeDragState() {
   });
 }
 
-function applyTerminalTreeDrop(sourceNodeId, targetNodeId, zone) {
+async function applyTerminalTreeDrop(sourceNodeId, targetNodeId, zone) {
   const activeCanvas = getActiveCanvas();
 
   if (activeCanvas === null) {
@@ -3077,6 +3079,28 @@ function applyTerminalTreeDrop(sourceNodeId, targetNodeId, zone) {
 
   if (sourceNode == null || targetNode == null) {
     return;
+  }
+
+  const parentNode = action.parentSessionKey === null
+    ? null
+    : activeCanvas.nodes.find((nodeRecord) => nodeRecord.sessionKey === action.parentSessionKey) ?? null;
+  const nextManagedParentAgent = normalizeManagedAgentName(parentNode?.managedAgentName);
+
+  if (normalizeManagedAgentName(sourceNode.managedAgentName) !== null) {
+    try {
+      await window.noteCanvas.reparentCanvasAgent(
+        sourceNode.managedAgentName,
+        nextManagedParentAgent,
+        sourceNode.managedProjectTag
+      );
+      sourceNode.managedParentAgent = nextManagedParentAgent;
+      sourceNode.managedDepth = nextManagedParentAgent === null
+        ? 0
+        : Math.max(0, Number(parentNode?.managedDepth) || 0) + 1;
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      return;
+    }
   }
 
   sourceNode.userParentSessionKey = action.parentSessionKey;
@@ -8577,13 +8601,7 @@ async function createTerminalNode(options) {
     event.preventDefault();
     event.stopPropagation();
     closeTerminalNodeMenu({ restoreFocus: true });
-
-    if (nodeRecord.managedAgentName !== null) {
-      void deleteManagedAgentNode(nodeRecord);
-      return;
-    }
-
-    void destroyTerminalNode(nodeRecord);
+    void closeTerminalNode(nodeRecord);
   });
 
   elements.maximizeButton.addEventListener("click", (event) => {
@@ -8946,7 +8964,9 @@ async function closeSelectedTerminals() {
   }
   const toClose = [...selectedTerminalNodes];
   exitCanvasSelectMode();
-  await Promise.all(toClose.map((nodeRecord) => destroyTerminalNode(nodeRecord, { shouldDestroySession: true })));
+  for (const nodeRecord of toClose) {
+    await closeTerminalNode(nodeRecord);
+  }
 }
 
 async function ensureManagedAgentName(nodeRecord) {
@@ -9046,20 +9066,73 @@ document.addEventListener("keydown", (event) => {
   }
 }, true);
 
-async function deleteManagedAgentNode(nodeRecord) {
-  const agentName = nodeRecord.managedAgentName;
-
-  await destroyTerminalNode(nodeRecord, { shouldDestroySession: false });
-
-  if (agentName !== null) {
-    try {
-      await window.noteCanvas.deleteCanvasAgent(agentName);
-    } catch (error) {
-      console.error(error);
-    }
+async function closeManagedAgentNode(nodeRecord) {
+  if (nodeRecord.isRemoved || nodeRecord.managedAgentName === null) {
+    return;
   }
 
-  scheduleCanvasAgentSync();
+  let didSuspendAgentSync = false;
+
+  try {
+    const result = await closeManagedAgentSubtree({
+      nodes: nodeRecord.canvas.nodes,
+      rootAgentName: nodeRecord.managedAgentName,
+      confirmDescendantClose: async (descendantCount) => {
+        const noun = descendantCount === 1 ? "descendant" : "descendants";
+        return confirmWorkspaceAction(
+          "Close agent subtree",
+          `Close ${nodeRecord.titleText} and ${descendantCount} ${noun}? This closes the managed-agent subtree and removes its terminal nodes.`,
+          "Close subtree"
+        );
+      },
+      onCloseConfirmed: () => {
+        didSuspendAgentSync = true;
+        managedAgentCloseInFlightCount += 1;
+        canvasAgentSyncGeneration += 1;
+      },
+      deleteAgent: async (candidateNode) => {
+        if (candidateNode.managedAgentName !== null) {
+          await window.noteCanvas.deleteCanvasAgent(candidateNode.managedAgentName);
+        }
+      },
+      destroyNode: async (candidateNode) => {
+        await destroyTerminalNode(candidateNode, {
+          shouldDestroySession: false,
+          deferChromeRefresh: true
+        });
+      }
+    });
+
+    if (!result.didClose) {
+      return;
+    }
+
+    renderCanvasSwitcher();
+    renderTerminalNavigator();
+    updateEmptyState();
+    applyCanvasFocusMode();
+    scheduleCanvasEdgeRender();
+  } catch (error) {
+    await showWorkspaceActionError(error);
+  } finally {
+    if (didSuspendAgentSync) {
+      managedAgentCloseInFlightCount -= 1;
+      scheduleCanvasAgentSync();
+    }
+  }
+}
+
+async function closeTerminalNode(nodeRecord) {
+  if (nodeRecord.isRemoved) {
+    return;
+  }
+
+  if (nodeRecord.managedAgentName !== null) {
+    await closeManagedAgentNode(nodeRecord);
+    return;
+  }
+
+  await destroyTerminalNode(nodeRecord);
 }
 
 async function rebindManagedNodeToAgentSession(nodeRecord, agentSnapshot) {
@@ -9184,8 +9257,18 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
   }
 }
 
-async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
-  if (canvasRecord.id !== activeCanvasId) {
+function shouldApplyCanvasAgentSync(canvasRecord, syncGeneration) {
+  return (
+    canvasRecord.id === activeCanvasId
+    && syncGeneration === canvasAgentSyncGeneration
+    && managedAgentCloseInFlightCount === 0
+  );
+}
+
+async function reconcileCanvasAgentProject(canvasRecord, snapshot, syncGeneration = canvasAgentSyncGeneration) {
+  const shouldApplySync = () => shouldApplyCanvasAgentSync(canvasRecord, syncGeneration);
+
+  if (!shouldApplySync()) {
     return;
   }
 
@@ -9221,6 +9304,10 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
   canvasRecord.agentEdges = nextAgentEdges;
 
   for (const agentSnapshot of sessions) {
+    if (!shouldApplySync()) {
+      return;
+    }
+
     const agentName = normalizeManagedAgentName(agentSnapshot?.name);
 
     if (agentName === null) {
@@ -9239,6 +9326,9 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
 
     if (existingNode !== null) {
       await rebindManagedNodeToAgentSession(existingNode, agentSnapshot);
+      if (!shouldApplySync()) {
+        return;
+      }
       didChangeManagedState = syncManagedNodeState(existingNode, agentSnapshot) || didChangeManagedState;
       continue;
     }
@@ -9267,6 +9357,15 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
         deferChromeRefresh: true,
         shouldFocus: false
       });
+      if (!shouldApplySync()) {
+        if (createdNode !== undefined) {
+          await destroyTerminalNode(createdNode, {
+            shouldDestroySession: false,
+            deferChromeRefresh: true
+          });
+        }
+        return;
+      }
       if (createdNode !== undefined) {
         managedNodeByName.set(agentName, createdNode);
         didChangeNodeSet = true;
@@ -9274,6 +9373,10 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
     } catch (error) {
       console.error(error);
     }
+  }
+
+  if (!shouldApplySync()) {
+    return;
   }
 
   if (
@@ -9287,6 +9390,10 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
   const staleNodes = getManagedCanvasNodes(canvasRecord).filter((nodeRecord) => !seenAgentNames.has(nodeRecord.managedAgentName));
 
   for (const staleNode of staleNodes) {
+    if (!shouldApplySync()) {
+      return;
+    }
+
     await destroyTerminalNode(staleNode, {
       shouldDestroySession: false,
       deferChromeRefresh: true
@@ -9324,7 +9431,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot) {
 }
 
 async function syncActiveCanvasAgentProject() {
-  if (isCanvasAgentSyncInFlight) {
+  if (isCanvasAgentSyncInFlight || managedAgentCloseInFlightCount > 0) {
     return;
   }
 
@@ -9337,6 +9444,7 @@ async function syncActiveCanvasAgentProject() {
     return;
   }
 
+  const syncGeneration = canvasAgentSyncGeneration;
   isCanvasAgentSyncInFlight = true;
 
   try {
@@ -9347,7 +9455,7 @@ async function syncActiveCanvasAgentProject() {
       projectTag: canvasRecord.agentProjectTag
     });
 
-    if (canvasRecord.id !== activeCanvasId) {
+    if (!shouldApplyCanvasAgentSync(canvasRecord, syncGeneration)) {
       return;
     }
 
@@ -9364,7 +9472,11 @@ async function syncActiveCanvasAgentProject() {
       await resubscribeCanvasAgentChangesForActiveCanvas();
     }
 
-    await reconcileCanvasAgentProject(canvasRecord, snapshot);
+    if (!shouldApplyCanvasAgentSync(canvasRecord, syncGeneration)) {
+      return;
+    }
+
+    await reconcileCanvasAgentProject(canvasRecord, snapshot, syncGeneration);
   } catch (error) {
     console.error(error);
   } finally {

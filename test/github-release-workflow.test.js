@@ -44,9 +44,10 @@ test("README documents the version tag release flow", () => {
   const readmePath = path.join(__dirname, "..", "README.md");
   const readme = fs.readFileSync(readmePath, "utf8");
 
-  assert.match(readme, /## GitHub Releases/);
+  assert.match(readme, /## github releases/iu);
   assert.match(readme, /npm version patch --no-git-tag-version/);
-  assert.match(readme, /git tag v0\.1\.1/);
-  assert.match(readme, /git push origin v0\.1\.1/);
-  assert.match(readme, /GitHub Release/);
+  assert.match(readme, /VERSION="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"/u);
+  assert.match(readme, /git tag "v\$VERSION"/u);
+  assert.match(readme, /git push origin "v\$VERSION"/u);
+  assert.match(readme, /github release/iu);
 });
