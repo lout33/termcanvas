@@ -1,5 +1,7 @@
 # Launching & Growing an OSS Dev Tool as a Solo Maker — A Verified Playbook (June 2026)
 
+> **Superseded for launch execution on 2026-07-28.** Keep this as June channel research only. Its v0.2.5, commander/worker, reboot-persistence, and broad four-week sequence claims are stale. Use `growth/launch-brief.md` for launch one.
+
 For **TermCanvas** (OSS, macOS/Apple-Silicon-only Electron app — an infinite canvas of real tmux-backed terminals for steering multiple AI coding agents; ~8 stars, solo maintainer, builds in public).
 
 > Evidence standard: every named tool/number below traces to a page I fetched. Causation is almost always **self-reported by the maker** (flagged). Funded/large-team examples are tagged **(non-comparable)** because a maintainer at 8 stars can't replicate what a funded team or a 70k-follower account did. The honest meta-finding up front:

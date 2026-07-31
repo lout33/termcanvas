@@ -155,6 +155,7 @@ def ensure_app() -> None:
     migrate_legacy_app_dir()
     APP_DIR.mkdir(parents=True, exist_ok=True)
     with db() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -231,8 +232,9 @@ def skill_source_path() -> Path:
 
 
 def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 

@@ -52,7 +52,8 @@ const {
   createFocusedTerminalLifecycle,
   shouldShowNodeInFocusedMode,
   pickInitialSidebarViewForFocusedMode,
-  pickFocusedNode
+  pickFocusedNode,
+  shouldInvokeTerminalDestroy
 } = window.noteCanvasRendererFocusedMode;
 // The CodeMirror bundle is ~770KB, so it loads on demand the first time a
 // file preview needs an editor instead of blocking startup.
@@ -1790,7 +1791,11 @@ async function releaseTerminalSession(nodeRecord, options = {}) {
     pendingTailUpdateNodes.delete(nodeRecord);
 
     try {
-      if (typeof terminalId === "string" || nodeRecord.tmuxSessionName !== null) {
+      if (shouldInvokeTerminalDestroy({
+        terminalId,
+        tmuxSessionName: nodeRecord.tmuxSessionName,
+        retainDetachedIdentity
+      })) {
         await window.noteCanvas.destroyTerminal(terminalId, {
           sessionKey: nodeRecord.sessionKey,
           tmuxSessionName: nodeRecord.tmuxSessionName,
@@ -2041,7 +2046,10 @@ async function reopenTerminalNode(nodeRecord) {
   nodeRecord.overlay.hidden = true;
 
   try {
-    await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    await releaseTerminalSession(nodeRecord, {
+      shouldDestroySession: false,
+      retainDetachedIdentity: nodeRecord.managedAgentName !== null
+    });
     if (nodeRecord.managedAgentName === null) {
       nodeRecord.tmuxSessionName = null;
     }
@@ -9239,7 +9247,10 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
     nodeRecord.managedRuntimeState = "starting";
     nodeRecord.managedAgentState = "active";
 
-    await releaseTerminalSession(nodeRecord, { shouldDestroySession: false });
+    await releaseTerminalSession(nodeRecord, {
+      shouldDestroySession: false,
+      retainDetachedIdentity: true
+    });
     if (FOCUSED_TERMINAL_MODE) {
       if (nodeRecord === activeNodeRecord) {
         await focusedTerminalLifecycle.request(nodeRecord, { shouldFocus: true });

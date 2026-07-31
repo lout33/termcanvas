@@ -1,5 +1,7 @@
 # TermCanvas — Positioning
 
+> **Superseded on 2026-07-28.** This file preserves the June positioning step, but its v0.2.5, commander/worker, and reboot-persistence claims are stale. Use `growth/launch-brief.md`.
+
 > Derived from `competitors.md`. The landscape forced a correction: "infinite canvas" and "multi-agent" are no longer differentiators (Maestri, Agent Grid, OpenCove, 49Agents, Cate all occupy them; Claude Code ships native Agent Teams). Position on what's actually defensible: **open-source + tmux-durable + an interactive commander/worker control plane.**
 
 ## Headline pitch (the 5-second hook)

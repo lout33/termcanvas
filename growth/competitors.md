@@ -1,33 +1,36 @@
 # TermCanvas — Competitor / Positioning Map
 
-> Honest landscape, researched & spot-verified June 2026. The job of this doc is to answer the visitor's reflex: **"why not just use X?"** — and to correct a stale assumption. **The "canvas of AI agent terminals" niche is NOT empty anymore.** At least five tools occupy it; two (Maestri, Agent Grid) overlap almost completely, and one (Maestri) shares TermCanvas's exact macOS/Apple-Silicon constraint. Lead with *durability + steerability*, not "infinite canvas" or "multi-agent" — both are now commodity claims.
+> **Research snapshot, not current launch copy.** Verified through 2026-07-29. TermCanvas uses a peer graph rather than commander/worker hierarchy and does not promise machine-reboot survival. Current positioning lives in `growth/launch-brief.md`.
+
+> Honest landscape, researched and spot-verified through July 2026. The job of this doc is to answer the visitor's reflex: **"why not just use X?"** The "canvas of AI agent terminals" niche is established: Maestri and AgentGrid are shipping direct competitors, while OpenCove is the OSS cross-platform twin. Lead with the *addressable peer graph + tmux reattachment*, not "infinite canvas" or "multi-agent"; both are commodity claims.
 
 ## What TermCanvas is (one line)
-An **open-source, tmux-durable** spatial control plane that puts real terminal sessions as draggable nodes on an infinite canvas — built to *steer a fleet of AI coding agents* with visible commander→worker delegation lines.
+An **open-source, tmux-durable** spatial control plane where real terminal sessions form a visible peer graph and connected agents can delegate through blocking `ask` RPC.
 
 ---
 
 ## Tier 1 — the real competition: canvas-of-agents tools (study these hardest)
 
-### Maestri — the near-exact twin ⚠️ (`themaestri.app`) — *verified_
+### Maestri — the near-exact twin ⚠️ (`themaestri.app`) — *verified*
 - **What:** "An infinite canvas where your coding agents work in concert." Terminals as nodes, agents connected and delegating via terminal connections; sketches, portals (embedded browsers), an on-device monitor ("Ombro"), isolated "Floors."
-- **Platforms:** **macOS 26.2+, Apple Silicon only** — *same constraint as TermCanvas.* Native Swift/SwiftUI (not Electron).
+- **Platforms:** **macOS 15.4+, Apple Silicon only**. Native Swift/SwiftUI/AppKit (not Electron); Ombro specifically requires macOS 26+.
 - **Model:** Commercial. Free (1 workspace); Pro **$18 one-time**.
-- **TermCanvas differs by:** concept overlap is near-total — this is the sharpest comparison on the board. Honest differentiators are **execution, not idea**: TermCanvas is **open source** (Maestri is closed) and **tmux-backed** (durable/reattachable sessions). Maestri wins on native performance/polish. If the OSS + tmux edges aren't real and obvious, this objection wins.
+- **Traction:** the live site carries 15 named testimonials, including night-shift swarms and an eight-agent sales department. Treat these as user claims, not independently measured outcomes.
+- **TermCanvas differs by:** concept overlap is near-total. Honest differentiators are **MIT source + tmux reattachment + an edge-gated `ask` RPC graph**. Maestri wins on native performance, polish, APFS workspace cloning, and social proof. If TermCanvas's graph does not reduce steering work, this objection wins.
 
-### Agent Grid — the other twin (`agentgrid.sh`)
-- **What:** Desktop infinite-canvas workspace; a coordinator Claude "spawns and orchestrates worker Claudes in parallel via MCP," with **edges connecting master to its workers on the canvas.** This is almost exactly TermCanvas's delegation thesis.
-- **Platforms:** Desktop, early access (5,000+ waitlist = market validation + head start). OS not disclosed.
-- **Model:** Commercial, invite-only.
-- **TermCanvas differs by:** OSS and tmux/PTY-backed vs Agent Grid's closed, MCP-fan-out model. Concept overlap is near-total — needs a sharper reason than "we also do that."
+### AgentGrid — the shipping cross-platform twin (`agentgrid.sh`)
+- **What:** A desktop infinite canvas with master-worker delegation, full worker conversations, shared notes/terminal/pane context, usage-limit handoff, and a visible plan-implement-review loop.
+- **Platforms:** Shipping on macOS, Windows, and Linux, with cloud sync/agents and a mobile companion. The live changelog reached v2.7.11 on 2026-07-26.
+- **Model:** Commercial. Free local tier; Pro is advertised at $16/month billed annually for unlimited canvases plus cloud features. The site claims 5,000+ builders.
+- **TermCanvas differs by:** MIT + local tmux substrate and an explicit peer addressing/permission graph rather than a closed master-worker SaaS. AgentGrid wins on cross-platform reach, shared workspace context, cloud/mobile continuity, and commercial execution.
 
-### OpenCove — the OSS twin ⚠️ (`github.com/DeadWaveWave/opencove`) — *verified, 1.5k stars_
+### OpenCove — the OSS twin ⚠️ (`github.com/DeadWaveWave/opencove`) — *verified, 1.5k stars*
 - **What:** OSS "infinite canvas for Claude Code, Codex, terminals, tasks, and notes." **Nearly identical stack: Electron + React + TypeScript + xterm.js + node-pty + @xyflow/react canvas.** Cross-platform (macOS/Win/Linux). Alpha.
 - **Model:** Open source, free.
-- **TermCanvas differs by:** OpenCove has **no commander/worker delegation lines / hierarchy** — that's TermCanvas's one clear edge here. But OpenCove is **OSS *and* cross-platform with a 1.5k-star head start**, so TermCanvas can't claim "the open, runs-anywhere canvas" — OpenCove already is that. The delegation control plane has to be the wedge.
+- **TermCanvas differs by:** OpenCove has no explicit edge-gated RPC/addressing graph. But OpenCove is **OSS and cross-platform with a 1.5k-star head start**, so TermCanvas cannot claim "the open, runs-anywhere canvas." The operational graph has to be the wedge.
 
 ### 49Agents (`49agents.com`) / Cate (`github.com/0-AI-UG/cate`)
-- **49Agents:** open-core, **web-based**, zoomable canvas, multiple agents with "broadcast input," peer (no hierarchy). *Differs by:* native desktop + tmux + delegation hierarchy.
+- **49Agents:** open-core, **web-based**, zoomable canvas, multiple agents with "broadcast input," peer (no hierarchy). *Differs by:* native desktop + tmux + edge-gated RPC graph.
 - **Cate:** OSS infinite-canvas IDE (Electron/xterm.js/Monaco) with Claude Code panels; IDE-first, no delegation. *Differs by:* orchestration-first, not IDE-first.
 
 ---
@@ -47,27 +50,27 @@ An **open-source, tmux-durable** spatial control plane that puts real terminal s
 ---
 
 ## Tier 3 — non-spatial agent orchestrators (validate demand; contrast set)
-Conductor (sidebar list), Vibe Kanban (board), Claude Squad (tmux TUI list), Sculptor (session list), Paperclip (CEO→worker org-chart dashboard, ~53k stars). **And the platform floor:** **Claude Code native Agent Teams** (shipped Feb 2026) — a lead agent delegates to 2–16 teammates, visualized as **tmux/iTerm2 split panes**. Native commander/worker delegation is now **free and built-in**; only its *visualization* is left open. *(Dead: Crystal→Nimbalyst, Terragon shut down.)*
+Conductor (sidebar list), Emdash (worktree/container dashboard), Claude Squad (tmux TUI list), Sculptor (session list), and Paperclip (org-chart dashboard). **Vibe Kanban is sunsetting** after reaching 27.6k stars, leaving proven but orphaned category demand. **The platform floor:** Claude Code Agent Teams provides a shared task list, mailbox, direct teammate messaging, hooks, and tmux/iTerm2 views, but remains experimental and disabled by default. Codex Cloud is GA for parallel isolated cloud tasks with GitHub/Linear/Slack entry points. Native delegation is increasingly bundled; a separate cockpit must improve steering, not merely display agents.
 
 ---
 
 ## The defensible angle (narrow but real)
 The moat is **not** the canvas and **not** multi-agent — both are commoditizing fast. The thin, honest wedge is the **intersection plus execution**:
 
-1. **OSS + tmux-durable persistence.** "Your canvas is just a view over durable tmux sessions you never lose — survives crashes, reboots, SSH, and reattaches from a plain terminal." Most rivals are native (Maestri), worktree/container, or MCP-based. This is a credible, differentiated promise *if* leaned into.
-2. **An actually-interactive commander→worker delegation control plane.** Not drawn lines — a graph you can use to redirect, pause, or re-route delegation. OpenCove lacks hierarchy entirely; Maestri frames peers, not a commander hierarchy.
-3. **"Steering a fleet" framing (the CEO model).** The bet: the binding constraint on multi-agent work is *human steering-attention*, and a spatial map where agents have positions + visible delegation lines lets one person hold more agents in their head than a tab list, kanban, or org-chart. A defensible *thesis*, even though the canvas mechanism is now shared.
+1. **An addressable peer graph, not decorative edges.** AgentMux edges scope who can `ask` or `check`; `ask` blocks until the connected agent's turn ends and returns the answer to the caller. Maestri has PTY connections and AgentGrid has visible delegation, so the narrower distinction is a graph that is also the CLI permission/addressing layer.
+2. **OSS + tmux reattachment.** The canvas is a view over local tmux sessions that survive app/window closure and can be reattached from a plain terminal while the tmux server survives. Do not claim machine-reboot survival.
+3. **Human steering-attention as the product metric.** The attention chip and graph should help one person notice, route, and recover agents with less intervention time than tabs, lists, or kanban. This is a falsifiable thesis, not yet a moat.
 
-**Bottom line:** lead with **open-source + tmux-durable + opinionated, interactive commander/worker steering**. Drop "infinite canvas" and "multi-agent" as headline claims — they no longer differentiate.
+**Bottom line:** lead with **open source + tmux reattachment + an addressable peer graph for human steering**. Drop "infinite canvas" and "multi-agent" as headline claims; they no longer differentiate.
 
 ## Weakest points / honest objections
-1. **"Why not Maestri?"** (hardest) — near-exact twin, same Mac/Apple-Silicon limit, polished native, $18. Only honest answers: OSS + tmux-durability. They must be real and obvious.
-2. **"Why not OpenCove?"** — OSS, cross-platform, 1.5k stars, near-identical stack. Answer: delegation hierarchy it lacks (so that feature must be strong).
-3. **"Why not Agent Grid?"** — already ships canvas + master→worker edges with a 5k waitlist. Need a sharper reason than parity.
+1. **"Why not Maestri?"** (hardest) — near-exact twin, same Mac/Apple-Silicon limit, polished native, $18, and strong social proof. Only honest answers: MIT source, tmux reattachment, and the edge-gated RPC graph. They must be real and obvious.
+2. **"Why not AgentGrid?"** — now ships cross-platform canvas delegation, shared workspace context, cloud/mobile continuity, and weekly updates. Need a sharper reason than parity.
+3. **"Why not OpenCove?"** — OSS, cross-platform, 1.5k stars, near-identical stack. Answer: the operational addressing graph it lacks, if that graph measurably helps.
 4. **"Why not Warp?"** — for many, parallel agents in a clean tab UI with native review is *enough*, and it's cross-platform + funded. Canvas must demonstrably reduce steering load.
 5. **Apple-Silicon-only is a severe TAM cap** — every serious rival except Maestri is cross-platform; OSS-runs-anywhere is already taken by OpenCove.
-6. **The platform floor is rising** — Claude Code Agent Teams ships native delegation free; value risks collapsing to "a nicer visualization."
+6. **The platform floor is rising** — Claude Code Agent Teams is still experimental, but Codex Cloud is GA and bundled orchestration is improving; value risks collapsing to "a nicer visualization."
 7. **Canvas ergonomics unproven** — "spatial beats a sorted list for 10+ noisy terminals" is asserted, not demonstrated. If it doesn't measurably help, it's decorative.
-8. **Delegation lines risk being eye-candy** — they must *do* something (re-route/pause/redirect), or they're a diagram, not a control plane.
+8. **Delegation lines risk being eye-candy to the human** — AgentMux already uses them for `ask`, but the UI must expose a topology-native action such as reroute/handoff and prove that it reduces steering time.
 
-> Sources spot-verified: Maestri (themaestri.app — confirmed Mac/Apple-Silicon-only, $18, canvas of connected agent terminals), OpenCove (github.com/DeadWaveWave/opencove — confirmed OSS, cross-platform, 1.5k stars, Electron+xterm.js+node-pty, no delegation). Others (Agent Grid, 49Agents, Cate, Warp specifics) from agent web research with cited URLs — verify before quoting publicly.
+> Sources spot-verified 2026-07-29: Maestri live site, AgentGrid live site/changelog, Vibe Kanban GitHub README/history, Claude Code Agent Teams docs, Codex Cloud docs, and local AgentMux source/tests. OpenCove, Emdash, Conductor, Claude Squad, Warp/Oz, and supporting counts were checked by the fleet-platforms research worker against their live product/repository pages. Re-verify vendor claims before quoting publicly.

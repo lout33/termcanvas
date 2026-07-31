@@ -248,12 +248,27 @@ test("app hydration finishes before the first agent sync can reconcile nodes", (
   assert.match(renderer, /finally \{[\s\S]*isSessionHydrating = false;[\s\S]*flushAppSessionSave\(\);[\s\S]*scheduleCanvasAgentSync\(\);/);
 });
 
-test("removing a reconciled node detaches its PTY while preserving tmux", () => {
+test("non-destructive reopen preserves an already detached tmux identity", () => {
   const renderer = readRenderer();
+  const releaseSource = renderer.match(
+    /async function releaseTerminalSession\(nodeRecord, options = \{\}\) \{[\s\S]*?\n\}\n\nasync function bindTerminalSession/u
+  )?.[0] ?? "";
 
   assert.match(
-    renderer,
+    releaseSource,
     /destroyTerminal\(terminalId, \{[\s\S]*preserveSession: shouldPreserveSession,[\s\S]*retainDetachedIdentity: shouldPreserveSession && retainDetachedIdentity/
+  );
+  assert.match(
+    releaseSource,
+    /shouldInvokeTerminalDestroy\(\{[\s\S]*terminalId,[\s\S]*tmuxSessionName: nodeRecord\.tmuxSessionName,[\s\S]*retainDetachedIdentity/
+  );
+  assert.match(
+    renderer,
+    /async function reopenTerminalNode\(nodeRecord\) \{[\s\S]*releaseTerminalSession\(nodeRecord, \{[\s\S]*shouldDestroySession: false,[\s\S]*retainDetachedIdentity: nodeRecord\.managedAgentName !== null/
+  );
+  assert.match(
+    renderer,
+    /async function resumeManagedAgentRuntime\(nodeRecord, agentSnapshot\) \{[\s\S]*releaseTerminalSession\(nodeRecord, \{[\s\S]*shouldDestroySession: false,[\s\S]*retainDetachedIdentity: true/
   );
   assert.match(
     renderer,

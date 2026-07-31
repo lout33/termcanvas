@@ -2,6 +2,15 @@
 
 > Records every external/remote action. Posting mode: **drive-the-browser, Luis hits submit** for identity posts. Updated 2026-06-24.
 
+## 2026-07-28 — launch-one preparation, local only
+
+- Audited the current README rewrite, expanded Yupanqui article, public `v0.3.7` release, product truth, and both recordings.
+- Selected the 10:34 recording as the demo source. It is 3:19.43 and cleaner; neither recording contains the amber attention interaction.
+- Made `growth/launch-brief.md` the canonical launch source and retired the v0.2.5 / commander-era drafts through `growth/README.md`.
+- Added an honest `v0.3.7` OpenCode detector caveat to the local README and article.
+- Verification result: 332/333 tests pass. The detector case passes; the one failure is the README release-flow contract expecting a removed `## GitHub Releases` section.
+- Launch is held until the detector fix is packaged, live-tested in the app, and publicly released. No external action taken.
+
 ## ✅ DONE — shipped & verified
 
 | # | Action | Evidence |

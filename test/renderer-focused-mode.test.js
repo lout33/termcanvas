@@ -7,7 +7,8 @@ const {
   createFocusedTerminalLifecycle,
   shouldShowNodeInFocusedMode,
   pickInitialSidebarViewForFocusedMode,
-  pickFocusedNode
+  pickFocusedNode,
+  shouldInvokeTerminalDestroy
 } = require("../renderer_focused_mode");
 
 test("focused terminal lifecycle releases the old view before mounting the next", async () => {
@@ -92,6 +93,29 @@ test("focused terminal lifecycle leaves exited nodes detached", async () => {
 
   assert.equal(live.mounted, false);
   assert.equal(attachCount, 0);
+});
+
+test("terminal release preserves only detached identities intended for immediate reattach", () => {
+  assert.equal(shouldInvokeTerminalDestroy({
+    terminalId: null,
+    tmuxSessionName: "termcanvas-durable",
+    retainDetachedIdentity: true
+  }), false);
+  assert.equal(shouldInvokeTerminalDestroy({
+    terminalId: null,
+    tmuxSessionName: "termcanvas-durable",
+    retainDetachedIdentity: false
+  }), true);
+  assert.equal(shouldInvokeTerminalDestroy({
+    terminalId: "attachment-a",
+    tmuxSessionName: "termcanvas-durable",
+    retainDetachedIdentity: true
+  }), true);
+  assert.equal(shouldInvokeTerminalDestroy({
+    terminalId: null,
+    tmuxSessionName: null,
+    retainDetachedIdentity: false
+  }), false);
 });
 
 test("focused mode shows only the selected live node", () => {

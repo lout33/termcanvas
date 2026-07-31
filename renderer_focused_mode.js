@@ -122,10 +122,20 @@
       ?? null;
   }
 
+  function shouldInvokeTerminalDestroy({ terminalId, tmuxSessionName, retainDetachedIdentity }) {
+    return typeof terminalId === "string"
+      || (
+        retainDetachedIdentity !== true
+        && typeof tmuxSessionName === "string"
+        && tmuxSessionName.length > 0
+      );
+  }
+
   return {
     createFocusedTerminalLifecycle,
     shouldShowNodeInFocusedMode,
     pickInitialSidebarViewForFocusedMode,
-    pickFocusedNode
+    pickFocusedNode,
+    shouldInvokeTerminalDestroy
   };
 });
