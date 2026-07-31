@@ -12,6 +12,8 @@ requires macos on apple silicon, [`tmux`](https://github.com/tmux/tmux), and pyt
 
 ![termcanvas showing one focused terminal, a live agent tree, and the current canvas fleet summary](./assets/termcanvas-v2.png)
 
+[watch the 5-minute walkthrough](https://youtu.be/wswGZKtPVrc)
+
 ## why it exists
 
 running several coding agents is easy. keeping track of them is the work.
