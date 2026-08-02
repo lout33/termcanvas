@@ -45,6 +45,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Provide OpenCode test stub
+        shell: bash
+        run: |
+          TEST_BIN="$RUNNER_TEMP/termcanvas-test-bin"
+          mkdir -p "$TEST_BIN"
+          printf '#!/bin/sh\nexit 0\n' > "$TEST_BIN/opencode"
+          chmod +x "$TEST_BIN/opencode"
+          echo "$TEST_BIN" >> "$GITHUB_PATH"
+
       - name: Build and test
         run: |
           npm run build
