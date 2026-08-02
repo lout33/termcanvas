@@ -117,6 +117,7 @@ const canvasPanelPills = document.getElementById("canvas-panel-pills");
 const canvasActionsMenuRoot = document.getElementById("canvas-actions-menu-root");
 const canvasActionsMenuButton = document.getElementById("canvas-actions-menu-button");
 const canvasActionsMenu = document.getElementById("canvas-actions-menu");
+const restartAgentSessionsButton = document.getElementById("restart-agent-sessions-button");
 const closeActiveCanvasButton = document.getElementById("close-active-canvas-button");
 const canvasSwitcherSection = document.getElementById("canvas-switcher-section");
 const canvasStripList = document.getElementById("canvas-strip-list");
@@ -266,6 +267,7 @@ let canvasAgentEventDebounceTimeout = 0;
 let isCanvasAgentSyncInFlight = false;
 let canvasAgentSyncGeneration = 0;
 let managedAgentCloseInFlightCount = 0;
+let managedAgentRestartInFlightCount = 0;
 let canvasAgentUnsubscribe = null;
 let canvasAgentChangeListenerRemover = null;
 let lastSyncedAgentProjectTag = null;
@@ -3597,6 +3599,13 @@ function renderCanvasOverviewHeader() {
       activeCanvas === null ? "Canvas actions" : `Canvas actions for ${activeCanvas.name}`
     );
     canvasActionsMenuButton.title = activeCanvas === null ? "Canvas actions" : `${activeCanvas.name} actions`;
+  }
+
+  if (restartAgentSessionsButton instanceof HTMLButtonElement) {
+    restartAgentSessionsButton.disabled = activeCanvas === null;
+    restartAgentSessionsButton.title = activeCanvas === null
+      ? "Restart agent sessions"
+      : "Restart managed agent sessions across all canvases";
   }
 
   if (exportCanvasButton instanceof HTMLButtonElement) {
@@ -8520,6 +8529,7 @@ async function createTerminalNode(options) {
     isWebglRendererDisabled: false,
     needsTerminalRepaint: false,
     isAgentResumeInFlight: false,
+    isAgentRestartInFlight: false,
     terminalBindingGeneration: 0,
     terminalReleasePromise: null,
     resizeObserver: null,
@@ -9268,11 +9278,202 @@ async function resumeManagedAgentRuntime(nodeRecord, agentSnapshot) {
   }
 }
 
+async function restartManagedAgentRuntime(nodeRecord, agentSnapshot) {
+  if (
+    nodeRecord.isRemoved
+    || nodeRecord.managedAgentName === null
+    || nodeRecord.isAgentRestartInFlight
+  ) {
+    return { ok: false, skipped: true, agentName: nodeRecord.managedAgentName };
+  }
+
+  nodeRecord.isAgentRestartInFlight = true;
+  const projectTag = typeof agentSnapshot?.project === "string" && agentSnapshot.project.length > 0
+    ? agentSnapshot.project
+    : nodeRecord.managedProjectTag;
+
+  setTerminalNodeStatus(nodeRecord, "Restarting");
+  nodeRecord.meta.textContent = "Restarting agent runtime";
+
+  try {
+    const result = await window.noteCanvas.restartCanvasAgent({
+      agentName: nodeRecord.managedAgentName,
+      projectTag
+    });
+
+    if (nodeRecord.isRemoved) {
+      return { ok: false, agentName: nodeRecord.managedAgentName, error: "Node was removed during restart." };
+    }
+
+    if (result?.error) {
+      throw new Error(result.error);
+    }
+
+    const restartedTmuxSessionName = typeof result?.tmuxSessionName === "string" && result.tmuxSessionName.length > 0
+      ? result.tmuxSessionName
+      : null;
+
+    if (restartedTmuxSessionName === null) {
+      throw new Error("Restart did not return a tmux session name.");
+    }
+
+    nodeRecord.tmuxSessionName = restartedTmuxSessionName;
+    nodeRecord.backend = "tmux";
+    nodeRecord.isExited = false;
+    nodeRecord.exitCode = null;
+    nodeRecord.exitSignal = null;
+    nodeRecord.managedRuntimeState = "starting";
+    nodeRecord.managedAgentState = "active";
+
+    await releaseTerminalSession(nodeRecord, {
+      shouldDestroySession: false,
+      retainDetachedIdentity: true
+    });
+    if (FOCUSED_TERMINAL_MODE) {
+      if (nodeRecord === activeNodeRecord) {
+        await focusedTerminalLifecycle.request(nodeRecord, { shouldFocus: true });
+      }
+    } else {
+      await bindTerminalSession(nodeRecord, { shouldFocus: false });
+    }
+
+    return { ok: true, agentName: nodeRecord.managedAgentName };
+  } catch (error) {
+    console.error(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes("The existing runtime was left running.")) {
+      setNodeLiveState(
+        nodeRecord,
+        nodeRecord.shellName,
+        nodeRecord.backend,
+        nodeRecord.tmuxSessionName,
+        nodeRecord.sessionKey
+      );
+    } else {
+      setNodeExitedState(nodeRecord, null, null);
+      setTerminalNodeStatus(nodeRecord, "Restart failed");
+      nodeRecord.meta.textContent = errorMessage || "Could not restart agent";
+    }
+    return {
+      ok: false,
+      agentName: nodeRecord.managedAgentName,
+      error: errorMessage
+    };
+  } finally {
+    nodeRecord.isAgentRestartInFlight = false;
+  }
+}
+
+function collectManagedAgentRestartNodes() {
+  const nodes = [];
+  let unmanagedShellCount = 0;
+
+  canvases.forEach((canvasRecord) => {
+    canvasRecord.nodes.forEach((nodeRecord) => {
+      if (nodeRecord.isRemoved) {
+        return;
+      }
+      if (nodeRecord.managedAgentName !== null) {
+        nodes.push(nodeRecord);
+      } else {
+        unmanagedShellCount += 1;
+      }
+    });
+  });
+
+  return { managedNodes: nodes, unmanagedShellCount };
+}
+
+async function restartAllManagedAgentSessions() {
+  if (managedAgentRestartInFlightCount > 0) {
+    return;
+  }
+
+  const { managedNodes, unmanagedShellCount } = collectManagedAgentRestartNodes();
+
+  if (managedNodes.length === 0) {
+    await requestWorkspaceActionDialog({
+      kind: "confirm",
+      title: "Restart agent sessions",
+      message: unmanagedShellCount > 0
+        ? "No managed agent sessions to restart. All terminals are unmanaged shells."
+        : "No managed agent sessions to restart.",
+      confirmLabel: "OK",
+      cancelLabel: ""
+    });
+    return;
+  }
+
+  const confirmed = await confirmWorkspaceAction(
+    "Restart agent sessions",
+    `Restart ${managedNodes.length} managed agent runtime${managedNodes.length === 1 ? "" : "s"} across all canvases? Active turns will be interrupted. Agent records, canvas layout, graph edges, and parent/child runtimes are preserved.${
+      unmanagedShellCount > 0 ? ` ${unmanagedShellCount} unmanaged shell terminal${unmanagedShellCount === 1 ? "" : "s"} will be skipped.` : ""
+    }`,
+    "Restart sessions"
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  managedAgentRestartInFlightCount += 1;
+  canvasAgentSyncGeneration += 1;
+
+  try {
+    const results = [];
+
+    for (const nodeRecord of managedNodes) {
+      results.push(await restartManagedAgentRuntime(nodeRecord, {
+        project: nodeRecord.managedProjectTag
+      }));
+    }
+
+    const succeeded = results.filter((result) => result.ok === true);
+    const failed = results.filter((result) => result.ok !== true && result.skipped !== true);
+    const skipped = results.filter((result) => result.skipped === true);
+    const reportLines = [
+      `${succeeded.length} of ${managedNodes.length} managed agent runtime${managedNodes.length === 1 ? "" : "s"} restarted successfully.`
+    ];
+
+    if (failed.length > 0) {
+      reportLines.push(
+        `Failed (${failed.length}): ${failed.map((result) => `${result.agentName}: ${result.error ?? "unknown error"}`).join(", ")}`
+      );
+    }
+
+    if (skipped.length > 0) {
+      reportLines.push(`Skipped (${skipped.length}): ${skipped.map((result) => result.agentName).join(", ")}`);
+    }
+
+    if (unmanagedShellCount > 0) {
+      reportLines.push(`${unmanagedShellCount} unmanaged shell terminal${unmanagedShellCount === 1 ? "" : "s"} left untouched.`);
+    }
+
+    await requestWorkspaceActionDialog({
+      kind: "confirm",
+      title: "Restart agent sessions",
+      message: reportLines.join("\n"),
+      confirmLabel: "OK",
+      cancelLabel: ""
+    });
+
+    renderCanvasSwitcher();
+    renderTerminalNavigator();
+    updateEmptyState();
+    applyCanvasFocusMode();
+    scheduleCanvasEdgeRender();
+  } finally {
+    managedAgentRestartInFlightCount -= 1;
+    scheduleCanvasAgentSync();
+  }
+}
+
 function shouldApplyCanvasAgentSync(canvasRecord, syncGeneration) {
   return (
     canvasRecord.id === activeCanvasId
     && syncGeneration === canvasAgentSyncGeneration
     && managedAgentCloseInFlightCount === 0
+    && managedAgentRestartInFlightCount === 0
   );
 }
 
@@ -9442,7 +9643,7 @@ async function reconcileCanvasAgentProject(canvasRecord, snapshot, syncGeneratio
 }
 
 async function syncActiveCanvasAgentProject() {
-  if (isCanvasAgentSyncInFlight || managedAgentCloseInFlightCount > 0) {
+  if (isCanvasAgentSyncInFlight || managedAgentCloseInFlightCount > 0 || managedAgentRestartInFlightCount > 0) {
     return;
   }
 
@@ -10845,6 +11046,12 @@ installAgentSkillButton?.addEventListener("click", () => {
 
 canvasActionsMenuButton?.addEventListener("click", () => {
   toggleCanvasActionsMenu();
+});
+
+restartAgentSessionsButton?.addEventListener("click", () => {
+  void restartAllManagedAgentSessions().catch((error) => {
+    console.error(error);
+  });
 });
 
 selectTerminalsButton?.addEventListener("click", () => {

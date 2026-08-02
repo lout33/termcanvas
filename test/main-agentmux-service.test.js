@@ -156,6 +156,88 @@ test("canvas sync accepts a persisted project tag without a workspace folder", a
   }
 });
 
+test("restartAgent parses tmux session name from agentmux restart output", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-restart-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    [
+      "import sys",
+      "assert sys.argv[1] == 'restart'",
+      "assert sys.argv[2] == 'opencode-worker'",
+      "print('Restarted opencode-worker (abc123)')",
+      "print('tmux: agentmux-opencode-worker-abc123')",
+      "print('run:  opencode --model ollama-cloud/glm-5.2 -s abc123')"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+    const result = await service.restartAgent({ agentName: "opencode-worker" });
+
+    assert.equal(result.agentName, "opencode-worker");
+    assert.equal(result.tmuxSessionName, "agentmux-opencode-worker-abc123");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("restartAgent passes ready timeout flag through", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-restart-flags-"));
+  const runtimeRoot = path.join(tempRoot, "runtime");
+  const agentmuxHomePath = path.join(tempRoot, "home");
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(runtimeRoot, "agentmux.py"),
+    [
+      "import sys, json",
+      "print(json.dumps(sys.argv))",
+      "print('Restarted x (y)')",
+      "print('tmux: agentmux-x-y')",
+      "print('run:  opencode')"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const service = createAgentmuxService({
+      agentmuxRootPath: runtimeRoot,
+      agentmuxHomePath
+    });
+    const result = await service.restartAgent({
+      agentName: "x",
+      readyTimeout: 10
+    });
+
+    assert.equal(result.agentName, "x");
+    assert.equal(result.tmuxSessionName, "agentmux-x-y");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("restartAgent rejects when agent name is missing", async () => {
+  const repoRoot = path.join(__dirname, "..");
+  const service = createAgentmuxService({ agentmuxHomePath: path.join(repoRoot, ".tmp-agentmux-home") });
+
+  await assert.rejects(
+    () => service.restartAgent({ agentName: null }),
+    /Agent name is required/u
+  );
+  await assert.rejects(
+    () => service.restartAgent({}),
+    /Agent name is required/u
+  );
+});
+
 test("resumeAgent parses tmux session name from agentmux resume output", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agentmux-resume-"));
   const runtimeRoot = path.join(tempRoot, "runtime");
@@ -419,6 +501,7 @@ test("release config bundles agentmux from electron-builder config", () => {
   assert.deepEqual(skillsShConfig.groupings[0].skills, ["agentmux"]);
   assert.match(electronBuilderConfig, /extraResources:/u);
   assert.match(electronBuilderConfig, /!skills\/\*\*/u);
+  assert.match(electronBuilderConfig, /!\.worktrees\/\*\*/u);
   assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux"/u);
   assert.match(electronBuilderConfig, /to: "agentmux\/agentmux"/u);
   assert.match(electronBuilderConfig, /from: "vendor\/agentmux\/agentmux\.py"/u);

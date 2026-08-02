@@ -2213,6 +2213,100 @@ test("canvas-agent:sync bootstraps once then polls agentmux without rewriting AG
   }
 });
 
+test("canvas-agent:restart restarts a managed agent through the agentmux runtime", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agent-restart-ipc-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+  const spawnCalls = [];
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(agentmuxRoot, "agentmux.py"),
+    [
+      "import sys",
+      "assert sys.argv[1] == 'restart'",
+      "assert sys.argv[2] == 'opencode-worker'",
+      "print('Restarted opencode-worker (abc123)')",
+      "print('tmux: agentmux-opencode-worker-abc123')",
+      "print('run:  opencode --model ollama-cloud/glm-5.2 -s abc123')"
+    ].join("\n"),
+    "utf8"
+  );
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: () => ({ status: 0, stdout: "", stderr: "" }),
+        spawn: (command, args) => {
+          spawnCalls.push({ command, args });
+          return createMockSpawn(() => ({ status: 0, stdout: "Restarted opencode-worker (abc123)\ntmux: agentmux-opencode-worker-abc123\nrun:  opencode\n", stderr: "" }))(command, args);
+        }
+      }
+    });
+
+    const restart = handlers.get("canvas-agent:restart");
+    const sender = { id: 221, once: () => {}, isDestroyed: () => false };
+    const result = await restart({ sender }, { agentName: "opencode-worker", projectTag: "project-watch" });
+
+    assert.deepEqual(result, { agentName: "opencode-worker", tmuxSessionName: "agentmux-opencode-worker-abc123" });
+    assert.ok(spawnCalls.some(({ args }) => Array.isArray(args) && args.includes("restart")));
+    delete require.cache[mainPath];
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("canvas-agent:restart surfaces agentmux failures", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agent-restart-fail-"));
+  const agentmuxRoot = path.join(tempRoot, "agentmux");
+  const originalAgentmuxRoot = process.env.TERMCANVAS_AGENTMUX_ROOT;
+
+  fs.mkdirSync(agentmuxRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(agentmuxRoot, "agentmux.py"),
+    [
+      "import sys",
+      "print('No session found for missing-agent', file=sys.stderr)",
+      "raise SystemExit(1)"
+    ].join("\n"),
+    "utf8"
+  );
+  process.env.TERMCANVAS_AGENTMUX_ROOT = agentmuxRoot;
+
+  try {
+    const { handlers, mainPath } = loadMainWithMocks({
+      smokeTest: true,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      childProcessStub: {
+        spawnSync: () => ({ status: 0, stdout: "", stderr: "" }),
+        spawn: (command, args) => createMockSpawn(() => ({ status: 1, stdout: "", stderr: "No session found for missing-agent\n" }))(command, args)
+      }
+    });
+
+    const restart = handlers.get("canvas-agent:restart");
+    const sender = { id: 222, once: () => {}, isDestroyed: () => false };
+    const result = await restart({ sender }, { agentName: "missing-agent", projectTag: "project-watch" });
+
+    assert.match(result.error, /No session found/u);
+    delete require.cache[mainPath];
+  } finally {
+    if (originalAgentmuxRoot === undefined) {
+      delete process.env.TERMCANVAS_AGENTMUX_ROOT;
+    } else {
+      process.env.TERMCANVAS_AGENTMUX_ROOT = originalAgentmuxRoot;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("canvas-agent:subscribe receives canvas-agent:changed when an adoption notifies the project tag", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcanvas-agent-subscribe-"));
   const agentmuxRoot = path.join(tempRoot, "agentmux");

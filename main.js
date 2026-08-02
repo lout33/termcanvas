@@ -2597,6 +2597,21 @@ ipcMain.handle("canvas-agent:resume", async (_event, payload) => {
   }
 });
 
+ipcMain.handle("canvas-agent:restart", async (_event, payload) => {
+  try {
+    const result = await agentmuxService.restartAgent({
+      agentName: payload?.agentName,
+      readyTimeout: payload?.readyTimeout
+    });
+    agentGraphWatcher.notifyProjectTagChanged(payload?.projectTag);
+    return result;
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error ?? "")
+    };
+  }
+});
+
 ipcMain.handle("canvas-agent:subscribe", async (event, payload) => {
   const ownerWebContentsId = event.sender.id;
   const projectTag = typeof payload?.projectTag === "string" ? payload.projectTag : null;

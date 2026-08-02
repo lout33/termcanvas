@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -294,6 +295,67 @@ def has_tmux_session(tmux_session: str) -> bool:
     return result.returncode == 0
 
 
+def collect_session_process_tree(tmux_session: str) -> list[int]:
+    panes_result = tmux(
+        "list-panes",
+        "-t",
+        tmux_session,
+        "-F",
+        "#{pane_pid}",
+        check=False,
+    )
+    if panes_result.returncode != 0:
+        return []
+
+    root_pids = [
+        int(line.strip())
+        for line in panes_result.stdout.splitlines()
+        if line.strip().isdigit() and int(line.strip()) > 1
+    ]
+    if not root_pids:
+        return []
+
+    ps_result = subprocess.run(["ps", "-eo", "pid=,ppid="], check=False, text=True, capture_output=True)
+    if ps_result.returncode != 0:
+        return root_pids
+
+    children_by_parent: dict[int, list[int]] = {}
+    for line in ps_result.stdout.splitlines():
+        match = re.match(r"^\s*(\d+)\s+(\d+)\s*$", line)
+        if match is None:
+            continue
+        pid = int(match.group(1))
+        ppid = int(match.group(2))
+        children_by_parent.setdefault(ppid, []).append(pid)
+
+    collected: set[int] = set()
+    queue = list(root_pids)
+    while queue:
+        pid = queue.pop(0)
+        if pid in collected:
+            continue
+        collected.add(pid)
+        queue.extend(children_by_parent.get(pid, []))
+
+    collected.discard(os.getpid())
+    return [pid for pid in collected if pid > 1]
+
+
+def reap_process_tree(pids: list[int], grace_seconds: float = 0.2) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if grace_seconds > 0:
+        time.sleep(grace_seconds)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def capture_pane(tmux_session: str, lines: int = 80) -> str:
     result = tmux("capture-pane", "-p", "-t", tmux_session, "-S", f"-{lines}", check=False)
     if result.returncode != 0:
@@ -357,7 +419,13 @@ def send_terminal_input(tmux_session: str, text: str) -> None:
     flush()
 
 
-def wait_until_ready(tmux_session: str, harness_id: str, timeout: float, fallback_delay: float) -> bool:
+def wait_until_ready(
+    tmux_session: str,
+    harness_id: str,
+    timeout: float,
+    fallback_delay: float,
+    accept_running_fallback: bool = True,
+) -> bool:
     patterns = READY_PATTERNS.get(harness_id, [])
     deadline = time.time() + timeout
 
@@ -373,6 +441,8 @@ def wait_until_ready(tmux_session: str, harness_id: str, timeout: float, fallbac
             return True
         time.sleep(0.5)
 
+    if not accept_running_fallback:
+        return False
     time.sleep(max(0.0, fallback_delay))
     return has_tmux_session(tmux_session)
 
@@ -834,6 +904,204 @@ def infer_resume_command(harness_id: str, external_session_id: str) -> str:
         command_parts = apply_model_to_command_parts(harness_id, ["opencode", "-s", external_session_id])
         return " ".join(shlex.quote(part) for part in command_parts)
     return ""
+
+
+def opencode_session_id_from_command(command_text: str) -> str:
+    if not command_text.strip():
+        return ""
+    command_parts = shlex.split(command_text)
+    for index, part in enumerate(command_parts):
+        if part in {"-s", "--session"}:
+            return command_parts[index + 1] if index + 1 < len(command_parts) else ""
+        if part.startswith(("-s=", "--session=")):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def command_runs_opencode(command_text: str) -> bool:
+    if not command_text.strip():
+        return False
+    try:
+        command_parts = shlex.split(command_text)
+    except ValueError:
+        return False
+    return bool(command_parts) and Path(command_parts[0]).name == "opencode"
+
+
+def apply_opencode_session_to_command(command_text: str, external_session_id: str) -> str:
+    command_parts = command_parts_from_text(command_text)
+    filtered_parts: list[str] = []
+    index = 0
+    while index < len(command_parts):
+        part = command_parts[index]
+        if part in {"-s", "--session"}:
+            index += 2
+            continue
+        if part in {"-c", "--continue", "--fork"}:
+            index += 1
+            continue
+        if part.startswith(("-s=", "-c=", "--session=", "--continue=", "--fork=")):
+            index += 1
+            continue
+        filtered_parts.append(part)
+        index += 1
+    resumed_parts = [filtered_parts[0], "-s", external_session_id, *filtered_parts[1:]]
+    return " ".join(shlex.quote(part) for part in resumed_parts)
+
+
+def opencode_database_path() -> Path:
+    data_home = os.environ.get("XDG_DATA_HOME")
+    if data_home:
+        return Path(data_home).expanduser() / "opencode" / "opencode.db"
+    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def read_opencode_sessions(workdir: str) -> list[sqlite3.Row]:
+    database_path = opencode_database_path()
+    if not database_path.is_file():
+        return []
+    try:
+        with sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                "SELECT id, title, time_updated FROM session WHERE directory = ? ORDER BY time_updated DESC",
+                (workdir,),
+            ).fetchall()
+    except sqlite3.Error:
+        return []
+
+
+def find_briefed_opencode_session(session: sqlite3.Row) -> str:
+    database_path = opencode_database_path()
+    if not database_path.is_file():
+        return ""
+    marker = (
+        f"[TermCanvas] You are agent '{session['name']}' "
+        f"on canvas project '{session_project_name(session)}'"
+    )
+    try:
+        with sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT s.id, p.data
+                FROM session s
+                JOIN part p ON p.session_id = s.id
+                WHERE s.directory = ? AND instr(p.data, ?) > 0
+                ORDER BY s.time_updated DESC, p.time_created ASC
+                """,
+                (session["workdir"], marker),
+            ).fetchall()
+    except sqlite3.Error:
+        return ""
+    matches: list[str] = []
+    for row in rows:
+        try:
+            part = json.loads(row["data"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if part.get("type") == "text" and marker in str(part.get("text") or ""):
+            session_id = str(row["id"])
+            if session_id not in matches:
+                matches.append(session_id)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise SystemExit(
+            f"Cannot safely restart '{session['name']}': multiple OpenCode sessions contain its TermCanvas briefing. "
+            "The existing runtime was left running."
+        )
+    return ""
+
+
+def wait_for_tmux_title(tmux_session: str, expected_title: str, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not has_tmux_session(tmux_session):
+            return False
+        if tmux_format(tmux_session, "#{pane_title}") == expected_title:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def opencode_terminal_title(session_title: str) -> str:
+    title = session_title[:37] + "..." if len(session_title) > 40 else session_title
+    return f"OC | {title}"
+
+
+def is_opencode_runtime(session: sqlite3.Row) -> bool:
+    if (
+        session["harness"] == "opencode"
+        or command_runs_opencode(session["command_text"])
+        or bool(session["external_session_id"])
+    ):
+        return True
+    if not has_tmux_session(session["tmux_session"]):
+        return False
+    pane_title = tmux_format(session["tmux_session"], "#{pane_title}")
+    if pane_title == "OpenCode" or pane_title.startswith("OC | "):
+        return True
+    pane_command = tmux_format(session["tmux_session"], "#{pane_current_command}")
+    return Path(pane_command).name == "opencode"
+
+
+def resolve_opencode_session_for_restart(session: sqlite3.Row) -> str:
+    stored_session_id = (
+        opencode_session_id_from_command(session["command_text"])
+        or str(session["external_session_id"] or "")
+    )
+    candidates = read_opencode_sessions(session["workdir"])
+    if has_tmux_session(session["tmux_session"]):
+        pane_title = tmux_format(session["tmux_session"], "#{pane_title}")
+        if pane_title.startswith("OC | "):
+            title_matches = [
+                str(candidate["id"])
+                for candidate in candidates
+                if opencode_terminal_title(str(candidate["title"] or "")) == pane_title
+            ]
+            if len(title_matches) == 1:
+                return title_matches[0]
+            if len(title_matches) > 1:
+                raise SystemExit(
+                    f"Cannot safely restart '{session['name']}': multiple OpenCode sessions match the active terminal title. "
+                    "The existing runtime was left running."
+                )
+            raise SystemExit(
+                f"Cannot safely restart '{session['name']}': no OpenCode session matches the active terminal title. "
+                "The existing runtime was left running."
+            )
+
+    candidate_ids = {str(candidate["id"]) for candidate in candidates}
+    if stored_session_id:
+        if stored_session_id in candidate_ids:
+            return stored_session_id
+        raise SystemExit(
+            f"Cannot safely restart '{session['name']}': its stored OpenCode session no longer exists. "
+            "The existing runtime was left running."
+        )
+
+    briefed_session_id = find_briefed_opencode_session(session)
+    return briefed_session_id if briefed_session_id in candidate_ids else ""
+
+
+def prepare_opencode_restart(conn: sqlite3.Connection, session: sqlite3.Row) -> sqlite3.Row:
+    if not is_opencode_runtime(session):
+        return session
+    external_session_id = resolve_opencode_session_for_restart(session)
+    if not external_session_id:
+        raise SystemExit(
+            f"Cannot safely restart '{session['name']}': its active OpenCode session ID could not be identified. "
+            "The existing runtime was left running."
+        )
+    restart_command = session["command_text"] if command_runs_opencode(session["command_text"]) else "opencode"
+    command_text = apply_opencode_session_to_command(restart_command, external_session_id)
+    conn.execute(
+        "UPDATE sessions SET harness = ?, command_text = ?, external_session_id = ?, updated_at = ? WHERE id = ?",
+        ("opencode", command_text, external_session_id, utc_now(), session["id"]),
+    )
+    emit_event(conn, session["id"], "session.pinned", f"Pinned OpenCode session {external_session_id} for restart")
+    return conn.execute("SELECT * FROM sessions WHERE id = ?", (session["id"],)).fetchone()
 
 
 def command_parts_from_text(command_text: str) -> list[str]:
@@ -1672,6 +1940,7 @@ def resume_session_runtime(
     command_override: str | None = None,
     prompt: str | None = None,
     ready_timeout: float = 25.0,
+    wait_for_ready: bool = False,
 ) -> sqlite3.Row:
     if has_tmux_session(session["tmux_session"]):
         raise SystemExit(f"Agent '{session['name']}' already has a running tmux session.")
@@ -1714,17 +1983,22 @@ def resume_session_runtime(
     )
     emit_event(conn, session["id"], "session.resumed", f"Resumed runtime with: {command_text}")
 
-    if prompt:
+    if prompt or wait_for_ready:
         ready = wait_until_ready(
             session["tmux_session"],
             session["harness"],
             timeout=ready_timeout,
             fallback_delay=session["startup_delay"],
+            accept_running_fallback=not wait_for_ready,
         )
         if not ready:
+            process_tree = collect_session_process_tree(session["tmux_session"])
+            kill_runtime(conn, session)
+            reap_process_tree(process_tree)
             raise SystemExit(f"Agent '{session['name']}' exited before it became ready for input.")
-        send_keys(session["tmux_session"], prompt)
-        emit_event(conn, session["id"], "session.input", f"Resume prompt sent: {prompt}")
+        if prompt:
+            send_keys(session["tmux_session"], prompt)
+            emit_event(conn, session["id"], "session.input", f"Resume prompt sent: {prompt}")
         conn.execute(
             "UPDATE sessions SET state = ?, updated_at = ?, last_activity_at = ? WHERE id = ?",
             ("running", utc_now(), utc_now(), session["id"]),
@@ -1844,6 +2118,52 @@ def kill_runtime(conn: sqlite3.Connection, session: sqlite3.Row) -> sqlite3.Row:
     emit_event(conn, session["id"], "session.killed", "Killed tmux session")
     refreshed = conn.execute("SELECT * FROM sessions WHERE id = ?", (session["id"],)).fetchone()
     return refresh_one(conn, refreshed)
+
+
+def restart_runtime(conn: sqlite3.Connection, session: sqlite3.Row, ready_timeout: float = 25.0) -> sqlite3.Row:
+    session = prepare_opencode_restart(conn, session)
+    if session["harness"] == "opencode":
+        # Keep the recovered native session identity even if replacement startup
+        # fails after the old runtime has been terminated, so a retry is safe.
+        conn.commit()
+    expected_opencode_title = ""
+    if has_tmux_session(session["tmux_session"]):
+        # tmux kill-session closes the pane PTY but does not reliably kill
+        # detached children (agents like opencode double-fork and survive as
+        # orphans spinning at full CPU for days). Capture the pane process tree
+        # before killing the session, then reap whatever survives so restarting
+        # does not leak the old runtime and start a duplicate.
+        process_tree = collect_session_process_tree(session["tmux_session"])
+        if session["harness"] == "opencode":
+            confirmed_session_id = resolve_opencode_session_for_restart(session)
+            if confirmed_session_id != session["external_session_id"]:
+                raise SystemExit(
+                    f"Cannot safely restart '{session['name']}': the active OpenCode session changed during restart. "
+                    "The existing runtime was left running."
+                )
+            current_title = tmux_format(session["tmux_session"], "#{pane_title}")
+            if current_title.startswith("OC | "):
+                expected_opencode_title = current_title
+        kill_runtime(conn, session)
+        reap_process_tree(process_tree)
+    resumed = resume_session_runtime(
+        conn,
+        session,
+        ready_timeout=ready_timeout,
+        wait_for_ready=session["harness"] == "opencode",
+    )
+    if expected_opencode_title and not wait_for_tmux_title(
+        session["tmux_session"],
+        expected_opencode_title,
+        timeout=min(3.0, ready_timeout),
+    ):
+        process_tree = collect_session_process_tree(session["tmux_session"])
+        kill_runtime(conn, session)
+        reap_process_tree(process_tree)
+        raise SystemExit(
+            f"Agent '{session['name']}' restarted, but OpenCode did not reopen the expected active session."
+        )
+    return resumed
 
 
 def update_manual_agent_state(conn: sqlite3.Connection, session: sqlite3.Row, new_state: str) -> sqlite3.Row:
@@ -2293,6 +2613,16 @@ def stop_session(args: argparse.Namespace) -> None:
     print(f"Sent Ctrl-C to {session['name']}")
 
 
+def restart_session(args: argparse.Namespace) -> None:
+    with db() as conn:
+        session = resolve_session(conn, args.agent)
+        refreshed = restart_runtime(conn, session, ready_timeout=args.ready_timeout)
+
+    print(f"Restarted {refreshed['name']} ({short_id(refreshed['id'])})")
+    print(f"tmux: {refreshed['tmux_session']}")
+    print(f"run:  {refreshed['command_text']}")
+
+
 def kill_session(args: argparse.Namespace) -> None:
     with db() as conn:
         session = resolve_session(conn, args.agent)
@@ -2695,6 +3025,11 @@ def build_parser() -> argparse.ArgumentParser:
     kill = sub.add_parser("kill", help="Kill the agent tmux session")
     kill.add_argument("agent")
     kill.set_defaults(func=kill_session)
+
+    restart = sub.add_parser("restart", help="Restart an agent runtime non-destructively")
+    restart.add_argument("agent")
+    restart.add_argument("--ready-timeout", type=float, default=25.0)
+    restart.set_defaults(func=restart_session)
 
     logs = sub.add_parser("logs", help="Show recent agent output")
     logs.add_argument("agent")

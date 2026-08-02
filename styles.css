@@ -2523,6 +2523,45 @@ button {
   position: relative;
 }
 
+.canvas-panel-text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid rgba(236, 220, 170, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(24, 27, 34, 0.68);
+  color: rgba(178, 166, 145, 0.82);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base);
+}
+
+.canvas-panel-text-button:hover {
+  border-color: var(--color-sidebar-accent-strong);
+  background: rgba(37, 40, 48, 0.78);
+  color: var(--color-ink);
+}
+
+.canvas-panel-text-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.canvas-panel-text-button:disabled:hover {
+  border-color: rgba(236, 220, 170, 0.12);
+  background: rgba(24, 27, 34, 0.68);
+  color: rgba(178, 166, 145, 0.82);
+}
+
 .canvas-panel-icon-button {
   display: inline-flex;
   align-items: center;

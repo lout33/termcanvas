@@ -428,6 +428,32 @@ function createAgentmuxService(options = {}) {
     return { agentName, tmuxSessionName: resumedTmuxSession };
   }
 
+  async function restartAgent(payload) {
+    const agentName = normalizeNonEmptyString(payload?.agentName);
+
+    if (agentName === null) {
+      throw new Error("Agent name is required to restart a runtime.");
+    }
+
+    const args = ["restart", agentName];
+
+    if (Number.isFinite(payload?.readyTimeout) && payload.readyTimeout > 0) {
+      args.push("--ready-timeout", String(payload.readyTimeout));
+    }
+
+    const output = await runAgentmuxCommand(args, `restart agent ${agentName}`);
+    const tmuxSessionLine = output
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .find((line) => line.startsWith("tmux:"));
+
+    const restartedTmuxSession = tmuxSessionLine !== undefined
+      ? normalizeNonEmptyString(tmuxSessionLine.slice("tmux:".length))
+      : null;
+
+    return { agentName, tmuxSessionName: restartedTmuxSession };
+  }
+
   function getAgentmuxBinPath() {
     if (fs.existsSync(wrapperPath)) {
       return wrapperPath;
@@ -506,6 +532,7 @@ function createAgentmuxService(options = {}) {
     adoptAgent,
     spawnChildWorker,
     resumeAgent,
+    restartAgent,
     connectAgents,
     getAgentmuxBinPath,
     buildTerminalRuntimeEnv,
